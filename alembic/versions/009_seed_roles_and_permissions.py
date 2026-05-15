@@ -19,15 +19,15 @@ depends_on = None
 
 
 def upgrade():
-    # Skip - data seeding should use ON CONFLICT or check existence
-    # TODO: Make idempotent or use ON CONFLICT
-    return
+    # Get database connection
+    connection = op.get_bind()
 
     admin_role_id = uuid4()
     staff_role_id = uuid4()
     patient_role_id = uuid4()
     vendor_role_id = uuid4()
 
+    # Insert roles with ON CONFLICT DO NOTHING for idempotency
     connection.execute(
         sa.text("""
             INSERT INTO roles (id, name, description, is_system, created_at, updated_at)
@@ -36,6 +36,7 @@ def upgrade():
                 (:staff_id, 'staff', 'PaySpyre staff member', true, :now, :now),
                 (:patient_id, 'patient', 'Patient user', true, :now, :now),
                 (:vendor_id, 'vendor', 'Vendor/Integration user', true, :now, :now)
+            ON CONFLICT (name) DO NOTHING
         """),
         {
             "admin_id": admin_role_id,
@@ -85,6 +86,7 @@ def upgrade():
             sa.text("""
                 INSERT INTO permissions (id, name, description, resource, action, created_at)
                 VALUES (:id, :name, :description, :resource, :action, :now)
+                ON CONFLICT (name) DO NOTHING
                 RETURNING id
             """),
             {
@@ -103,6 +105,7 @@ def upgrade():
                 sa.text("""
                     INSERT INTO role_permissions (id, role_id, permission_id, created_at)
                     VALUES (:id, :role_id, :permission_id, :now)
+                    ON CONFLICT (role_id, permission_id) DO NOTHING
                 """),
                 {
                     "id": uuid4(),
@@ -122,6 +125,7 @@ def upgrade():
             sa.text("""
                 INSERT INTO role_permissions (id, role_id, permission_id, created_at)
                 VALUES (:id, :role_id, :permission_id, :now)
+                ON CONFLICT (role_id, permission_id) DO NOTHING
             """),
             {
                 "id": uuid4(),
@@ -145,6 +149,7 @@ def upgrade():
             sa.text("""
                 INSERT INTO role_permissions (id, role_id, permission_id, created_at)
                 VALUES (:id, :role_id, :permission_id, :now)
+                ON CONFLICT (role_id, permission_id) DO NOTHING
             """),
             {
                 "id": uuid4(),
@@ -168,6 +173,7 @@ def upgrade():
             sa.text("""
                 INSERT INTO role_permissions (id, role_id, permission_id, created_at)
                 VALUES (:id, :role_id, :permission_id, :now)
+                ON CONFLICT (role_id, permission_id) DO NOTHING
             """),
             {
                 "id": uuid4(),
@@ -190,6 +196,7 @@ def upgrade():
             sa.text("""
                 INSERT INTO role_permissions (id, role_id, permission_id, created_at)
                 VALUES (:id, :role_id, :permission_id, :now)
+                ON CONFLICT (role_id, permission_id) DO NOTHING
             """),
             {
                 "id": uuid4(),
@@ -201,7 +208,7 @@ def upgrade():
 
 
 def downgrade():
-    return
+    connection = op.get_bind()
     connection.execute(sa.text("DELETE FROM role_permissions"))
     connection.execute(sa.text("DELETE FROM permissions"))
     connection.execute(sa.text("DELETE FROM roles"))
