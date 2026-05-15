@@ -16,9 +16,82 @@ depends_on = None
 
 
 def upgrade():
-    # Skip - depends on payments/refunds tables that don't exist yet
-    # TODO: Create payments/refunds tables first or remove these foreign keys
-    return
+    # Create enum types using idempotent raw SQL
+    op.execute("""
+        DO $$ BEGIN
+            CREATE TYPE payment_method_type AS ENUM ('card', 'us_bank_account', 'pad');
+        EXCEPTION
+            WHEN duplicate_object THEN null;
+        END $$;
+    """)
+    op.execute("""
+        DO $$ BEGIN
+            CREATE TYPE payment_method_status AS ENUM ('active', 'inactive', 'expired', 'failed');
+        EXCEPTION
+            WHEN duplicate_object THEN null;
+        END $$;
+    """)
+    op.execute("""
+        DO $$ BEGIN
+            CREATE TYPE stripe_account_type AS ENUM ('express', 'standard', 'custom');
+        EXCEPTION
+            WHEN duplicate_object THEN null;
+        END $$;
+    """)
+    op.execute("""
+        DO $$ BEGIN
+            CREATE TYPE onboarding_status AS ENUM ('not_started', 'pending', 'completed', 'rejected');
+        EXCEPTION
+            WHEN duplicate_object THEN null;
+        END $$;
+    """)
+    op.execute("""
+        DO $$ BEGIN
+            CREATE TYPE payout_schedule AS ENUM ('manual', 'daily', 'weekly', 'monthly');
+        EXCEPTION
+            WHEN duplicate_object THEN null;
+        END $$;
+    """)
+    op.execute("""
+        DO $$ BEGIN
+            CREATE TYPE stripe_account_status AS ENUM ('active', 'restricted', 'suspended', 'closed');
+        EXCEPTION
+            WHEN duplicate_object THEN null;
+        END $$;
+    """)
+    op.execute("""
+        DO $$ BEGIN
+            CREATE TYPE transaction_type AS ENUM ('payment', 'disbursement', 'payout', 'refund', 'transfer', 'fee');
+        EXCEPTION
+            WHEN duplicate_object THEN null;
+        END $$;
+    """)
+    op.execute("""
+        DO $$ BEGIN
+            CREATE TYPE stripe_transaction_status AS ENUM ('pending', 'succeeded', 'failed', 'canceled', 'processing');
+        EXCEPTION
+            WHEN duplicate_object THEN null;
+        END $$;
+    """)
+    op.execute("""
+        DO $$ BEGIN
+            CREATE TYPE payout_status AS ENUM ('pending', 'in_transit', 'paid', 'failed', 'canceled');
+        EXCEPTION
+            WHEN duplicate_object THEN null;
+        END $$;
+    """)
+
+    # Create enum types for use in columns (with create_type=False)
+    payment_method_type = postgresql.ENUM(name='payment_method_type', create_type=False)
+    payment_method_status = postgresql.ENUM(name='payment_method_status', create_type=False)
+    stripe_account_type = postgresql.ENUM(name='stripe_account_type', create_type=False)
+    onboarding_status = postgresql.ENUM(name='onboarding_status', create_type=False)
+    payout_schedule = postgresql.ENUM(name='payout_schedule', create_type=False)
+    stripe_account_status = postgresql.ENUM(name='stripe_account_status', create_type=False)
+    transaction_type = postgresql.ENUM(name='transaction_type', create_type=False)
+    stripe_transaction_status = postgresql.ENUM(name='stripe_transaction_status', create_type=False)
+    payout_status_enum = postgresql.ENUM(name='payout_status', create_type=False)
+
     # Payment methods table
     op.create_table(
         'payment_methods',
@@ -26,7 +99,7 @@ def upgrade():
         sa.Column('borrower_id', postgresql.UUID(as_uuid=True), sa.ForeignKey('borrowers.id'), nullable=False),
         sa.Column('stripe_payment_method_id', sa.String(255), nullable=True),
         sa.Column('stripe_customer_id', sa.String(255), nullable=True),
-        sa.Column('payment_method_type', sa.Enum('card', 'us_bank_account', 'pad', name='payment_method_type'), nullable=False),
+        sa.Column('payment_method_type', payment_method_type, nullable=False),
         sa.Column('card_last_4', sa.String(4), nullable=True),
         sa.Column('card_brand', sa.String(50), nullable=True),
         sa.Column('card_exp_month', sa.Numeric(2, 0), nullable=True),
@@ -35,7 +108,7 @@ def upgrade():
         sa.Column('bank_account_bank_name', sa.String(255), nullable=True),
         sa.Column('is_default', sa.Boolean(), nullable=False, server_default='false'),
         sa.Column('is_verified', sa.Boolean(), nullable=False, server_default='false'),
-        sa.Column('status', sa.Enum('active', 'inactive', 'expired', 'failed', name='payment_method_status'), nullable=False, server_default='active'),
+        sa.Column('status', payment_method_status, nullable=False, server_default='active'),
         sa.Column('stripe_response', postgresql.JSON(), nullable=True),
         sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
         sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), onupdate=sa.text('now()'), nullable=False),
@@ -51,14 +124,14 @@ def upgrade():
         sa.Column('id', postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column('vendor_id', postgresql.UUID(as_uuid=True), sa.ForeignKey('vendors.id', ondelete='CASCADE'), nullable=False),
         sa.Column('stripe_account_id', sa.String(255), nullable=False, unique=True),
-        sa.Column('stripe_account_type', sa.Enum('express', 'standard', 'custom', name='stripe_account_type'), nullable=False, server_default='express'),
-        sa.Column('onboarding_status', sa.Enum('not_started', 'pending', 'completed', 'rejected', name='onboarding_status'), nullable=False, server_default='not_started'),
+        sa.Column('stripe_account_type', stripe_account_type, nullable=False, server_default='express'),
+        sa.Column('onboarding_status', onboarding_status, nullable=False, server_default='not_started'),
         sa.Column('onboarding_completed_at', sa.DateTime(timezone=True), nullable=True),
         sa.Column('charges_enabled', sa.Boolean(), nullable=False, server_default='false'),
         sa.Column('payouts_enabled', sa.Boolean(), nullable=False, server_default='false'),
         sa.Column('details_submitted', sa.Boolean(), nullable=False, server_default='false'),
-        sa.Column('default_payout_schedule', sa.Enum('manual', 'daily', 'weekly', 'monthly', name='payout_schedule'), nullable=False, server_default='manual'),
-        sa.Column('status', sa.Enum('active', 'restricted', 'suspended', 'closed', name='stripe_account_status'), nullable=False, server_default='active'),
+        sa.Column('default_payout_schedule', payout_schedule, nullable=False, server_default='manual'),
+        sa.Column('status', stripe_account_status, nullable=False, server_default='active'),
         sa.Column('stripe_account_data', postgresql.JSON(), nullable=True),
         sa.Column('onboarding_url', sa.String(500), nullable=True),
         sa.Column('onboarding_url_expires_at', sa.DateTime(timezone=True), nullable=True),
@@ -76,17 +149,17 @@ def upgrade():
         sa.Column('application_id', postgresql.UUID(as_uuid=True), sa.ForeignKey('loan_applications.id'), nullable=True),
         sa.Column('payment_method_id', postgresql.UUID(as_uuid=True), sa.ForeignKey('payment_methods.id'), nullable=True),
         sa.Column('stripe_account_id', postgresql.UUID(as_uuid=True), sa.ForeignKey('stripe_accounts.id'), nullable=True),
-        sa.Column('payment_id', postgresql.UUID(as_uuid=True), sa.ForeignKey('payments.id'), nullable=True),
-        sa.Column('refund_id', postgresql.UUID(as_uuid=True), sa.ForeignKey('refunds.id'), nullable=True),
+        sa.Column('payment_id', postgresql.UUID(as_uuid=True), nullable=True),  # FK to payments (table doesn't exist yet)
+        sa.Column('refund_id', postgresql.UUID(as_uuid=True), nullable=True),  # FK to refunds (table doesn't exist yet)
         sa.Column('stripe_payment_intent_id', sa.String(255), nullable=True),
         sa.Column('stripe_transfer_id', sa.String(255), nullable=True),
         sa.Column('stripe_payout_id', sa.String(255), nullable=True),
         sa.Column('stripe_charge_id', sa.String(255), nullable=True),
         sa.Column('stripe_refund_id', sa.String(255), nullable=True),
-        sa.Column('transaction_type', sa.Enum('payment', 'disbursement', 'payout', 'refund', 'transfer', 'fee', name='transaction_type'), nullable=False),
+        sa.Column('transaction_type', transaction_type, nullable=False),
         sa.Column('amount', sa.Numeric(10, 2), nullable=False),
         sa.Column('currency', sa.String(3), nullable=False, server_default='cad'),
-        sa.Column('status', sa.Enum('pending', 'succeeded', 'failed', 'canceled', 'processing', name='stripe_transaction_status'), nullable=False, server_default='pending'),
+        sa.Column('status', stripe_transaction_status, nullable=False, server_default='pending'),
         sa.Column('stripe_fee', sa.Numeric(10, 2), nullable=True),
         sa.Column('application_fee', sa.Numeric(10, 2), nullable=True),
         sa.Column('transfer_group', sa.String(100), nullable=True),
@@ -132,7 +205,7 @@ def upgrade():
         sa.Column('amount', sa.Numeric(10, 2), nullable=False),
         sa.Column('currency', sa.String(3), nullable=False, server_default='cad'),
         sa.Column('arrival_date', sa.DateTime(timezone=True), nullable=True),
-        sa.Column('status', sa.Enum('pending', 'in_transit', 'paid', 'failed', 'canceled', name='payout_status'), nullable=False, server_default='pending'),
+        sa.Column('status', payout_status_enum, nullable=False, server_default='pending'),
         sa.Column('failure_code', sa.String(50), nullable=True),
         sa.Column('failure_message', sa.Text(), nullable=True),
         sa.Column('destination_bank_name', sa.String(255), nullable=True),
@@ -145,14 +218,12 @@ def upgrade():
     op.create_index('idx_stripe_payout_stripe_id', 'stripe_payouts', ['stripe_payout_id'])
     op.create_index('idx_stripe_payout_status', 'stripe_payouts', ['status'])
 
-    # Add stripe_transfer_id column to funding table
-    op.add_column('funding', sa.Column('stripe_transfer_id', sa.String(255), nullable=True))
+    # Note: funding table doesn't exist yet, skipping stripe_transfer_id column
+    # TODO: Add stripe_transfer_id to funding table when it's created
 
 
 def downgrade():
-    return
-    # Remove stripe_transfer_id from funding table
-    op.drop_column('funding', 'stripe_transfer_id')
+    # Note: funding table doesn't exist yet, skipping stripe_transfer_id column
 
     # Drop tables
     op.drop_index('idx_stripe_payout_status', 'stripe_payouts')
