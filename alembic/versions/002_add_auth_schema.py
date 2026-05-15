@@ -163,11 +163,12 @@ def downgrade():
     op.drop_index(op.f('ix_users_email'), table_name='users')
 
     # Drop tables from migration 001 that reference users before dropping users
+    # Order matters: drop child tables before parent tables
+    op.drop_table('kyc_results')  # has FK to kyc_sessions
+    op.drop_table('kyc_events')  # has FK to kyc_sessions
+    op.drop_table('kyc_co_borrower_links')  # has FK to loan_applications
     op.drop_table('kyc_sessions')  # has FK to users (reviewed_by, submitted_by)
     op.drop_table('manual_kyb_reviews')  # has FK to users (reviewed_by, submitted_by)
-    op.drop_table('kyc_events')  # part of KYC schema
-    op.drop_table('kyc_results')  # part of KYC schema
-    op.drop_table('kyc_co_borrower_links')  # part of KYC schema
 
     op.drop_table('users')
 
