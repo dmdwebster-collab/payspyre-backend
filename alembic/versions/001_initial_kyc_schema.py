@@ -265,27 +265,14 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index('idx_manual_kyb_status', table_name='manual_kyb_reviews')
-    op.drop_index('idx_manual_kyb_vendor', table_name='manual_kyb_reviews')
-    op.drop_table('manual_kyb_reviews')
-
-    op.drop_index('idx_kyc_co_borrower_loan', table_name='kyc_co_borrower_links')
-    op.drop_table('kyc_co_borrower_links')
-
-    op.drop_index('idx_kyc_events_type', table_name='kyc_events')
-    op.drop_index('idx_kyc_events_session', table_name='kyc_events')
-    op.drop_table('kyc_events')
-
-    op.drop_index('idx_kcy_results_status', table_name='kyc_results')
-    op.drop_index('idx_kyc_results_session', table_name='kyc_results')
-    op.drop_table('kyc_results')
-
-    op.drop_index('idx_kyc_sessions_vendor', table_name='kyc_sessions')
-    op.drop_index('idx_kyc_sessions_status', table_name='kyc_sessions')
-    op.drop_index('idx_kyc_sessions_loan_app', table_name='kyc_sessions')
-    op.drop_table('kyc_sessions')
-
-    op.drop_table('users')
+    # Note: KYC tables are dropped in migration 002 before users
+    # to avoid foreign key constraint errors
+    # op.drop_table('manual_kyb_reviews')
+    # op.drop_table('kyc_co_borrower_links')
+    # op.drop_table('kyc_events')
+    # op.drop_table('kyc_results')
+    # op.drop_table('kyc_sessions')
+    # op.drop_table('users')  # dropped in migration 002
 
     # Drop loan_applications indexes and table
     op.drop_index('idx_loan_app_status', table_name='loan_applications')
