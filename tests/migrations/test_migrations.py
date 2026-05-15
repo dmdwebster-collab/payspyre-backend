@@ -29,7 +29,7 @@ def empty_db_url():
     from sqlalchemy import create_engine
 
     # Get base connection string
-    base_url = os.environ.get("TEST_DATABASE_URL", "postgresql+pyscopg2://payspyre:dev123@localhost:5432")
+    base_url = os.environ.get("TEST_DATABASE_URL", "postgresql+psycopg2://payspyre:dev123@localhost:5432")
     if "/" in base_url:
         base_url = base_url.rsplit("/", 1)[0]
 

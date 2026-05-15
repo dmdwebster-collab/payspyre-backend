@@ -11,7 +11,7 @@ from app.db.base import Base
 import os
 
 def main():
-    engine = create_engine(os.environ.get("DATABASE_URL", "postgresql+pyscopg2://payspyre:dev123@localhost:5432/payspyre"))
+    engine = create_engine(os.environ.get("DATABASE_URL", "postgresql+psycopg2://payspyre:dev123@localhost:5432/payspyre"))
     with engine.connect() as conn:
         ctx = MigrationContext.configure(conn)
         diff = compare_metadata(ctx, Base.metadata)

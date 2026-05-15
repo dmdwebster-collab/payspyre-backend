@@ -54,7 +54,7 @@ async def register(
     try:
         user = auth_service.create_user(user_data)
 
-        verification_url = f"{settings.CORS_ORIGINS_LIST[0]}/verify-email?token={user.email_verification_token}"
+        verification_url = f"{settings.cors_origins_list[0]}/verify-email?token={user.email_verification_token}"
         await email_service.send_verification_email(
             to=user.email,
             name=user.first_name,
@@ -187,7 +187,7 @@ async def forgot_password(
     user = auth_service.initiate_password_reset(reset_data.email)
 
     if user:
-        reset_url = f"{settings.CORS_ORIGINS_LIST[0]}/reset-password?token={user.password_reset_token}"
+        reset_url = f"{settings.cors_origins_list[0]}/reset-password?token={user.password_reset_token}"
         await email_service.send_password_reset_email(
             to=user.email,
             name=user.first_name,
