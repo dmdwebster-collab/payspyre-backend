@@ -66,7 +66,7 @@ class RiskRulesEngine:
         liveness_score = self._get_check_score(kyc_result, "liveness")
         if liveness_score and liveness_score < 0.95:
             return RiskEvaluationResponse(
-                decision="reject",
+                decision="rejected",
                 reason="Liveness check failed",
                 risk_score=0.0,
                 flags_applied=["liveness_failed"],
@@ -75,7 +75,7 @@ class RiskRulesEngine:
         aml_hits = self._get_aml_hits(kyc_result)
         if any(aml_hits):
             return RiskEvaluationResponse(
-                decision="reject",
+                decision="rejected",
                 reason="AML / sanctions hit",
                 risk_score=0.0,
                 flags_applied=["aml_hit"],
@@ -83,7 +83,7 @@ class RiskRulesEngine:
 
         if loan_app.get("address", {}).get("country") != "CA":
             return RiskEvaluationResponse(
-                decision="reject",
+                decision="rejected",
                 reason="Non-Canadian address (PIPEDA)",
                 risk_score=0.0,
                 flags_applied=["non_ca_address"],
@@ -165,7 +165,7 @@ class RiskRulesEngine:
             decision = "manual_review"
             reason = "Requires human review: " + ", ".join(flags)
         else:
-            decision = "reject"
+            decision = "rejected"
             reason = "Risk score too low: " + ", ".join(flags)
 
         return RiskEvaluationResponse(
