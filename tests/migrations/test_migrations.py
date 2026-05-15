@@ -13,7 +13,8 @@ from alembic import command
 from sqlalchemy import create_engine, inspect, text
 
 # Import all models to populate Base.metadata
-from app.models import credit, document, funding, kyc, loan, user, stripe, notification
+# Note: funding models are excluded (not yet migrated)
+from app.models import credit, document, kyc, loan, user, stripe, notification
 from app.db.base import Base
 
 
