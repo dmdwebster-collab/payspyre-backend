@@ -317,12 +317,28 @@ class RLSAuthMiddleware:
     and cleared at the end of each request to prevent context leakage.
     """
 
-    async def __call__(self, request: Request, call_next):
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        # Create Request object for middleware chain
+        request = Request(scope, receive)
+
+        async def call_next(request):
+            # Process the request through the app
+            response = await self.app(scope, receive, send)
+
+            # Clear user context at end of request
+            clear_request_user_context()
+
+            return response
+
         # Process the request
         response = await call_next(request)
-
-        # Clear user context at end of request
-        clear_request_user_context()
 
         return response
 

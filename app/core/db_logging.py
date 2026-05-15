@@ -48,13 +48,15 @@ def setup_db_logging(engine: Engine) -> None:
             logger.debug("query", **log_data)
 
     @event.listens_for(engine, "handle_error")
-    def handle_error(conn, cursor, statement, parameters, context, exception):
+    def handle_error(**kwargs):
         """Log database errors."""
+        exception = kwargs.get('exception')
+        statement = kwargs.get('statement', '')
         clean_statement = statement.strip()[:200] if statement else ""
         logger.error(
             "db_error",
-            error=str(exception),
-            error_type=type(exception).__name__,
+            error=str(exception) if exception else "Unknown error",
+            error_type=type(exception).__name__ if exception else "Unknown",
             statement=clean_statement,
         )
 
