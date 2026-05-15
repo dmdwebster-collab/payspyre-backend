@@ -254,7 +254,7 @@ class AuthService:
 
         api_key = ApiKey(
             user_id=user_id,
-            key_hash=raw_key,
+            key_hash=key_hash,
             name=api_key_data.name,
             scopes=api_key_data.scopes,
             expires_at=expires_at,
