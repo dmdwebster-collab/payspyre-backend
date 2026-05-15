@@ -1,0 +1,1 @@
+PaySpyre: Great news! Your loan application for {{ amount }} has been APPROVED. Sign your agreement at {{ agreement_url }} to receive funds. Reply HELP for help.

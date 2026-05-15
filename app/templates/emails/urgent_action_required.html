@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Urgent: Action Required</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .header {
+            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+            border-radius: 10px 10px 0 0;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 28px;
+        }
+        .content {
+            background: #f9f9f9;
+            padding: 30px;
+            border-radius: 0 0 10px 10px;
+        }
+        .urgent-badge {
+            background: #ef4444;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 20px;
+            font-weight: bold;
+            display: inline-block;
+            margin-bottom: 20px;
+            animation: pulse 1s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.8; transform: scale(1.05); }
+        }
+        .alert-box {
+            background: #fee2e2;
+            border: 2px solid #ef4444;
+            padding: 20px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+        .alert-box h2 {
+            color: #ef4444;
+            margin-top: 0;
+        }
+        .info-box {
+            background: white;
+            border-left: 4px solid #ef4444;
+            padding: 15px;
+            margin: 20px 0;
+        }
+        .info-box strong {
+            color: #ef4444;
+        }
+        .button {
+            display: inline-block;
+            background: #ef4444;
+            color: white;
+            padding: 15px 30px;
+            text-decoration: none;
+            border-radius: 5px;
+            margin: 20px 0;
+            font-weight: bold;
+        }
+        .deadline-box {
+            background: #fef3c7;
+            border: 2px solid #f59e0b;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+            text-align: center;
+        }
+        .deadline-box strong {
+            color: #dc2626;
+            font-size: 24px;
+        }
+        .footer {
+            text-align: center;
+            margin-top: 30px;
+            color: #666;
+            font-size: 12px;
+        }
+        .contact-info {
+            background: white;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>URGENT: Action Required</h1>
+        <p>Please attend to this immediately</p>
+    </div>
+
+    <div class="content">
+        <div class="urgent-badge">TIME SENSITIVE</div>
+
+        <p>Dear {{ borrower_name }},</p>
+
+        <div class="alert-box">
+            <h2>{{ alert_title }}</h2>
+            <p>{{ alert_message }}</p>
+        </div>
+
+        <div class="deadline-box">
+            <p>Action Required By:</p>
+            <strong>{{ deadline }}</strong>
+            <p>{{ time_remaining }} remaining</p>
+        </div>
+
+        <div class="info-box">
+            <p><strong>Reference ID:</strong> {{ reference_id }}</p>
+            <p><strong>Loan/Application ID:</strong> {{ loan_application_id }}</p>
+        </div>
+
+        <h3>What You Need to Do:</h3>
+        <ol>
+            {% for step in action_steps %}
+            <li>{{ step }}</li>
+            {% endfor %}
+        </ol>
+
+        <a href="{{ action_url }}" class="button">Take Action Now</a>
+
+        <h3>Consequences of Inaction:</h3>
+        <ul>
+            {% for consequence in consequences %}
+            <li>{{ consequence }}</li>
+            {% endfor %}
+        </ul>
+
+        <div class="contact-info">
+            <h3>Need Help? Contact Us Immediately:</h3>
+            <ul>
+                <li><strong>Phone:</strong> 1-800-PAYSPYRE (24/7 Priority Line)</li>
+                <li><strong>Email:</strong> urgent@payspyre.com</li>
+                <li><strong>Live Chat:</strong> Available on our website</li>
+            </ul>
+            <p><strong>Mention Reference ID:</strong> {{ reference_id }}</p>
+        </div>
+
+        <p>This matter requires your immediate attention. Our team is standing by to assist you.</p>
+
+        <div class="footer">
+            <p>PaySpyre Financial | 123 Finance Street, Suite 100 | Kelowna, BC V1Y 1X1</p>
+            <p>This is an automated message. Please do not reply to this email.</p>
+        </div>
+    </div>
+</body>
+</html>

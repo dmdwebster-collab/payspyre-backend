@@ -1,0 +1,1 @@
+PaySpyre: Your loan application for {{ amount }} was not approved. Contact us at 1-800-PAYSPYRE for details or to discuss options. We're here to help.

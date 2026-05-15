@@ -1,0 +1,57 @@
+name: payspyre-api-staging
+
+services:
+- name: web
+  source_dir: /
+  github:
+    repo: michael-webster/payspyre-backend
+    branch: staging
+  dockerfile_path: Dockerfile
+  instance_count: 1
+  instance_size_slug: basic-xxs
+  health_check:
+    http_path: /health
+  routes:
+  - path: /
+  envs:
+  - key: DATABASE_URL
+    scope: RUN_TIME
+    value: ${db.DATABASE_URL}
+  - key: JWT_SECRET_KEY
+    scope: RUN_TIME
+    type: SECRET
+    value: ${jwt.JWT_SECRET_KEY}
+  - key: JWT_ALGORITHM
+    scope: RUN_TIME
+    value: HS256
+  - key: JWT_ACCESS_TOKEN_EXPIRE_MINUTES
+    scope: RUN_TIME
+    value: 30
+  - key: DIDIT_API_KEY
+    scope: RUN_TIME
+    type: SECRET
+    value: ${vendors.DIDIT_API_KEY}
+  - key: DIDIT_WEBHOOK_SECRET
+    scope: RUN_TIME
+    type: SECRET
+    value: ${vendors.DIDIT_WEBHOOK_SECRET}
+  - key: PERSONA_API_KEY
+    scope: RUN_TIME
+    type: SECRET
+    value: ${vendors.PERSONA_API_KEY}
+  - key: PERSONA_WEBHOOK_SECRET
+    scope: RUN_TIME
+    type: SECRET
+    value: ${vendors.PERSONA_WEBHOOK_SECRET}
+  - key: CORS_ORIGINS
+    scope: RUN_TIME
+    value: https://staging.payspyre.com,http://localhost:3000
+
+databases:
+- name: db
+  engine: PG
+  version: "16"
+  production: false
+  cluster_name: payspyre-db-staging
+  db_name: payspyre_staging
+  db_user: payspyre

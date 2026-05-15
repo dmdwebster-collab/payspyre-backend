@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Application Status Update</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .header {
+            background: linear-gradient(135deg, #666 0%, #444 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+            border-radius: 10px 10px 0 0;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 28px;
+        }
+        .content {
+            background: #f9f9f9;
+            padding: 30px;
+            border-radius: 0 0 10px 10px;
+        }
+        .status-badge {
+            background: #ef4444;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 20px;
+            font-weight: bold;
+            display: inline-block;
+            margin-bottom: 20px;
+        }
+        .info-box {
+            background: white;
+            border-left: 4px solid #ef4444;
+            padding: 15px;
+            margin: 20px 0;
+        }
+        .info-box strong {
+            color: #ef4444;
+        }
+        .reason-box {
+            background: #fff;
+            border: 1px solid #ddd;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+        .next-steps {
+            background: #e0f2fe;
+            border: 1px solid #0ea5e9;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+        .next-steps h3 {
+            margin-top: 0;
+            color: #0ea5e9;
+        }
+        .footer {
+            text-align: center;
+            margin-top: 30px;
+            color: #666;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Application Status Update</h1>
+    </div>
+
+    <div class="content">
+        <div class="status-badge">REJECTED</div>
+
+        <p>Dear {{ borrower_name }},</p>
+
+        <p>We regret to inform you that your loan application for <strong>{{ amount }}</strong> was not approved at this time.</p>
+
+        <div class="info-box">
+            <p><strong>Application ID:</strong> {{ application_id }}</p>
+            <p><strong>Requested Amount:</strong> {{ amount }}</p>
+            <p><strong>Date Applied:</strong> {{ application_date }}</p>
+        </div>
+
+        <div class="reason-box">
+            <h3>Reason for Decision:</h3>
+            <p>{{ rejection_reason }}</p>
+        </div>
+
+        {% if specific_details %}
+        <div class="reason-box">
+            <h3>Additional Details:</h3>
+            <p>{{ specific_details }}</p>
+        </div>
+        {% endif %}
+
+        <div class="next-steps">
+            <h3>What You Can Do:</h3>
+            <ul>
+                <li>Review your credit report for any errors</li>
+                <li>Consider applying with a co-signer</li>
+                <li>Reduce outstanding debt before reapplying</li>
+                <li>Wait at least 30 days before submitting a new application</li>
+            </ul>
+        </div>
+
+        <p>We understand this may be disappointing. Our decision was based on a thorough assessment of your application and current financial profile.</p>
+
+        <p>If you believe there's been an error or would like more information about our decision, please contact our underwriting team:</p>
+
+        <ul>
+            <li>Email: underwriting@payspyre.com</li>
+            <li>Phone: 1-800-PAYSPYRE</li>
+            <li>Hours: Monday-Friday, 8am-6pm PST</li>
+        </ul>
+
+        <div class="footer">
+            <p>PaySpyre Financial | 123 Finance Street, Suite 100 | Kelowna, BC V1Y 1X1</p>
+            <p>This is an automated message. Please do not reply to this email.</p>
+        </div>
+    </div>
+</body>
+</html>

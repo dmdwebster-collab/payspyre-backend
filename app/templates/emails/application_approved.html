@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Application Approved</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+            border-radius: 10px 10px 0 0;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 28px;
+        }
+        .content {
+            background: #f9f9f9;
+            padding: 30px;
+            border-radius: 0 0 10px 10px;
+        }
+        .approval-badge {
+            background: #10b981;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 20px;
+            font-weight: bold;
+            display: inline-block;
+            margin-bottom: 20px;
+        }
+        .info-box {
+            background: white;
+            border-left: 4px solid #667eea;
+            padding: 15px;
+            margin: 20px 0;
+        }
+        .info-box strong {
+            color: #667eea;
+        }
+        .button {
+            display: inline-block;
+            background: #667eea;
+            color: white;
+            padding: 15px 30px;
+            text-decoration: none;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+        .footer {
+            text-align: center;
+            margin-top: 30px;
+            color: #666;
+            font-size: 12px;
+        }
+        .disclaimer {
+            background: #fff3cd;
+            border: 1px solid #ffc107;
+            padding: 15px;
+            border-radius: 5px;
+            margin-top: 20px;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Congratulations!</h1>
+        <p>Your loan application has been approved</p>
+    </div>
+
+    <div class="content">
+        <div class="approval-badge">APPROVED</div>
+
+        <p>Dear {{ borrower_name }},</p>
+
+        <p>We're pleased to inform you that your loan application for <strong>{{ amount }}</strong> has been approved.</p>
+
+        <div class="info-box">
+            <p><strong>Application ID:</strong> {{ application_id }}</p>
+            <p><strong>Approved Amount:</strong> {{ amount }}</p>
+            <p><strong>Interest Rate:</strong> {{ interest_rate }}</p>
+            <p><strong>Term:</strong> {{ term }}</p>
+            <p><strong>Monthly Payment:</strong> {{ monthly_payment }}</p>
+        </div>
+
+        <p>Next steps to finalize your loan:</p>
+        <ul>
+            <li>Review and sign your loan agreement</li>
+            <li>Set up your payment method</li>
+            <li>Confirm your bank account for direct deposit</li>
+        </ul>
+
+        <a href="{{ agreement_url }}" class="button">View & Sign Agreement</a>
+
+        <div class="disclaimer">
+            <strong>Please Note:</strong> This approval is subject to final verification. Funds will be disbursed within 1-2 business days after all documents are signed and verified.
+        </div>
+
+        <p>If you have any questions, please contact our support team at support@payspyre.com or call 1-800-PAYSPYRE.</p>
+
+        <div class="footer">
+            <p>PaySpyre Financial | 123 Finance Street, Suite 100 | Kelowna, BC V1Y 1X1</p>
+            <p>This is an automated message. Please do not reply to this email.</p>
+        </div>
+    </div>
+</body>
+</html>

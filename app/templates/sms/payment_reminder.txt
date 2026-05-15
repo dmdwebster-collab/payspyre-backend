@@ -1,0 +1,1 @@
+PaySpyre: Payment of {{ payment_amount }} due on {{ due_date }} ({{ days_until_due }} days). Pay now: {{ payment_url }} Avoid late fees. Reply STOP to opt out.

@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: payspyre-db
+    environment:
+      POSTGRES_DB: payspyre
+      POSTGRES_USER: payspyre
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-dev_password_change_me}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U payspyre"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: payspyre-api
+    environment:
+      DATABASE_URL: postgresql+psycopg2://payspyre:${DB_PASSWORD:-dev_password_change_me}@db:5432/payspyre
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-dev_jwt_secret_change_me}
+      DIDIT_API_KEY: ${DIDIT_API_KEY}
+      DIDIT_WEBHOOK_SECRET: ${DIDIT_WEBHOOK_SECRET}
+      PERSONA_API_KEY: ${PERSONA_API_KEY}
+      PERSONA_WEBHOOK_SECRET: ${PERSONA_WEBHOOK_SECRET}
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./app:/app/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+volumes:
+  postgres_data:

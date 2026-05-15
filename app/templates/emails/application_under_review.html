@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Application Under Review</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .header {
+            background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+            border-radius: 10px 10px 0 0;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 28px;
+        }
+        .content {
+            background: #f9f9f9;
+            padding: 30px;
+            border-radius: 0 0 10px 10px;
+        }
+        .status-badge {
+            background: #f59e0b;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 20px;
+            font-weight: bold;
+            display: inline-block;
+            margin-bottom: 20px;
+        }
+        .info-box {
+            background: white;
+            border-left: 4px solid #3b82f6;
+            padding: 15px;
+            margin: 20px 0;
+        }
+        .info-box strong {
+            color: #3b82f6;
+        }
+        .timeline {
+            background: white;
+            padding: 20px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+        .timeline-item {
+            display: flex;
+            margin-bottom: 15px;
+        }
+        .timeline-icon {
+            width: 30px;
+            height: 30px;
+            background: #3b82f6;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            margin-right: 15px;
+            font-weight: bold;
+        }
+        .timeline-item.completed .timeline-icon {
+            background: #10b981;
+        }
+        .timeline-item.pending .timeline-icon {
+            background: #e5e7eb;
+            color: #9ca3af;
+        }
+        .footer {
+            text-align: center;
+            margin-top: 30px;
+            color: #666;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Application Update</h1>
+        <p>Your application is being reviewed</p>
+    </div>
+
+    <div class="content">
+        <div class="status-badge">UNDER REVIEW</div>
+
+        <p>Dear {{ borrower_name }},</p>
+
+        <p>We're pleased to inform you that your loan application for <strong>{{ amount }}</strong> has been received and is now under review.</p>
+
+        <div class="info-box">
+            <p><strong>Application ID:</strong> {{ application_id }}</p>
+            <p><strong>Requested Amount:</strong> {{ amount }}</p>
+            <p><strong>Submitted:</strong> {{ submitted_date }}</p>
+            <p><strong>Estimated Decision:</strong> {{ estimated_decision_date }}</p>
+        </div>
+
+        <h3>Application Progress</h3>
+        <div class="timeline">
+            <div class="timeline-item completed">
+                <div class="timeline-icon">✓</div>
+                <div>
+                    <strong>Application Submitted</strong><br>
+                    <small>{{ submitted_date }}</small>
+                </div>
+            </div>
+            <div class="timeline-item completed">
+                <div class="timeline-icon">✓</div>
+                <div>
+                    <strong>Identity Verification</strong><br>
+                    <small>{{ kyc_completed_date }}</small>
+                </div>
+            </div>
+            <div class="timeline-item">
+                <div class="timeline-icon">3</div>
+                <div>
+                    <strong>Underwriting Review</strong><br>
+                    <small>In Progress</small>
+                </div>
+            </div>
+            <div class="timeline-item pending">
+                <div class="timeline-icon">4</div>
+                <div>
+                    <strong>Final Decision</strong><br>
+                    <small>Pending</small>
+                </div>
+            </div>
+        </div>
+
+        <p>Our underwriting team is carefully reviewing your application. We may reach out if we need any additional information or documentation.</p>
+
+        <p>You can check the status of your application anytime by visiting your dashboard or contacting our support team.</p>
+
+        <div class="footer">
+            <p>PaySpyre Financial | 123 Finance Street, Suite 100 | Kelowna, BC V1Y 1X1</p>
+            <p>This is an automated message. Please do not reply to this email.</p>
+            <p>Questions? Contact us at support@payspyre.com or 1-800-PAYSPYRE</p>
+        </div>
+    </div>
+</body>
+</html>
