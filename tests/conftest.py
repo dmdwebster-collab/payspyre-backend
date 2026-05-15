@@ -3,9 +3,6 @@ import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-# Import Base directly from sqlalchemy.ext.declarative to avoid circular import
-from sqlalchemy.ext.declarative import declarative_base
-
 # Use PostgreSQL for tests to match migrated schema
 TEST_DATABASE_URL = os.getenv(
     "TEST_DATABASE_URL",
@@ -20,15 +17,16 @@ test_engine = create_engine(
 )
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
 
-# Create a test-specific Base to avoid circular imports
-Base = declarative_base()
+# Import Base and all models after creating test engine to avoid circular imports
+# This ensures all models are registered with Base before creating tables
+from app.db.base import Base
+import app.models  # Import all models to register them with Base
 
 
 @pytest.fixture(scope="function")
 def db_session():
     # Create test database if it doesn't exist
     import psycopg2
-    from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 
     # Parse connection string
     if "localhost" in TEST_DATABASE_URL:
@@ -36,8 +34,7 @@ def db_session():
             host="localhost",
             user="postgres",
             password="dev123",
-            dbname="postgres",
-            isolation_level=ISOLATION_LEVEL_AUTOCOMMIT
+            dbname="postgres"
         )
         conn.autocommit = True
         cursor = conn.cursor()

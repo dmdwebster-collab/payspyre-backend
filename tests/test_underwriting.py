@@ -40,9 +40,21 @@ def setup_underwriting_data(db_session):
     )
     db_session.add(borrower)
 
+    # Create loan application first (required by FK)
+    application = LoanApplication(
+        id=uuid4(),
+        borrower_id=borrower.id,
+        vendor_id=vendor.id,
+        requested_amount=Decimal("3000.00"),
+        purpose="Dental implants",
+        status="pending_documents",
+    )
+    db_session.add(application)
+    db_session.flush()  # Flush to ensure application exists before creating FK references
+
     kyc_session = KycSession(
         id=uuid4(),
-        loan_application_id=uuid4(),
+        loan_application_id=application.id,  # Use the application ID
         borrower_id=borrower.id,
         vendor="didit",
         verification_url="https://test.com/verify",
@@ -85,15 +97,7 @@ def setup_underwriting_data(db_session):
     )
     db_session.add(kyc_result3)
 
-    application = LoanApplication(
-        id=uuid4(),
-        borrower_id=borrower.id,
-        vendor_id=vendor.id,
-        requested_amount=Decimal("3000.00"),
-        purpose="Dental implants",
-        status="pending_documents",
-    )
-    db_session.add(application)
+    # Note: application already created above before kyc_session
 
     db_session.commit()
 
