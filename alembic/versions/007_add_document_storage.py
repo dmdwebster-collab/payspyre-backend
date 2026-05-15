@@ -18,15 +18,25 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # Create enum types using raw SQL
+    # Create enum types using raw SQL (idempotent)
     op.execute("""
-        CREATE TYPE document_type AS ENUM (
+        DO $$ BEGIN
+            CREATE TYPE document_type AS ENUM (
             'id_front', 'id_back', 'selfie', 'proof_of_income', 'bank_statement',
             'tax_return', 'utility_bill', 'business_license', 'incorporation_document',
             'shareholder_agreement', 'other'
-        )
+        );
+        EXCEPTION
+            WHEN duplicate_object THEN null;
+        END $$;
     """)
-    op.execute("CREATE TYPE document_status AS ENUM ('uploading', 'uploaded', 'verified', 'rejected')")
+    op.execute("""
+        DO $$ BEGIN
+            CREATE TYPE document_status AS ENUM ('uploading', 'uploaded', 'verified', 'rejected');
+        EXCEPTION
+            WHEN duplicate_object THEN null;
+        END $$;
+    """)
 
     # Create enum types for use in columns (with create_type=False)
     from sqlalchemy.dialects import postgresql
@@ -104,11 +114,74 @@ def upgrade() -> None:
     op.create_index('idx_document_versions_doc', 'document_versions', ['document_id'])
     op.create_index('idx_document_versions_version', 'document_versions', ['document_id', 'version_number'])
 
+    # ========================================================================
+    # ROW LEVEL SECURITY FOR DOCUMENTS
+    # ========================================================================
+    # RLS policies for documents are created here since the table is created here
+
+    op.execute("ALTER TABLE documents ENABLE ROW LEVEL SECURITY")
+
+    op.execute("DROP POLICY IF EXISTS admin_full_access_documents ON documents")
+    op.execute("""
+        CREATE POLICY admin_full_access_documents ON documents
+        FOR ALL
+        USING (is_admin_user())
+        WITH CHECK (is_admin_user());
+    """)
+
+    op.execute("DROP POLICY IF EXISTS vendor_isolation_documents ON documents")
+    op.execute("""
+        CREATE POLICY vendor_isolation_documents ON documents
+        FOR SELECT
+        USING (
+            is_admin_user()
+            OR vendor_id = get_current_vendor_id()
+            OR (
+                SELECT vendor_id FROM loan_applications WHERE id = documents.loan_application_id
+            ) = get_current_vendor_id()
+        );
+    """)
+
+    op.execute("DROP POLICY IF EXISTS borrower_isolation_documents ON documents")
+    op.execute("""
+        CREATE POLICY borrower_isolation_documents ON documents
+        FOR SELECT
+        USING (
+            is_admin_user()
+            OR borrower_id = get_current_borrower_id()
+            OR (
+                SELECT borrower_id FROM loan_applications WHERE id = documents.loan_application_id
+            ) = get_current_borrower_id()
+        );
+    """)
+
+    # Vendor can update documents for their applications
+    op.execute("DROP POLICY IF EXISTS vendor_update_documents ON documents")
+    op.execute("""
+        CREATE POLICY vendor_update_documents ON documents
+        FOR UPDATE
+        USING (
+            is_admin_user()
+            OR vendor_id = get_current_vendor_id()
+        )
+        WITH CHECK (
+            is_admin_user()
+            OR vendor_id = get_current_vendor_id()
+        );
+    """)
+
 
 def downgrade() -> None:
     op.drop_index('idx_document_versions_version', table_name='document_versions')
     op.drop_index('idx_document_versions_doc', table_name='document_versions')
     op.drop_table('document_versions')
+
+    # Drop RLS policies and disable RLS
+    op.execute("DROP POLICY IF EXISTS vendor_update_documents ON documents")
+    op.execute("DROP POLICY IF EXISTS borrower_isolation_documents ON documents")
+    op.execute("DROP POLICY IF EXISTS vendor_isolation_documents ON documents")
+    op.execute("DROP POLICY IF EXISTS admin_full_access_documents ON documents")
+    op.execute("ALTER TABLE documents DISABLE ROW LEVEL SECURITY")
 
     op.drop_index('idx_documents_expires', table_name='documents')
     op.drop_index('idx_documents_s3_key', table_name='documents')
