@@ -34,9 +34,21 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # Skip - depends on fully-defined tables that are still stubs
-    # TODO: Expand stub tables before running this migration
-    return
+    # Guard: Only run in development/test environments
+    bind = op.get_bind()
+    result = bind.execute(sa.text("SELECT current_database()")).scalar()
+    if result not in ['payspyre', 'payspyre_dev', 'payspyre_test']:
+        # Skip in production/staging
+        return
+
+    # Check if admin user already exists (idempotency check)
+    existing_admin = bind.execute(
+        sa.text("SELECT id FROM users WHERE email = 'admin@payspyre.com' LIMIT 1")
+    ).scalar()
+    if existing_admin:
+        # Data already seeded, skip
+        return
+
     # ========================================================================
     # GENERATE UUIDS FOR ALL ENTITIES
     # ========================================================================
@@ -667,7 +679,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    return
     # Delete in reverse order of dependencies
 
     # Vendor onboarding documents
