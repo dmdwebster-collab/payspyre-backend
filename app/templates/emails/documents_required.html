@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Action Required: Documents Needed</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .header {
+            background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+            border-radius: 10px 10px 0 0;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 28px;
+        }
+        .content {
+            background: #f9f9f9;
+            padding: 30px;
+            border-radius: 0 0 10px 10px;
+        }
+        .action-badge {
+            background: #ef4444;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 20px;
+            font-weight: bold;
+            display: inline-block;
+            margin-bottom: 20px;
+        }
+        .info-box {
+            background: white;
+            border-left: 4px solid #f59e0b;
+            padding: 15px;
+            margin: 20px 0;
+        }
+        .info-box strong {
+            color: #f59e0b;
+        }
+        .button {
+            display: inline-block;
+            background: #f59e0b;
+            color: white;
+            padding: 15px 30px;
+            text-decoration: none;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+        .document-list {
+            background: white;
+            border: 1px solid #ddd;
+            padding: 20px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+        .document-item {
+            padding: 10px;
+            border-bottom: 1px solid #eee;
+            display: flex;
+            align-items: center;
+        }
+        .document-item:last-child {
+            border-bottom: none;
+        }
+        .document-icon {
+            font-size: 20px;
+            margin-right: 10px;
+        }
+        .deadline-box {
+            background: #fee2e2;
+            border: 2px solid #ef4444;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+            text-align: center;
+        }
+        .deadline-box strong {
+            color: #dc2626;
+            font-size: 20px;
+        }
+        .footer {
+            text-align: center;
+            margin-top: 30px;
+            color: #666;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Action Required</h1>
+        <p>We need additional documents to process your application</p>
+    </div>
+
+    <div class="content">
+        <div class="action-badge">DOCUMENTS REQUESTED</div>
+
+        <p>Dear {{ borrower_name }},</p>
+
+        <p>To continue processing your loan application for <strong>{{ amount }}</strong>, we need some additional documents from you.</p>
+
+        <div class="info-box">
+            <p><strong>Application ID:</strong> {{ application_id }}</p>
+            <p><strong>Requested Amount:</strong> {{ amount }}</p>
+        </div>
+
+        <div class="deadline-box">
+            <p>Please submit by:</p>
+            <strong>{{ deadline }}</strong>
+            <p>{{ days_remaining }} days remaining</p>
+        </div>
+
+        <h3>Documents Required:</h3>
+        <div class="document-list">
+            {% for document in documents %}
+            <div class="document-item">
+                <span class="document-icon">📄</span>
+                <div>
+                    <strong>{{ document.name }}</strong><br>
+                    <small>{{ document.description }}</small>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+
+        <a href="{{ upload_url }}" class="button">Upload Documents Now</a>
+
+        <h3>How to Upload:</h3>
+        <ol>
+            <li>Click the button above or log into your account</li>
+            <li>Navigate to the "Documents" section</li>
+            <li>Upload each required file (PDF, JPG, or PNG accepted)</li>
+            <li>Ensure all documents are clear and legible</li>
+        </ol>
+
+        <h3>Accepted File Types:</h3>
+        <ul>
+            <li>PDF files (up to 10MB)</li>
+            <li>JPEG/PNG images (up to 5MB each)</li>
+        </ul>
+
+        <p>If you have any questions about these requirements or need assistance uploading your documents, please contact us:</p>
+
+        <ul>
+            <li>Email: support@payspyre.com</li>
+            <li>Phone: 1-800-PAYSPYRE</li>
+            <li>Live Chat: Available on our website</li>
+        </ul>
+
+        <p>Please note that failure to submit the requested documents by the deadline may result in delays or rejection of your application.</p>
+
+        <div class="footer">
+            <p>PaySpyre Financial | 123 Finance Street, Suite 100 | Kelowna, BC V1Y 1X1</p>
+            <p>This is an automated message. Please do not reply to this email.</p>
+        </div>
+    </div>
+</body>
+</html>

@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.production
+    container_name: payspyre-api
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      JWT_ACCESS_TOKEN_EXPIRE_MINUTES: ${JWT_ACCESS_TOKEN_EXPIRE_MINUTES:-30}
+      DIDIT_API_KEY: ${DIDIT_API_KEY}
+      DIDIT_WEBHOOK_SECRET: ${DIDIT_WEBHOOK_SECRET}
+      PERSONA_API_KEY: ${PERSONA_API_KEY}
+      PERSONA_WEBHOOK_SECRET: ${PERSONA_WEBHOOK_SECRET}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+      DO_DEPLOYMENT: "1"
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - payspyre-network
+
+  # Optional: Nginx reverse proxy for SSL
+  nginx:
+    image: nginx:alpine
+    container_name: payspyre-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - api
+    restart: unless-stopped
+    networks:
+      - payspyre-network
+    profiles:
+      - with-nginx
+
+networks:
+  payspyre-network:
+    driver: bridge
