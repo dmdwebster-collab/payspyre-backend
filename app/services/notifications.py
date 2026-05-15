@@ -7,7 +7,6 @@ from uuid import UUID
 
 import httpx
 import resend
-import twilio
 from jinja2 import Template
 from sqlalchemy.orm import Session
 
@@ -54,7 +53,8 @@ class EmailSender:
 
 class SmsSender:
     def __init__(self):
-        self.client = twilio.rest.Client(
+        from twilio.rest import Client
+        self.client = Client(
             settings.TWILIO_ACCOUNT_SID,
             settings.TWILIO_AUTH_TOKEN,
         )

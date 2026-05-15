@@ -71,8 +71,8 @@ async def initiate_document_upload(
         file_name=data.file_name,
         file_content_type=data.file_content_type,
         file_size_bytes=data.file_size_bytes,
-        doc_metadata=data.metadata,
-        tags={"tags": data.tags} if data.tags else None,
+        document_metadata=data.metadata,
+        tags=data.tags if data.tags else None,
         expires_at=datetime.now(timezone.utc) + timedelta(days=2555),
     )
 

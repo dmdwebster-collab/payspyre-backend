@@ -58,10 +58,15 @@ class DocumentResponse(BaseModel):
     verified_by: UUID | None
     verified_at: datetime | None
     verification_notes: str | None
-    metadata: dict | None
+    document_metadata: dict | None = None
     tags: list[str] | None
     created_at: datetime
     updated_at: datetime
+
+    # Property for backwards compatibility with API responses expecting 'metadata'
+    @property
+    def metadata(self) -> dict | None:
+        return self.document_metadata
 
     class Config:
         from_attributes = True

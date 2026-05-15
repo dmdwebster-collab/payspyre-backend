@@ -5,6 +5,8 @@ from uuid import uuid4
 from app.models.notification import (
     Delivery, Notification, NotificationPreference, NotificationTemplate, WebhookDelivery
 )
+from app.models.user import User
+from app.models.loan import Vendor
 from app.schemas.notification import (
     BulkNotificationCreate, NotificationCreate, NotificationPreferenceCreate,
     NotificationTemplateCreate, WebhookDeliveryCreate
@@ -113,8 +115,19 @@ class TestNotificationQueue:
 
 class TestNotificationPreferences:
     def test_create_preferences(self, db_session):
+        # Create a user first to satisfy FK constraint
+        user = User(
+            id=uuid4(),
+            email="test@example.com",
+            password_hash="test_hash",
+            first_name="Test",
+            last_name="User",
+        )
+        db_session.add(user)
+        db_session.flush()  # Flush to get the user ID before creating preferences
+
         prefs_data = NotificationPreferenceCreate(
-            user_id=uuid4(),
+            user_id=user.id,
             email_enabled=True,
             sms_enabled=False,
             quiet_hours_start="22:00",
@@ -149,8 +162,24 @@ class TestNotificationPreferences:
 
 class TestWebhookDelivery:
     def test_create_webhook_delivery(self, db_session):
+        # Create a vendor first to satisfy FK constraint
+        vendor = Vendor(
+            id=uuid4(),
+            business_name="Test Vendor",
+            business_type="sole_proprietor",
+            contact_name="Test Contact",
+            email="vendor@example.com",
+            phone="555-1234",
+            address_line1="123 Test St",
+            city="Test City",
+            province="BC",
+            postal_code="V1V 1V1",
+        )
+        db_session.add(vendor)
+        db_session.flush()  # Flush to get the vendor ID before creating webhook delivery
+
         webhook_data = WebhookDeliveryCreate(
-            vendor_id=uuid4(),
+            vendor_id=vendor.id,
             event_type="application.approved",
             url="https://example.com/webhook",
             payload={"application_id": str(uuid4()), "status": "approved"},
@@ -221,15 +250,7 @@ class TestRetryLogic:
         assert notification_queue._should_retry(notification_high) is True
 
     def test_should_not_retry_low_priority(self, notification_queue):
-        for _ in range(3):
-            delivery = Delivery(
-                notification_id=uuid4(),
-                attempt_number=1,
-                status="failed",
-                provider="resend",
-            )
-            notification_queue.db.add(delivery)
-
+        # Create the notification first to satisfy FK constraint
         notification_low = Notification(
             type="email",
             recipient="test@example.com",
@@ -238,6 +259,18 @@ class TestRetryLogic:
             priority="low",
         )
         notification_queue.db.add(notification_low)
+        notification_queue.db.flush()  # Flush to get the ID before creating deliveries
+
+        # Create 3 failed deliveries for this notification
+        for _ in range(3):
+            delivery = Delivery(
+                notification_id=notification_low.id,  # Use the actual notification ID
+                attempt_number=1,
+                status="failed",
+                provider="resend",
+            )
+            notification_queue.db.add(delivery)
+
         notification_queue.db.commit()
 
         assert notification_queue._should_retry(notification_low) is False
