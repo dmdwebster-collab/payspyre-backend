@@ -14,7 +14,6 @@ from app.core.security import (
     clear_request_user_context
 )
 from app.db.base import get_db
-from app.models.user import User, Session, ApiKey, Role, Permission
 from app.schemas.auth import TokenPayload
 
 security = HTTPBearer()
@@ -24,7 +23,8 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db)
-) -> User:
+):
+    from app.models.user import User
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -61,14 +61,14 @@ def get_current_user(
     return user
 
 
-def get_current_active_user(current_user: User = Depends(get_current_user)) -> User:
+def get_current_active_user(current_user = Depends(get_current_user)):
     if not current_user.is_active:
         raise HTTPException(status_code=400, detail="Inactive user")
     return current_user
 
 
 def require_roles(*required_roles: str):
-    def role_checker(current_user: User = Depends(get_current_user)) -> User:
+    def role_checker(current_user = Depends(get_current_user)):
         user_roles = {role.role.name for role in current_user.roles}
         if not any(role in user_roles for role in required_roles):
             raise HTTPException(

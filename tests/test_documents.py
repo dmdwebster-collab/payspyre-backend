@@ -26,16 +26,25 @@ def mock_s3_resource():
         yield resource_mock
 
 
-def test_storage_service_generate_presigned_upload_url(mock_s3_client):
+@pytest.fixture
+def storage_service(mock_s3_client):
+    """Create a storage service with mocked S3 client."""
+    service = StorageService()
+    # Manually initialize with mocked client
+    service._s3_client = mock_s3_client
+    service._bucket_name = "test-bucket"
+    service._region = "us-east-1"
+    service._initialized = True
+    return service
+
+
+def test_storage_service_generate_presigned_upload_url(storage_service, mock_s3_client):
     mock_s3_client.generate_presigned_post.return_value = {
         "url": "https://s3.amazonaws.com/bucket",
         "fields": {"key": "value"},
     }
 
-    service = StorageService()
-    service._bucket_name = "test-bucket"
-
-    result = service.generate_presigned_upload_url(
+    result = storage_service.generate_presigned_upload_url(
         entity_type="kyc_sessions",
         entity_id="123",
         document_type="id_front",
@@ -49,18 +58,15 @@ def test_storage_service_generate_presigned_upload_url(mock_s3_client):
     assert result["expires_in"] == 3600
 
 
-def test_storage_service_generate_presigned_download_url(mock_s3_client):
+def test_storage_service_generate_presigned_download_url(storage_service, mock_s3_client):
     mock_s3_client.generate_presigned_url.return_value = "https://s3.amazonaws.com/bucket/key?signature=xxx"
 
-    service = StorageService()
-    service._bucket_name = "test-bucket"
-
-    url = service.generate_presigned_download_url("kyc_sessions/123/id_front/test.jpg")
+    url = storage_service.generate_presigned_download_url("kyc_sessions/123/id_front/test.jpg")
 
     assert url.startswith("https://")
 
 
-def test_storage_service_get_object_metadata(mock_s3_client):
+def test_storage_service_get_object_metadata(storage_service, mock_s3_client):
     mock_s3_client.head_object.return_value = {
         "ContentType": "image/jpeg",
         "ContentLength": 1024,
@@ -69,37 +75,30 @@ def test_storage_service_get_object_metadata(mock_s3_client):
         "ETag": '"abc123"',
     }
 
-    service = StorageService()
-    service._bucket_name = "test-bucket"
-
-    metadata = service.get_object_metadata("kyc_sessions/123/id_front/test.jpg")
+    metadata = storage_service.get_object_metadata("kyc_sessions/123/id_front/test.jpg")
 
     assert metadata["content_type"] == "image/jpeg"
     assert metadata["content_length"] == 1024
     assert metadata["etag"] == '"abc123"'
 
 
-def test_storage_service_verify_object_exists(mock_s3_client):
+def test_storage_service_verify_object_exists(storage_service, mock_s3_client):
     mock_s3_client.head_object.return_value = {}
 
-    service = StorageService()
-    service._bucket_name = "test-bucket"
-
-    exists = service.verify_object_exists("kyc_sessions/123/id_front/test.jpg")
+    exists = storage_service.verify_object_exists("kyc_sessions/123/id_front/test.jpg")
 
     assert exists is True
 
 
-def test_storage_service_verify_object_not_found(mock_s3_client):
-    mock_s3_client.head_object.side_effect = Exception("404")
+def test_storage_service_verify_object_not_found(storage_service, mock_s3_client):
+    from botocore.exceptions import ClientError
 
-    service = StorageService()
-    service._bucket_name = "test-bucket"
+    error_response = {"Error": {"Code": "404", "Message": "Not Found"}}
+    mock_s3_client.head_object.side_effect = ClientError(error_response, "HeadObject")
 
-    with pytest.raises(HTTPException) as exc:
-        service.verify_object_exists("nonexistent.jpg")
+    exists = storage_service.verify_object_exists("nonexistent.jpg")
 
-    assert exc.value.status_code == 500
+    assert exists is False
 
 
 @pytest.mark.asyncio
