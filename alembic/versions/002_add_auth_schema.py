@@ -161,6 +161,14 @@ def downgrade():
     op.drop_index(op.f('ix_users_email_verification_token'), table_name='users')
     op.drop_index('idx_users_email_verified', table_name='users')
     op.drop_index(op.f('ix_users_email'), table_name='users')
+
+    # Drop tables from migration 001 that reference users before dropping users
+    op.drop_table('kyc_sessions')  # has FK to users (reviewed_by, submitted_by)
+    op.drop_table('manual_kyb_reviews')  # has FK to users (reviewed_by, submitted_by)
+    op.drop_table('kyc_events')  # part of KYC schema
+    op.drop_table('kyc_results')  # part of KYC schema
+    op.drop_table('kyc_co_borrower_links')  # part of KYC schema
+
     op.drop_table('users')
 
     op.drop_constraint('idx_role_permissions_unique', 'role_permissions')
