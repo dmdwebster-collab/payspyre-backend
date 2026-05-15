@@ -13,12 +13,8 @@ from app.services.notifications import NotificationQueue
 
 
 @pytest.fixture
-def db_session(test_db):
-    yield test_db
-
-
-@pytest.fixture
 def notification_queue(db_session):
+    """Create a NotificationQueue instance with test database session."""
     return NotificationQueue(db_session)
 
 

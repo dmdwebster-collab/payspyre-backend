@@ -1,24 +1,9 @@
 import pytest
 from datetime import datetime, timedelta
-from fastapi.testclient import TestClient
+from uuid import uuid4
 
-from app.main import app
-from app.db.base import get_db
 from app.models.loan import LoanApplication, Borrower, Vendor
 from app.models.funding import Payment, PaymentSchedule
-
-client = TestClient(app)
-
-
-@pytest.fixture
-def db_session():
-    """Create a test database session."""
-    from app.db.base import SessionLocal
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 
 @pytest.fixture
@@ -26,6 +11,7 @@ def test_data(db_session):
     """Create test data for analytics."""
     # Create vendor
     vendor = Vendor(
+        id=uuid4(),
         business_name="Test Dental Clinic",
         dba_name="Test Clinic",
         business_type="corporation",
@@ -39,11 +25,11 @@ def test_data(db_session):
         status="active"
     )
     db_session.add(vendor)
-    db_session.commit()
-    db_session.refresh(vendor)
+    db_session.flush()  # Flush to get vendor.id
 
     # Create borrower
     borrower = Borrower(
+        id=uuid4(),
         first_name="John",
         last_name="Doe",
         email="john@example.com",
@@ -60,8 +46,7 @@ def test_data(db_session):
         credit_score=720
     )
     db_session.add(borrower)
-    db_session.commit()
-    db_session.refresh(borrower)
+    db_session.flush()  # Flush to get borrower.id
 
     # Create loan applications
     now = datetime.now()
@@ -69,6 +54,7 @@ def test_data(db_session):
         status = ["approved", "rejected", "funded"][i % 3]
         decision = ["approved", "rejected"][i % 2]
         loan = LoanApplication(
+            id=uuid4(),
             borrower_id=borrower.id,
             vendor_id=vendor.id,
             requested_amount=5000.00 + (i * 100),
@@ -83,13 +69,13 @@ def test_data(db_session):
             submitted_at=now - timedelta(days=i),
         )
         db_session.add(loan)
-        db_session.commit()
-        db_session.refresh(loan)
+        db_session.flush()  # Flush to get loan.id
 
         # Create payment schedules for funded loans
         if status == "funded":
             for month in range(1, 13):
                 schedule = PaymentSchedule(
+                    id=uuid4(),
                     application_id=loan.id,
                     payment_number=month,
                     due_date=now + timedelta(days=30 * month),
@@ -100,7 +86,8 @@ def test_data(db_session):
                     is_paid="false" if month > 3 else "true"
                 )
                 db_session.add(schedule)
-                db_session.commit()
+
+    db_session.commit()  # Commit all at once
 
     yield {
         "vendor_id": vendor.id,
@@ -108,7 +95,7 @@ def test_data(db_session):
     }
 
 
-def test_get_analytics_basic(test_data):
+def test_get_analytics_basic(client, test_data):
     """Test basic analytics retrieval."""
     response = client.get("/api/v1/analytics")
 
@@ -126,7 +113,7 @@ def test_get_analytics_basic(test_data):
     assert "geographic_distribution" in data
 
 
-def test_get_analytics_with_date_range(test_data):
+def test_get_analytics_with_date_range(client, test_data):
     """Test analytics with custom date range."""
     end_date = datetime.now().strftime("%Y-%m-%d")
     start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
@@ -143,7 +130,7 @@ def test_get_analytics_with_date_range(test_data):
     assert data["loan_metrics"]["totalCount"] > 0
 
 
-def test_get_analytics_weekly_granularity(test_data):
+def test_get_analytics_weekly_granularity(client, test_data):
     """Test analytics with weekly granularity."""
     response = client.get("/api/v1/analytics?granularity=weekly")
 
@@ -155,7 +142,7 @@ def test_get_analytics_weekly_granularity(test_data):
         assert "-" in data["loan_volume_trends"][0]["date"]
 
 
-def test_get_analytics_monthly_granularity(test_data):
+def test_get_analytics_monthly_granularity(client, test_data):
     """Test analytics with monthly granularity."""
     response = client.get("/api/v1/analytics?granularity=monthly")
 
@@ -168,7 +155,7 @@ def test_get_analytics_monthly_granularity(test_data):
         assert len(date.split("-")) == 2
 
 
-def test_approval_rates_structure(test_data):
+def test_approval_rates_structure(client, test_data):
     """Test approval rates data structure."""
     response = client.get("/api/v1/analytics")
     data = response.json()
@@ -185,7 +172,7 @@ def test_approval_rates_structure(test_data):
         assert 0 <= rate["approvalRate"] <= 1
 
 
-def test_loan_metrics_calculation(test_data):
+def test_loan_metrics_calculation(client, test_data):
     """Test loan metrics calculations."""
     response = client.get("/api/v1/analytics")
     data = response.json()
@@ -202,7 +189,7 @@ def test_loan_metrics_calculation(test_data):
         assert abs(metrics["averageAmount"] - expected_avg) < 0.01
 
 
-def test_vendor_performance_ranking(test_data):
+def test_vendor_performance_ranking(client, test_data):
     """Test vendor performance ranking."""
     response = client.get("/api/v1/analytics")
     data = response.json()
@@ -214,7 +201,7 @@ def test_vendor_performance_ranking(test_data):
         assert sorted(ranks) == list(range(1, len(ranks) + 1))
 
 
-def test_geographic_distribution(test_data):
+def test_geographic_distribution(client, test_data):
     """Test geographic distribution data."""
     response = client.get("/api/v1/analytics")
     data = response.json()
@@ -229,7 +216,7 @@ def test_geographic_distribution(test_data):
         assert 0 <= province["percentage"] <= 1
 
 
-def test_risk_score_distribution(test_data):
+def test_risk_score_distribution(client, test_data):
     """Test risk score distribution."""
     response = client.get("/api/v1/analytics")
     data = response.json()
@@ -241,7 +228,7 @@ def test_risk_score_distribution(test_data):
         assert abs(total_percentage - 1.0) < 0.01
 
 
-def test_delinquency_tracking(test_data):
+def test_delinquency_tracking(client, test_data):
     """Test delinquency tracking data."""
     response = client.get("/api/v1/analytics")
     data = response.json()
@@ -260,7 +247,7 @@ def test_delinquency_tracking(test_data):
         assert 0 <= period["delinquencyRate"] <= 1
 
 
-def test_export_loans_csv(test_data):
+def test_export_loans_csv(client, test_data):
     """Test exporting loans to CSV."""
     response = client.get("/api/v1/analytics/export?type=loans")
 
@@ -269,7 +256,7 @@ def test_export_loans_csv(test_data):
     assert "attachment" in response.headers["content-disposition"]
 
 
-def test_export_payments_csv(test_data):
+def test_export_payments_csv(client, test_data):
     """Test exporting payments to CSV."""
     response = client.get("/api/v1/analytics/export?type=payments")
 
@@ -277,7 +264,7 @@ def test_export_payments_csv(test_data):
     assert "text/csv" in response.headers["content-type"]
 
 
-def test_export_vendors_csv(test_data):
+def test_export_vendors_csv(client, test_data):
     """Test exporting vendors to CSV."""
     response = client.get("/api/v1/analytics/export?type=vendors")
 
@@ -285,7 +272,7 @@ def test_export_vendors_csv(test_data):
     assert "text/csv" in response.headers["content-type"]
 
 
-def test_export_with_date_range(test_data):
+def test_export_with_date_range(client, test_data):
     """Test export with custom date range."""
     end_date = datetime.now().strftime("%Y-%m-%d")
     start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
@@ -299,7 +286,7 @@ def test_export_with_date_range(test_data):
     assert end_date in response.headers["content-disposition"]
 
 
-def test_analytics_empty_data(db_session):
+def test_analytics_empty_data(client, db_session):
     """Test analytics behavior with no data."""
     response = client.get("/api/v1/analytics")
 

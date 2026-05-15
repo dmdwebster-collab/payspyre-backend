@@ -2,52 +2,15 @@ import pytest
 from datetime import datetime, timedelta
 from uuid import uuid4
 
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-
-from app.main import app
-from app.db.base import Base, get_db
 from app.models.user import User, Role, UserRoleLink
 from app.core.security import get_password_hash, create_access_token
 
 
-SQLALCHEMY_DATABASE_URL = "sqlite:///./test.db"
-
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}
-)
-TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-
-def override_get_db():
-    try:
-        db = TestingSessionLocal()
-        yield db
-    finally:
-        db.close()
-
-
-app.dependency_overrides[get_db] = override_get_db
-
-
 @pytest.fixture(scope="function")
-def db():
-    Base.metadata.create_all(bind=engine)
-    db = TestingSessionLocal()
-    yield db
-    db.close()
-    Base.metadata.drop_all(bind=engine)
-
-
-@pytest.fixture(scope="function")
-def client(db):
-    return TestClient(app)
-
-
-@pytest.fixture(scope="function")
-def test_user(db):
+def test_user(db_session):
+    """Create a test user."""
     user = User(
+        id=uuid4(),
         email="test@example.com",
         password_hash=get_password_hash("TestPassword123"),
         first_name="Test",
@@ -55,15 +18,17 @@ def test_user(db):
         is_active=True,
         is_verified=True,
     )
-    db.add(user)
-    db.commit()
-    db.refresh(user)
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
     return user
 
 
 @pytest.fixture(scope="function")
-def admin_user(db):
+def admin_user(db_session):
+    """Create an admin user."""
     user = User(
+        id=uuid4(),
         email="admin@example.com",
         password_hash=get_password_hash("AdminPassword123"),
         first_name="Admin",
@@ -71,9 +36,9 @@ def admin_user(db):
         is_active=True,
         is_verified=True,
     )
-    db.add(user)
-    db.commit()
-    db.refresh(user)
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
     return user
 
 

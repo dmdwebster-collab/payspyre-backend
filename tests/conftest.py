@@ -2,6 +2,7 @@ import pytest
 import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from fastapi.testclient import TestClient
 
 # Use PostgreSQL for tests to match migrated schema
 TEST_DATABASE_URL = os.getenv(
@@ -19,7 +20,7 @@ TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_
 
 # Import Base and all models after creating test engine to avoid circular imports
 # This ensures all models are registered with Base before creating tables
-from app.db.base import Base
+from app.db.base import Base, get_db
 import app.models  # Import all models to register them with Base
 
 
@@ -52,3 +53,25 @@ def db_session():
     finally:
         session.close()
         Base.metadata.drop_all(bind=test_engine)
+
+
+@pytest.fixture(scope="function")
+def client(db_session):
+    """FastAPI test client with database session override.
+
+    This fixture provides a TestClient instance that overrides the get_db
+    dependency to use the test database session. All API tests that make
+    HTTP requests should use this fixture.
+    """
+    from app.main import app
+
+    def override_get_db():
+        try:
+            yield db_session
+        finally:
+            pass
+
+    app.dependency_overrides[get_db] = override_get_db
+    with TestClient(app) as test_client:
+        yield test_client
+    app.dependency_overrides.clear()
