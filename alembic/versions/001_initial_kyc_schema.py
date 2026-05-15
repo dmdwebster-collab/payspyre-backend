@@ -40,27 +40,128 @@ def upgrade() -> None:
     business_structure = postgresql.ENUM(name='business_structure', create_type=False)
     kyb_review_status = postgresql.ENUM(name='kyb_review_status', create_type=False)
 
-    # Stub tables
-    op.create_table(
-        'loan_applications',
-        sa.Column('id', sa.UUID(), server_default=sa.text('uuid_generate_v4()'), nullable=False),
-        sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('NOW()'), nullable=False),
-        sa.PrimaryKeyConstraint('id')
-    )
+    # Additional enum types for expanded schema
+    op.execute("CREATE TYPE application_status AS ENUM ('draft', 'pending_documents', 'underwriting', 'approved', 'rejected', 'funded', 'active', 'closed')")
+    op.execute("CREATE TYPE payment_frequency AS ENUM ('weekly', 'bi_weekly', 'semi_monthly', 'monthly')")
+    op.execute("CREATE TYPE decision_type AS ENUM ('approved', 'rejected', 'manual_review')")
+    op.execute("CREATE TYPE employment_status AS ENUM ('employed', 'self_employed', 'unemployed', 'retired', 'student')")
+    op.execute("CREATE TYPE business_type AS ENUM ('corporation', 'partnership', 'sole_proprietor')")
+    op.execute("CREATE TYPE vendor_status AS ENUM ('pending', 'active', 'suspended', 'terminated')")
 
+    # Create enum types for use in columns (with create_type=False)
+    application_status = postgresql.ENUM(name='application_status', create_type=False)
+    payment_frequency = postgresql.ENUM(name='payment_frequency', create_type=False)
+    decision_type = postgresql.ENUM(name='decision_type', create_type=False)
+    employment_status = postgresql.ENUM(name='employment_status', create_type=False)
+    business_type = postgresql.ENUM(name='business_type', create_type=False)
+    vendor_status = postgresql.ENUM(name='vendor_status', create_type=False)
+
+    # Borrowers table - full schema
     op.create_table(
         'borrowers',
         sa.Column('id', sa.UUID(), server_default=sa.text('uuid_generate_v4()'), nullable=False),
+        # Personal info
+        sa.Column('first_name', sa.String(length=100), nullable=False),
+        sa.Column('last_name', sa.String(length=100), nullable=False),
+        sa.Column('email', sa.String(length=255), nullable=False),
+        sa.Column('phone', sa.String(length=20), nullable=False),
+        sa.Column('date_of_birth', sa.DateTime(), nullable=False),
+        # Address
+        sa.Column('address_line1', sa.String(length=255), nullable=False),
+        sa.Column('address_line2', sa.String(length=255), nullable=True),
+        sa.Column('city', sa.String(length=100), nullable=False),
+        sa.Column('province', sa.String(length=50), nullable=False),
+        sa.Column('postal_code', sa.String(length=10), nullable=False),
+        sa.Column('country', sa.String(length=2), nullable=False, server_default='CA'),
+        # Employment
+        sa.Column('employment_status', employment_status, nullable=True),
+        sa.Column('employer_name', sa.String(length=255), nullable=True),
+        sa.Column('employment_income', sa.Numeric(precision=10, scale=2), nullable=True),
+        # Credit
+        sa.Column('sin_last_3', sa.String(length=3), nullable=True),
+        sa.Column('credit_score', sa.Numeric(precision=5, scale=0), nullable=True),
+        sa.Column('credit_history_months', sa.Numeric(precision=5, scale=0), nullable=True),
+        sa.Column('credit_utilization', sa.Numeric(precision=5, scale=2), nullable=True),
+        # Bank verification
+        sa.Column('bank_account_verified', sa.String(length=50), nullable=True),
+        sa.Column('bank_account_last_4', sa.String(length=4), nullable=True),
+        # Timestamps
         sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('NOW()'), nullable=False),
+        sa.Column('updated_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('NOW()'), nullable=False),
         sa.PrimaryKeyConstraint('id')
     )
+    op.create_index('idx_borrowers_email', 'borrowers', ['email'], unique=True)
 
+    # Vendors table - full schema
     op.create_table(
         'vendors',
         sa.Column('id', sa.UUID(), server_default=sa.text('uuid_generate_v4()'), nullable=False),
+        # Business info
+        sa.Column('business_name', sa.String(length=255), nullable=False),
+        sa.Column('dba_name', sa.String(length=255), nullable=True),
+        sa.Column('business_type', business_type, nullable=False),
+        # Contact
+        sa.Column('contact_name', sa.String(length=255), nullable=False),
+        sa.Column('email', sa.String(length=255), nullable=False),
+        sa.Column('phone', sa.String(length=20), nullable=False),
+        # Address
+        sa.Column('address_line1', sa.String(length=255), nullable=False),
+        sa.Column('address_line2', sa.String(length=255), nullable=True),
+        sa.Column('city', sa.String(length=100), nullable=False),
+        sa.Column('province', sa.String(length=50), nullable=False),
+        sa.Column('postal_code', sa.String(length=10), nullable=False),
+        # Licensing
+        sa.Column('license_number', sa.String(length=100), nullable=True),
+        sa.Column('license_expiry', sa.DateTime(), nullable=True),
+        # Status
+        sa.Column('status', vendor_status, nullable=False, server_default='pending'),
+        # Compliance tracking
+        sa.Column('compliance_score', sa.Numeric(precision=5, scale=2), nullable=True),
+        sa.Column('last_reviewed_at', sa.DateTime(timezone=True), nullable=True),
+        sa.Column('next_review_due', sa.DateTime(timezone=True), nullable=True),
+        # Timestamps
         sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('NOW()'), nullable=False),
+        sa.Column('updated_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('NOW()'), nullable=False),
         sa.PrimaryKeyConstraint('id')
     )
+    op.create_index('idx_vendors_email', 'vendors', ['email'], unique=True)
+
+    # Loan applications table - full schema
+    op.create_table(
+        'loan_applications',
+        sa.Column('id', sa.UUID(), server_default=sa.text('uuid_generate_v4()'), nullable=False),
+        sa.Column('borrower_id', sa.UUID(), nullable=False),
+        sa.Column('vendor_id', sa.UUID(), nullable=False),
+        sa.Column('co_borrower_id', sa.UUID(), nullable=True),
+        # Application details
+        sa.Column('requested_amount', sa.Numeric(precision=10, scale=2), nullable=False),
+        sa.Column('purpose', sa.String(length=255), nullable=True),
+        sa.Column('treatment_description', sa.Text(), nullable=True),
+        # Status
+        sa.Column('status', application_status, nullable=False, server_default='draft'),
+        # Credit product
+        sa.Column('credit_product_code', sa.String(length=50), nullable=True),
+        sa.Column('term_months', sa.Numeric(precision=5, scale=0), nullable=True),
+        sa.Column('interest_rate', sa.Numeric(precision=5, scale=4), nullable=True),
+        sa.Column('payment_frequency', payment_frequency, nullable=True),
+        # Decision
+        sa.Column('decision', decision_type, nullable=True),
+        sa.Column('decision_reason', sa.Text(), nullable=True),
+        sa.Column('decision_at', sa.DateTime(timezone=True), nullable=True),
+        # Timestamps
+        sa.Column('submitted_at', sa.DateTime(timezone=True), nullable=True),
+        sa.Column('approved_at', sa.DateTime(timezone=True), nullable=True),
+        sa.Column('funded_at', sa.DateTime(timezone=True), nullable=True),
+        sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('NOW()'), nullable=False),
+        sa.Column('updated_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('NOW()'), nullable=False),
+        sa.ForeignKeyConstraint(['borrower_id'], ['borrowers.id'], ondelete='CASCADE'),
+        sa.ForeignKeyConstraint(['vendor_id'], ['vendors.id'], ondelete='CASCADE'),
+        sa.ForeignKeyConstraint(['co_borrower_id'], ['borrowers.id'], ondelete='SET NULL'),
+        sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index('idx_loan_app_borrower', 'loan_applications', ['borrower_id'])
+    op.create_index('idx_loan_app_vendor', 'loan_applications', ['vendor_id'])
+    op.create_index('idx_loan_app_status', 'loan_applications', ['status'])
 
     op.create_table(
         'users',
@@ -185,9 +286,20 @@ def downgrade() -> None:
     op.drop_table('kyc_sessions')
 
     op.drop_table('users')
-    op.drop_table('vendors')
-    op.drop_table('borrowers')
+
+    # Drop loan_applications indexes and table
+    op.drop_index('idx_loan_app_status', table_name='loan_applications')
+    op.drop_index('idx_loan_app_vendor', table_name='loan_applications')
+    op.drop_index('idx_loan_app_borrower', table_name='loan_applications')
     op.drop_table('loan_applications')
+
+    # Drop vendors indexes and table
+    op.drop_index('idx_vendors_email', table_name='vendors')
+    op.drop_table('vendors')
+
+    # Drop borrowers indexes and table
+    op.drop_index('idx_borrowers_email', table_name='borrowers')
+    op.drop_table('borrowers')
 
     sa.Enum(name='kyb_review_status').drop(op.get_bind())
     sa.Enum(name='business_structure').drop(op.get_bind())
@@ -196,3 +308,11 @@ def downgrade() -> None:
     sa.Enum(name='kyc_check_type').drop(op.get_bind())
     sa.Enum(name='kyc_overall_status').drop(op.get_bind())
     sa.Enum(name='kyc_session_status').drop(op.get_bind())
+
+    # Drop additional enums for expanded schema
+    op.execute('DROP TYPE IF EXISTS vendor_status CASCADE')
+    op.execute('DROP TYPE IF EXISTS business_type CASCADE')
+    op.execute('DROP TYPE IF EXISTS employment_status CASCADE')
+    op.execute('DROP TYPE IF EXISTS decision_type CASCADE')
+    op.execute('DROP TYPE IF EXISTS payment_frequency CASCADE')
+    op.execute('DROP TYPE IF EXISTS application_status CASCADE')

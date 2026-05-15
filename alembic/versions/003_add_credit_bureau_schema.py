@@ -16,9 +16,8 @@ depends_on = None
 
 
 def upgrade():
-    # Add credit fields to borrowers table
-    op.add_column('borrowers', sa.Column('credit_history_months', sa.Numeric(5, 0), nullable=True))
-    op.add_column('borrowers', sa.Column('credit_utilization', sa.Numeric(5, 2), nullable=True))
+    # Note: credit_history_months and credit_utilization columns
+    # are now created in migration 001 as part of the full borrowers schema
 
     # Create credit_inquiries table
     op.create_table(
@@ -85,5 +84,5 @@ def downgrade():
     op.drop_index('idx_credit_inquiry_borrower', 'credit_inquiries')
     op.drop_table('credit_inquiries')
 
-    op.drop_column('borrowers', 'credit_utilization')
-    op.drop_column('borrowers', 'credit_history_months')
+    # Note: credit_history_months and credit_utilization columns
+    # are dropped as part of migration 001 downgrade
