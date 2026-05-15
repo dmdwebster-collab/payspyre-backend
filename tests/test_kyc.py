@@ -46,7 +46,7 @@ async def test_risk_engine_reject_liveness_failed(risk_engine):
 
     result = await risk_engine.evaluate(kyc_result, loan_app)
 
-    assert result.decision == "reject"
+    assert result.decision == "rejected"
     assert "liveness_failed" in result.flags_applied
 
 
@@ -62,7 +62,7 @@ async def test_risk_engine_reject_non_ca_address(risk_engine):
 
     result = await risk_engine.evaluate(kyc_result, loan_app)
 
-    assert result.decision == "reject"
+    assert result.decision == "rejected"
     assert "non_ca_address" in result.flags_applied
 
 

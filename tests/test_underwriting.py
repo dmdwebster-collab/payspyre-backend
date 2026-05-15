@@ -233,7 +233,7 @@ async def test_manual_review_reject(setup_underwriting_data, db_session):
 
     result = await submit_manual_review(request, db_session)
 
-    assert result.decision == "reject"
+    assert result.decision == "rejected"
     assert result.status == "rejected"
 
     db_session.refresh(data["application"])
@@ -263,7 +263,7 @@ async def test_request_rereview(setup_underwriting_data, db_session):
 
     # Set application to rejected
     data["application"].status = "rejected"
-    data["application"].decision = "reject"
+    data["application"].decision = "rejected"
     data["application"].decision_reason = "Automated rejection"
     db_session.commit()
 
