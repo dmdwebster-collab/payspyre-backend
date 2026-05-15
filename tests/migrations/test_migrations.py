@@ -11,6 +11,9 @@ import pytest
 from alembic.config import Config
 from alembic import command
 from sqlalchemy import create_engine, inspect, text
+
+# Import all models to populate Base.metadata
+from app.models import credit, document, funding, kyc, loan, user, stripe, notification
 from app.db.base import Base
 
 
