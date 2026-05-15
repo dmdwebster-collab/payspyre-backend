@@ -73,7 +73,7 @@ class RiskEvaluationRequest(BaseModel):
 
 
 class RiskEvaluationResponse(BaseModel):
-    decision: str = Field(..., pattern="^(approve|reject|manual_review)$")
+    decision: str = Field(..., pattern="^(approve|rejected|manual_review)$")
     reason: str
     risk_score: float
     flags_applied: list[str]
