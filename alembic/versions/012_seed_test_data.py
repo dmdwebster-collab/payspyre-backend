@@ -639,40 +639,10 @@ def upgrade() -> None:
     # Note: Borrowers are not users, so we skip creating notification_preferences for them.
     # In production, borrowers would have corresponding user records.
 
-    # ========================================================================
-    # INSERT VENDOR ONBOARDING DOCUMENTS FOR VENDOR 1
-    # ========================================================================
-    op.execute(f"""
-        INSERT INTO vendor_onboarding_documents (
-            id, vendor_id, document_type, document_url, description,
-            status, reviewed_at, review_notes, created_at, updated_at
-        ) VALUES (
-            '{uuid4()}', '{vendor1_id}', 'business_license',
-            'https://s3.amazonaws.com/payspyre-documents-dev/vendor/{vendor1_id}/business_license.pdf',
-            'British Columbia business license',
-            'approved', NOW() - INTERVAL '1 week', 'Valid until 2026-12-31',
-            NOW() - INTERVAL '2 weeks', NOW()
-        )
-    """)
-
-    op.execute(f"""
-        INSERT INTO vendor_onboarding_documents (
-            id, vendor_id, document_type, document_url, description,
-            status, created_at, updated_at
-        ) VALUES (
-            '{uuid4()}', '{vendor1_id}', 'incorporation_document',
-            'https://s3.amazonaws.com/payspyre-documents-dev/vendor/{vendor1_id}/incorporation.pdf',
-            'Certificate of incorporation',
-            'approved', NOW() - INTERVAL '2 weeks', NOW()
-        )
-    """)
-
 
 def downgrade() -> None:
     # Delete in reverse order of dependencies
 
-    # Vendor onboarding documents
-    op.execute("DELETE FROM vendor_onboarding_documents WHERE vendor_id IN (SELECT id FROM vendors WHERE business_name IN ('Brightside Dental Kelowna', 'KDC Dental'))")
 
     # Notifications
     op.execute("DELETE FROM notification_preferences WHERE user_id IN (SELECT id FROM borrowers WHERE email LIKE '%@example.com')")
