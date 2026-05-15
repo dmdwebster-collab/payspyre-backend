@@ -219,7 +219,6 @@ def upgrade():
     op.create_index('idx_stripe_payout_status', 'stripe_payouts', ['status'])
 
     # Note: funding table doesn't exist yet, skipping stripe_transfer_id column
-    # TODO: Add stripe_transfer_id to funding table when it's created
 
 
 def downgrade():
