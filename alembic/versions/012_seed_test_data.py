@@ -636,18 +636,8 @@ def upgrade() -> None:
     # ========================================================================
     # INSERT NOTIFICATION PREFERENCES FOR BORROWERS
     # ========================================================================
-    for borrower_id in [borrower1_id, borrower2_id, borrower3_id, borrower4_id, borrower5_id]:
-        op.execute(f"""
-            INSERT INTO notification_preferences (
-                id, user_id, email_enabled, sms_enabled,
-                application_status_enabled, payment_reminders_enabled,
-                statements_enabled, urgent_notifications_enabled,
-                marketing_enabled, daily_digest_enabled, created_at, updated_at
-            ) VALUES (
-                '{uuid4()}', '{borrower_id}', true, false, true, true, true, true, false, false,
-                NOW(), NOW()
-            )
-        """)
+    # Note: Borrowers are not users, so we skip creating notification_preferences for them.
+    # In production, borrowers would have corresponding user records.
 
     # ========================================================================
     # INSERT VENDOR ONBOARDING DOCUMENTS FOR VENDOR 1
