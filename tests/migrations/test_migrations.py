@@ -14,13 +14,8 @@ from sqlalchemy import create_engine, inspect, text
 
 # Import all models to populate Base.metadata
 # Note: funding models are excluded (not yet migrated)
-from app.db.base import Base
-
-# Clear any cached metadata to ensure clean state before importing models
-Base.metadata.clear()
-
-# Now import models (they will populate Base.metadata)
 from app.models import credit, document, kyc, loan, user, stripe, notification
+from app.db.base import Base
 
 
 @pytest.fixture
