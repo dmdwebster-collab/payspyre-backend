@@ -460,7 +460,7 @@ def upgrade() -> None:
             id, kyc_session_id, vendor, overall_status, check_type, check_status,
             check_details, score, created_at
         ) VALUES (
-            '{kyc_result_2b_id}', '{kyc3_id}', 'didit', 'review_required', 'aml', 'review_required',
+            '{kyc_result_2b_id}', '{kyc3_id}', 'didit', 'review_required', 'aml', 'pending',
             '{{"pep_hit": false, "sanctions_hit": false, "adverse_media": 2, "reason": "Minor adverse media mentions"}}',
             0.85, NOW()
         )
