@@ -100,12 +100,12 @@ def upgrade() -> None:
     # Pre-generated bcrypt hash for 'Admin123!' (12 rounds)
     admin_password_hash = '$2b$12$NSyGDrS3EatmPuAUEmojLuK34a8CyKbCRAVIzg/e7N6nAcfjYC7Vq'
 
-    op.execute("""
+    op.execute(f"""
         INSERT INTO users (id, email, password_hash, first_name, last_name, phone, is_active, is_verified, created_at, updated_at)
         VALUES (
-            '{}',
+            '{admin_user_id}',
             'admin@payspyre.com',
-            '{}',
+            '{admin_password_hash}',
             'Admin',
             'User',
             '+1-250-555-0001',
@@ -114,7 +114,7 @@ def upgrade() -> None:
             NOW(),
             NOW()
         )
-    """.format(admin_user_id, admin_password_hash))
+    """)
 
     # Assign admin role
     admin_role_id = op.get_bind().execute(
@@ -122,23 +122,23 @@ def upgrade() -> None:
     ).scalar()
 
     if admin_role_id:
-        op.execute("""
+        op.execute(f"""
             INSERT INTO user_roles (id, user_id, role_id, created_at)
-            VALUES ('{}', '{}', '{}', NOW())
-        """.format(uuid4(), admin_user_id, admin_role_id))
+            VALUES ('{uuid4()}', '{admin_user_id}', '{admin_role_id}', NOW())
+        """)
 
     # ========================================================================
     # INSERT VENDORS
     # ========================================================================
 
     # Vendor 1: Brightside Dental Kelowna - Active, KYC complete
-    op.execute("""
+    op.execute(f"""
         INSERT INTO vendors (
             id, business_name, dba_name, business_type, contact_name, email, phone,
             address_line1, address_line2, city, province, postal_code, license_number,
             license_expiry, status, compliance_score, created_at, updated_at
         ) VALUES (
-            '{}',
+            '{vendor1_id}',
             'Brightside Dental Kelowna',
             'Brightside Dental',
             'corporation',
@@ -157,16 +157,16 @@ def upgrade() -> None:
             NOW(),
             NOW()
         )
-    """.format(vendor1_id))
+    """)
 
     # Vendor 2: KDC Dental - Pending, needs KYC
-    op.execute("""
+    op.execute(f"""
         INSERT INTO vendors (
             id, business_name, dba_name, business_type, contact_name, email, phone,
             address_line1, address_line2, city, province, postal_code, license_number,
             license_expiry, status, compliance_score, created_at, updated_at
         ) VALUES (
-            '{}',
+            '{vendor2_id}',
             'KDC Dental',
             'Kelowna Dental Centre',
             'corporation',
@@ -185,14 +185,14 @@ def upgrade() -> None:
             NOW(),
             NOW()
         )
-    """.format(vendor2_id))
+    """)
 
     # ========================================================================
     # INSERT BORROWERS
     # ========================================================================
 
     # Borrower 1
-    op.execute("""
+    op.execute(f"""
         INSERT INTO borrowers (
             id, first_name, last_name, email, phone, date_of_birth,
             address_line1, address_line2, city, province, postal_code, country,
@@ -200,7 +200,7 @@ def upgrade() -> None:
             sin_last_3, credit_score, credit_history_months, credit_utilization,
             bank_account_verified, bank_account_last_4, created_at, updated_at
         ) VALUES (
-            '{}', 'John', 'Doe', 'john.doe@example.com', '+1-250-555-0101',
+            '{borrower1_id}', 'John', 'Doe', 'john.doe@example.com', '+1-250-555-0101',
             '1985-03-15',
             '123 Orchard Road', 'Apt 4B', 'Kelowna', 'BC', 'V1V 2V3', 'CA',
             'employed', 'Tech Corp', 75000.00,
@@ -208,10 +208,10 @@ def upgrade() -> None:
             'flinks_session_001', '1234',
             NOW(), NOW()
         )
-    """.format(borrower1_id))
+    """)
 
     # Borrower 2
-    op.execute("""
+    op.execute(f"""
         INSERT INTO borrowers (
             id, first_name, last_name, email, phone, date_of_birth,
             address_line1, address_line2, city, province, postal_code, country,
@@ -219,7 +219,7 @@ def upgrade() -> None:
             sin_last_3, credit_score, credit_history_months, credit_utilization,
             bank_account_verified, bank_account_last_4, created_at, updated_at
         ) VALUES (
-            '{}', 'Jane', 'Smith', 'jane.smith@example.com', '+1-250-555-0102',
+            '{borrower2_id}', 'Jane', 'Smith', 'jane.smith@example.com', '+1-250-555-0102',
             '1990-07-22',
             '456 Lakeshore Drive', NULL, 'Vernon', 'BC', 'V1B 3K4', 'CA',
             'self_employed', 'Smith Consulting', 95000.00,
@@ -227,10 +227,10 @@ def upgrade() -> None:
             'flinks_session_002', '5678',
             NOW(), NOW()
         )
-    """.format(borrower2_id))
+    """)
 
     # Borrower 3
-    op.execute("""
+    op.execute(f"""
         INSERT INTO borrowers (
             id, first_name, last_name, email, phone, date_of_birth,
             address_line1, address_line2, city, province, postal_code, country,
@@ -238,7 +238,7 @@ def upgrade() -> None:
             sin_last_3, credit_score, credit_history_months, credit_utilization,
             bank_account_verified, bank_account_last_4, created_at, updated_at
         ) VALUES (
-            '{}', 'Robert', 'Johnson', 'robert.j@example.com', '+1-250-555-0103',
+            '{borrower3_id}', 'Robert', 'Johnson', 'robert.j@example.com', '+1-250-555-0103',
             '1978-11-08',
             '789 Highland Road', 'Unit 12', 'Penticton', 'BC', 'V2A 8M9', 'CA',
             'employed', 'Regional Hospital', 65000.00,
@@ -246,10 +246,10 @@ def upgrade() -> None:
             'flinks_session_003', '9012',
             NOW(), NOW()
         )
-    """.format(borrower3_id))
+    """)
 
     # Borrower 4
-    op.execute("""
+    op.execute(f"""
         INSERT INTO borrowers (
             id, first_name, last_name, email, phone, date_of_birth,
             address_line1, address_line2, city, province, postal_code, country,
@@ -257,7 +257,7 @@ def upgrade() -> None:
             sin_last_3, credit_score, credit_history_months, credit_utilization,
             bank_account_verified, bank_account_last_4, created_at, updated_at
         ) VALUES (
-            '{}', 'Emily', 'Chen', 'emily.c@example.com', '+1-250-555-0104',
+            '{borrower4_id}', 'Emily', 'Chen', 'emily.c@example.com', '+1-250-555-0104',
             '1995-02-14',
             '321 Mountain Avenue', NULL, 'Kelowna', 'BC', 'V1Y 7N8', 'CA',
             'student', NULL, 25000.00,
@@ -265,10 +265,10 @@ def upgrade() -> None:
             'flinks_session_004', '3456',
             NOW(), NOW()
         )
-    """.format(borrower4_id))
+    """)
 
     # Borrower 5
-    op.execute("""
+    op.execute(f"""
         INSERT INTO borrowers (
             id, first_name, last_name, email, phone, date_of_birth,
             address_line1, address_line2, city, province, postal_code, country,
@@ -276,7 +276,7 @@ def upgrade() -> None:
             sin_last_3, credit_score, credit_history_months, credit_utilization,
             bank_account_verified, bank_account_last_4, created_at, updated_at
         ) VALUES (
-            '{}', 'David', 'Thompson', 'david.t@example.com', '+1-250-555-0105',
+            '{borrower5_id}', 'David', 'Thompson', 'david.t@example.com', '+1-250-555-0105',
             '1982-09-30',
             '654 Valley View', 'Suite 5', 'West Kelowna', 'BC', 'V4T 1E3', 'CA',
             'retired', NULL, 45000.00,
@@ -284,218 +284,218 @@ def upgrade() -> None:
             'flinks_session_005', '7890',
             NOW(), NOW()
         )
-    """.format(borrower5_id))
+    """)
 
     # ========================================================================
     # INSERT LOAN APPLICATIONS
     # ========================================================================
 
     # Application 1: Draft - Brightside Dental
-    op.execute("""
+    op.execute(f"""
         INSERT INTO loan_applications (
             id, borrower_id, vendor_id, co_borrower_id, requested_amount, purpose,
             treatment_description, status, credit_product_code, term_months,
             interest_rate, payment_frequency, decision, decision_reason,
             submitted_at, approved_at, funded_at, created_at, updated_at
         ) VALUES (
-            '{}', '{}', '{}', NULL, 5000.00, 'dental_implants',
+            '{app1_id}', '{borrower1_id}', '{vendor1_id}', NULL, 5000.00, 'dental_implants',
             'Upper and lower dental implants with abutments', 'draft',
             'patient_financing_standard', 24, 0.0899, 'monthly', NULL, NULL,
             NULL, NULL, NULL, NOW(), NOW()
         )
-    """.format(app1_id, borrower1_id, vendor1_id))
+    """)
 
     # Application 2: Pending Documents - KDC Dental
-    op.execute("""
+    op.execute(f"""
         INSERT INTO loan_applications (
             id, borrower_id, vendor_id, co_borrower_id, requested_amount, purpose,
             treatment_description, status, credit_product_code, term_months,
             interest_rate, payment_frequency, decision, decision_reason,
             submitted_at, approved_at, funded_at, created_at, updated_at
         ) VALUES (
-            '{}', '{}', '{}', NULL, 7500.00, 'orthodontics',
+            '{app2_id}', '{borrower2_id}', '{vendor2_id}', NULL, 7500.00, 'orthodontics',
             'Full orthodontic treatment including braces', 'pending_documents',
             'patient_financing_standard', 36, 0.0999, 'monthly', NULL, NULL,
             NOW() - INTERVAL '2 days', NULL, NULL, NOW() - INTERVAL '2 days', NOW()
         )
-    """.format(app2_id, borrower2_id, vendor2_id))
+    """)
 
     # Application 3: Underwriting - Brightside Dental
-    op.execute("""
+    op.execute(f"""
         INSERT INTO loan_applications (
             id, borrower_id, vendor_id, co_borrower_id, requested_amount, purpose,
             treatment_description, status, credit_product_code, term_months,
             interest_rate, payment_frequency, decision, decision_reason,
             submitted_at, approved_at, funded_at, created_at, updated_at
         ) VALUES (
-            '{}', '{}', '{}', NULL, 12000.00, 'comprehensive_restoration',
+            '{app3_id}', '{borrower3_id}', '{vendor1_id}', NULL, 12000.00, 'comprehensive_restoration',
             'Full mouth restoration with crowns and bridges', 'underwriting',
             'patient_financing_premium', 48, 0.0799, 'monthly', NULL, NULL,
             NOW() - INTERVAL '5 days', NULL, NULL, NOW() - INTERVAL '5 days', NOW()
         )
-    """.format(app3_id, borrower3_id, vendor1_id))
+    """)
 
     # Application 4: Approved - Brightside Dental
-    op.execute("""
+    op.execute(f"""
         INSERT INTO loan_applications (
             id, borrower_id, vendor_id, co_borrower_id, requested_amount, purpose,
             treatment_description, status, credit_product_code, term_months,
             interest_rate, payment_frequency, decision, decision_reason,
             submitted_at, approved_at, funded_at, created_at, updated_at
         ) VALUES (
-            '{}', '{}', '{}', NULL, 3000.00, 'cosmetic_dentistry',
+            '{app4_id}', '{borrower4_id}', '{vendor1_id}', NULL, 3000.00, 'cosmetic_dentistry',
             'Porcelain veneers for 8 front teeth', 'approved',
             'patient_financing_standard', 12, 0.0699, 'monthly', 'approved',
             'Excellent credit score, stable employment',
             NOW() - INTERVAL '1 week', NOW() - INTERVAL '2 days', NULL,
             NOW() - INTERVAL '1 week', NOW()
         )
-    """.format(app4_id, borrower4_id, vendor1_id))
+    """)
 
     # Application 5: Funded - KDC Dental
-    op.execute("""
+    op.execute(f"""
         INSERT INTO loan_applications (
             id, borrower_id, vendor_id, co_borrower_id, requested_amount, purpose,
             treatment_description, status, credit_product_code, term_months,
             interest_rate, payment_frequency, decision, decision_reason,
             submitted_at, approved_at, funded_at, created_at, updated_at
         ) VALUES (
-            '{}', '{}', '{}', NULL, 8000.00, 'dental_implants',
+            '{app5_id}', '{borrower5_id}', '{vendor2_id}', NULL, 8000.00, 'dental_implants',
             'All-on-4 implant supported denture', 'funded',
             'patient_financing_standard', 36, 0.0899, 'monthly', 'approved',
             'Strong credit history, adequate income',
             NOW() - INTERVAL '2 weeks', NOW() - INTERVAL '1 week', NOW() - INTERVAL '3 days',
             NOW() - INTERVAL '2 weeks', NOW()
         )
-    """.format(app5_id, borrower5_id, vendor2_id))
+    """)
 
     # ========================================================================
     # INSERT KYC SESSIONS AND RESULTS
     # ========================================================================
 
     # KYC Session 1: Completed - Application 1
-    op.execute("""
+    op.execute(f"""
         INSERT INTO kyc_sessions (
             id, loan_application_id, borrower_id, vendor, vendor_session_id,
             verification_url, status, expires_at, created_at, updated_at
         ) VALUES (
-            '{}', '{}', '{}', 'didit', 'didit_session_001',
+            '{kyc1_id}', '{app1_id}', '{borrower1_id}', 'didit', 'didit_session_001',
             'https://verification.didit.com/session/didit_session_001',
             'completed', NOW() + INTERVAL '30 days', NOW() - INTERVAL '1 day', NOW()
         )
-    """.format(kyc1_id, app1_id, borrower1_id))
+    """)
 
     # KYC Results for Session 1 (Pass)
-    op.execute("""
+    op.execute(f"""
         INSERT INTO kyc_results (
             id, kyc_session_id, vendor, overall_status, check_type, check_status,
             check_details, score, created_at
         ) VALUES (
-            '{}', '{}', 'didit', 'pass', 'identity', 'pass',
-            '{"name_match": true, "dob_match": true, "address_match": true}',
+            '{kyc_result_1a_id}', '{kyc1_id}', 'didit', 'pass', 'identity', 'pass',
+            '{{"name_match": true, "dob_match": true, "address_match": true}}',
             0.98, NOW()
         )
-    """.format(kyc_result_1a_id, kyc1_id))
+    """)
 
-    op.execute("""
+    op.execute(f"""
         INSERT INTO kyc_results (
             id, kyc_session_id, vendor, overall_status, check_type, check_status,
             check_details, score, created_at
         ) VALUES (
-            '{}', '{}', 'didit', 'pass', 'liveness', 'pass',
-            '{"liveness_confidence": 0.99, "anti_spoof_score": 0.97}',
+            '{kyc_result_1b_id}', '{kyc1_id}', 'didit', 'pass', 'liveness', 'pass',
+            '{{"liveness_confidence": 0.99, "anti_spoof_score": 0.97}}',
             0.99, NOW()
         )
-    """.format(kyc_result_1b_id, kyc1_id))
+    """)
 
-    op.execute("""
+    op.execute(f"""
         INSERT INTO kyc_results (
             id, kyc_session_id, vendor, overall_status, check_type, check_status,
             check_details, score, created_at
         ) VALUES (
-            '{}', '{}', 'didit', 'pass', 'aml', 'pass',
-            '{"pep_hit": false, "sanctions_hit": false, "adverse_media": 0}',
+            '{kyc_result_1c_id}', '{kyc1_id}', 'didit', 'pass', 'aml', 'pass',
+            '{{"pep_hit": false, "sanctions_hit": false, "adverse_media": 0}}',
             0.95, NOW()
         )
-    """.format(kyc_result_1c_id, kyc1_id))
+    """)
 
     # KYC Session 2: In Progress - Application 2
-    op.execute("""
+    op.execute(f"""
         INSERT INTO kyc_sessions (
             id, loan_application_id, borrower_id, vendor, vendor_session_id,
             verification_url, status, expires_at, created_at, updated_at
         ) VALUES (
-            '{}', '{}', '{}', 'persona', 'persona_session_001',
+            '{kyc2_id}', '{app2_id}', '{borrower2_id}', 'persona', 'persona_session_001',
             'https://withpersona.com/verify/persona_session_001',
             'in_progress', NOW() + INTERVAL '7 days', NOW() - INTERVAL '1 hour', NOW()
         )
-    """.format(kyc2_id, app2_id, borrower2_id))
+    """)
 
     # KYC Session 3: Completed with Review Required - Application 3
-    op.execute("""
+    op.execute(f"""
         INSERT INTO kyc_sessions (
             id, loan_application_id, borrower_id, vendor, vendor_session_id,
             verification_url, status, expires_at, created_at, updated_at
         ) VALUES (
-            '{}', '{}', '{}', 'didit', 'didit_session_003',
+            '{kyc3_id}', '{app3_id}', '{borrower3_id}', 'didit', 'didit_session_003',
             'https://verification.didit.com/session/didit_session_003',
             'completed', NOW() + INTERVAL '30 days', NOW() - INTERVAL '2 days', NOW()
         )
-    """.format(kyc3_id, app3_id, borrower3_id))
+    """)
 
     # KYC Results for Session 3 (Review Required)
-    op.execute("""
+    op.execute(f"""
         INSERT INTO kyc_results (
             id, kyc_session_id, vendor, overall_status, check_type, check_status,
             check_details, score, created_at
         ) VALUES (
-            '{}', '{}', 'didit', 'review_required', 'identity', 'pass',
-            '{"name_match": true, "dob_match": true, "address_match": true}',
+            '{kyc_result_2a_id}', '{kyc3_id}', 'didit', 'review_required', 'identity', 'pass',
+            '{{"name_match": true, "dob_match": true, "address_match": true}}',
             0.97, NOW()
         )
-    """.format(kyc_result_2a_id, kyc3_id))
+    """)
 
-    op.execute("""
+    op.execute(f"""
         INSERT INTO kyc_results (
             id, kyc_session_id, vendor, overall_status, check_type, check_status,
             check_details, score, created_at
         ) VALUES (
-            '{}', '{}', 'didit', 'review_required', 'aml', 'review_required',
-            '{"pep_hit": false, "sanctions_hit": false, "adverse_media": 2, "reason": "Minor adverse media mentions"}',
+            '{kyc_result_2b_id}', '{kyc3_id}', 'didit', 'review_required', 'aml', 'review_required',
+            '{{"pep_hit": false, "sanctions_hit": false, "adverse_media": 2, "reason": "Minor adverse media mentions"}}',
             0.85, NOW()
         )
-    """.format(kyc_result_2b_id, kyc3_id))
+    """)
 
     # KYC Session 4: Completed - Application 4
-    op.execute("""
+    op.execute(f"""
         INSERT INTO kyc_sessions (
             id, loan_application_id, borrower_id, vendor, vendor_session_id,
             verification_url, status, expires_at, created_at, updated_at
         ) VALUES (
-            '{}', '{}', '{}', 'persona', 'persona_session_004',
+            '{kyc4_id}', '{app4_id}', '{borrower4_id}', 'persona', 'persona_session_004',
             'https://withpersona.com/verify/persona_session_004',
             'completed', NOW() + INTERVAL '30 days', NOW() - INTERVAL '3 days', NOW()
         )
-    """.format(kyc4_id, app4_id, borrower4_id))
+    """)
 
     # KYC Session 5: Completed - Application 5
-    op.execute("""
+    op.execute(f"""
         INSERT INTO kyc_sessions (
             id, loan_application_id, borrower_id, vendor, vendor_session_id,
             verification_url, status, expires_at, created_at, updated_at
         ) VALUES (
-            '{}', '{}', '{}', 'didit', 'didit_session_005',
+            '{kyc5_id}', '{app5_id}', '{borrower5_id}', 'didit', 'didit_session_005',
             'https://verification.didit.com/session/didit_session_005',
             'completed', NOW() + INTERVAL '30 days', NOW() - INTERVAL '1 week', NOW()
         )
-    """.format(kyc5_id, app5_id, borrower5_id))
+    """)
 
     # ========================================================================
     # INSERT DOCUMENTS
     # ========================================================================
 
     # Document 1: ID Front - Application 1
-    op.execute("""
+    op.execute(f"""
         INSERT INTO documents (
             id, loan_application_id, borrower_id, document_type, document_subtype,
             title, description, status, s3_object_key, s3_bucket,
@@ -503,17 +503,17 @@ def upgrade() -> None:
             storage_class, retention_period_days, uploaded_by, uploaded_at,
             created_at, updated_at
         ) VALUES (
-            '{}', '{}', '{}', 'id_front', 'drivers_license',
+            '{doc1_id}', '{app1_id}', '{borrower1_id}', 'id_front', 'drivers_license',
             'BC Driver License Front', 'British Columbia driver license - front side',
-            'verified', 'documents/{}/bc_dl_front.jpg', 'payspyre-documents-dev',
+            'verified', 'documents/{app1_id}/bc_dl_front.jpg', 'payspyre-documents-dev',
             'bc_dl_front.jpg', 245678, 'image/jpeg', 'sha256:abc123def456...',
-            'STANDARD', 2555, '{}', NOW() - INTERVAL '1 day',
+            'STANDARD', 2555, '{admin_user_id}', NOW() - INTERVAL '1 day',
             NOW() - INTERVAL '1 day', NOW()
         )
-    """.format(doc1_id, app1_id, borrower1_id, app1_id, admin_user_id))
+    """)
 
     # Document 2: ID Back - Application 1
-    op.execute("""
+    op.execute(f"""
         INSERT INTO documents (
             id, loan_application_id, borrower_id, document_type, document_subtype,
             title, description, status, s3_object_key, s3_bucket,
@@ -521,17 +521,17 @@ def upgrade() -> None:
             storage_class, retention_period_days, uploaded_by, uploaded_at,
             created_at, updated_at
         ) VALUES (
-            '{}', '{}', '{}', 'id_back', 'drivers_license',
+            '{doc2_id}', '{app1_id}', '{borrower1_id}', 'id_back', 'drivers_license',
             'BC Driver License Back', 'British Columbia driver license - back side',
-            'verified', 'documents/{}/bc_dl_back.jpg', 'payspyre-documents-dev',
+            'verified', 'documents/{app1_id}/bc_dl_back.jpg', 'payspyre-documents-dev',
             'bc_dl_back.jpg', 234567, 'image/jpeg', 'sha256:def456ghi789...',
-            'STANDARD', 2555, '{}', NOW() - INTERVAL '1 day',
+            'STANDARD', 2555, '{admin_user_id}', NOW() - INTERVAL '1 day',
             NOW() - INTERVAL '1 day', NOW()
         )
-    """.format(doc2_id, app1_id, borrower1_id, app1_id, admin_user_id))
+    """)
 
     # Document 3: Proof of Income - Application 3
-    op.execute("""
+    op.execute(f"""
         INSERT INTO documents (
             id, loan_application_id, borrower_id, document_type, document_subtype,
             title, description, status, s3_object_key, s3_bucket,
@@ -539,17 +539,17 @@ def upgrade() -> None:
             storage_class, retention_period_days, uploaded_by, uploaded_at,
             created_at, updated_at
         ) VALUES (
-            '{}', '{}', '{}', 'proof_of_income', 'pay_stub',
+            '{doc3_id}', '{app3_id}', '{borrower3_id}', 'proof_of_income', 'pay_stub',
             'Pay Stub - March 2026', 'Most recent pay stub from employer',
-            'uploaded', 'documents/{}/pay_stub_march_2026.pdf', 'payspyre-documents-dev',
+            'uploaded', 'documents/{app3_id}/pay_stub_march_2026.pdf', 'payspyre-documents-dev',
             'pay_stub_march_2026.pdf', 156789, 'application/pdf', 'sha256:ghi789jkl012...',
-            'STANDARD', 2555, '{}', NOW() - INTERVAL '2 days',
+            'STANDARD', 2555, '{admin_user_id}', NOW() - INTERVAL '2 days',
             NOW() - INTERVAL '2 days', NOW()
         )
-    """.format(doc3_id, app3_id, borrower3_id, app3_id, admin_user_id))
+    """)
 
     # Document 4: Selfie - Application 4
-    op.execute("""
+    op.execute(f"""
         INSERT INTO documents (
             id, loan_application_id, borrower_id, document_type, document_subtype,
             title, description, status, s3_object_key, s3_bucket,
@@ -557,17 +557,17 @@ def upgrade() -> None:
             storage_class, retention_period_days, uploaded_by, uploaded_at,
             created_at, updated_at
         ) VALUES (
-            '{}', '{}', '{}', 'selfie', NULL,
+            '{doc4_id}', '{app4_id}', '{borrower4_id}', 'selfie', NULL,
             'Selfie with ID', 'Selfie photo holding government ID',
-            'verified', 'documents/{}/selfie_with_id.jpg', 'payspyre-documents-dev',
+            'verified', 'documents/{app4_id}/selfie_with_id.jpg', 'payspyre-documents-dev',
             'selfie_with_id.jpg', 345678, 'image/jpeg', 'sha256:jkl012mno345...',
-            'STANDARD', 2555, '{}', NOW() - INTERVAL '3 days',
+            'STANDARD', 2555, '{admin_user_id}', NOW() - INTERVAL '3 days',
             NOW() - INTERVAL '3 days', NOW()
         )
-    """.format(doc4_id, app4_id, borrower4_id, app4_id, admin_user_id))
+    """)
 
     # Document 5: Bank Statement - Application 5
-    op.execute("""
+    op.execute(f"""
         INSERT INTO documents (
             id, loan_application_id, borrower_id, document_type, document_subtype,
             title, description, status, s3_object_key, s3_bucket,
@@ -575,107 +575,107 @@ def upgrade() -> None:
             storage_class, retention_period_days, uploaded_by, uploaded_at,
             created_at, updated_at
         ) VALUES (
-            '{}', '{}', '{}', 'bank_statement', NULL,
+            '{doc5_id}', '{app5_id}', '{borrower5_id}', 'bank_statement', NULL,
             'Bank Statement - February 2026', 'Most recent bank statement',
-            'verified', 'documents/{}/bank_statement_feb_2026.pdf', 'payspyre-documents-dev',
+            'verified', 'documents/{app5_id}/bank_statement_feb_2026.pdf', 'payspyre-documents-dev',
             'bank_statement_feb_2026.pdf', 234567, 'application/pdf', 'sha256:mno345pqr678...',
-            'STANDARD', 2555, '{}', NOW() - INTERVAL '1 week',
+            'STANDARD', 2555, '{admin_user_id}', NOW() - INTERVAL '1 week',
             NOW() - INTERVAL '1 week', NOW()
         )
-    """.format(doc5_id, app5_id, borrower5_id, app5_id, admin_user_id))
+    """)
 
     # ========================================================================
     # INSERT NOTIFICATIONS
     # ========================================================================
 
     # Notification 1: Application approved
-    op.execute("""
+    op.execute(f"""
         INSERT INTO notifications (
             id, user_id, loan_application_id, type, priority, status,
             recipient, subject, body, variables, sent_at, created_at, updated_at
         ) VALUES (
-            '{}', NULL, '{}', 'email', 'high', 'delivered',
+            '{notif1_id}', NULL, '{app4_id}', 'email', 'high', 'delivered',
             'emily.c@example.com',
             'Your loan application has been approved!',
             'Congratulations! Your loan application for $3,000.00 has been approved.',
-            '{"application_id": "{}", "amount": 3000.00, "name": "Emily Chen"}',
+            '{{"application_id": "{app4_id}", "amount": 3000.00, "name": "Emily Chen"}}',
             NOW() - INTERVAL '2 days', NOW() - INTERVAL '2 days', NOW()
         )
-    """.format(notif1_id, app4_id, app4_id))
+    """)
 
     # Notification 2: Funding complete
-    op.execute("""
+    op.execute(f"""
         INSERT INTO notifications (
             id, user_id, loan_application_id, type, priority, status,
             recipient, subject, body, variables, sent_at, created_at, updated_at
         ) VALUES (
-            '{}', NULL, '{}', 'email', 'high', 'delivered',
+            '{notif2_id}', NULL, '{app5_id}', 'email', 'high', 'delivered',
             'david.t@example.com',
             'Your loan has been funded!',
             'Great news! Your loan of $8,000.00 has been funded and the funds are on their way to Brightside Dental.',
-            '{"application_id": "{}", "amount": 8000.00, "vendor": "Brightside Dental Kelowna", "name": "David Thompson"}',
+            '{{"application_id": "{app5_id}", "amount": 8000.00, "vendor": "Brightside Dental Kelowna", "name": "David Thompson"}}',
             NOW() - INTERVAL '3 days', NOW() - INTERVAL '3 days', NOW()
         )
-    """.format(notif2_id, app5_id, app5_id))
+    """)
 
     # Notification 3: Document required
-    op.execute("""
+    op.execute(f"""
         INSERT INTO notifications (
             id, user_id, loan_application_id, type, priority, status,
             recipient, subject, body, variables, sent_at, created_at, updated_at
         ) VALUES (
-            '{}', NULL, '{}', 'email', 'normal', 'delivered',
+            '{notif3_id}', NULL, '{app2_id}', 'email', 'normal', 'delivered',
             'jane.smith@example.com',
             'Additional documents required for your application',
             'Please upload your proof of income to continue with your loan application.',
-            '{"application_id": "{}", "required_docs": ["proof_of_income"], "name": "Jane Smith"}',
+            '{{"application_id": "{app2_id}", "required_docs": ["proof_of_income"], "name": "Jane Smith"}}',
             NOW() - INTERVAL '1 day', NOW() - INTERVAL '1 day', NOW()
         )
-    """.format(notif3_id, app2_id, app2_id))
+    """)
 
     # ========================================================================
     # INSERT NOTIFICATION PREFERENCES FOR BORROWERS
     # ========================================================================
     for borrower_id in [borrower1_id, borrower2_id, borrower3_id, borrower4_id, borrower5_id]:
-        op.execute("""
+        op.execute(f"""
             INSERT INTO notification_preferences (
                 id, user_id, email_enabled, sms_enabled,
                 application_status_enabled, payment_reminders_enabled,
                 statements_enabled, urgent_notifications_enabled,
                 marketing_enabled, daily_digest_enabled, created_at, updated_at
             ) VALUES (
-                '{}', '{}', true, false, true, true, true, true, false, false,
+                '{uuid4()}', '{borrower_id}', true, false, true, true, true, true, false, false,
                 NOW(), NOW()
             )
-        """.format(uuid4(), borrower_id))
+        """)
 
     # ========================================================================
     # INSERT VENDOR ONBOARDING DOCUMENTS FOR VENDOR 1
     # ========================================================================
-    op.execute("""
+    op.execute(f"""
         INSERT INTO vendor_onboarding_documents (
             id, vendor_id, document_type, document_url, description,
             status, reviewed_at, review_notes, created_at, updated_at
         ) VALUES (
-            '{}', '{}', 'business_license',
-            'https://s3.amazonaws.com/payspyre-documents-dev/vendor/{}/business_license.pdf',
+            '{uuid4()}', '{vendor1_id}', 'business_license',
+            'https://s3.amazonaws.com/payspyre-documents-dev/vendor/{vendor1_id}/business_license.pdf',
             'British Columbia business license',
             'approved', NOW() - INTERVAL '1 week', 'Valid until 2026-12-31',
             NOW() - INTERVAL '2 weeks', NOW()
         )
-    """.format(uuid4(), vendor1_id, vendor1_id))
+    """)
 
-    op.execute("""
+    op.execute(f"""
         INSERT INTO vendor_onboarding_documents (
             id, vendor_id, document_type, document_url, description,
             status, created_at, updated_at
         ) VALUES (
-            '{}', '{}', 'incorporation_document',
-            'https://s3.amazonaws.com/payspyre-documents-dev/vendor/{}/incorporation.pdf',
+            '{uuid4()}', '{vendor1_id}', 'incorporation_document',
+            'https://s3.amazonaws.com/payspyre-documents-dev/vendor/{vendor1_id}/incorporation.pdf',
             'Certificate of incorporation',
             'approved', NOW() - INTERVAL '2 weeks', NOW()
         )
-    """.format(uuid4(), vendor1_id, vendor1_id))
+    """)
 
 
 def downgrade() -> None:
