@@ -30,6 +30,7 @@ def empty_db_url():
     """Create a fresh empty database for each migration test."""
     import os
     import uuid
+    import re
     from sqlalchemy import create_engine
 
     # Get base connection string
@@ -41,7 +42,7 @@ def empty_db_url():
     admin_engine = create_engine(f"{base_url}/postgres", isolation_level="AUTOCOMMIT")
 
     with admin_engine.connect() as conn:
-        conn.execute(text(f"DROP DATABASE IF EXISTS \"{db_name}\" WITH (FORCE)"))
+        conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
         conn.execute(text(f'CREATE DATABASE "{db_name}"'))
 
     yield f"{base_url}/{db_name}"

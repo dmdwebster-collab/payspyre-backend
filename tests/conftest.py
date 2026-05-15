@@ -28,21 +28,30 @@ import app.models  # Import all models to register them with Base
 def db_session():
     # Create test database if it doesn't exist
     import psycopg2
+    import re
 
-    # Parse connection string
+    # Parse connection string to extract credentials
     if "localhost" in TEST_DATABASE_URL:
+        # postgresql+psycopg2://user:password@host:port/dbname
+        match = re.match(r'postgresql\+psycopg2://([^:]+):([^@]+)@([^:]+):(\d+)/(.+)', TEST_DATABASE_URL)
+        if match:
+            user, password, host, port, dbname = match.groups()
+        else:
+            # Fallback for local dev
+            user, password, host, port, dbname = "payspyre", "dev123", "localhost", "5432", "payspyre_test"
+
         conn = psycopg2.connect(
-            host="localhost",
-            user="postgres",
-            password="dev123",
+            host=host,
+            user=user,
+            password=password,
             dbname="postgres"
         )
         conn.autocommit = True
         cursor = conn.cursor()
-        cursor.execute("SELECT 1 FROM pg_database WHERE datname = 'payspyre_test'")
+        cursor.execute("SELECT 1 FROM pg_database WHERE datname = %s", (dbname,))
         if not cursor.fetchone():
-            cursor.execute("CREATE DATABASE payspyre_test")
-            cursor.execute("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"")
+            cursor.execute(f'CREATE DATABASE "{dbname}"')
+            cursor.execute('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"')
         cursor.close()
         conn.close()
 
