@@ -1,0 +1,70 @@
+name: Migrations
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  migrations:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: payspyre
+          POSTGRES_PASSWORD: dev123
+          POSTGRES_DB: payspyre_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql+pyscopg2://payspyre:dev123@localhost:5432/payspyre_test
+      TEST_DATABASE_URL: postgresql+pyscopg2://payspyre:dev123@localhost:5432/payspyre_test
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install alembic psycopg2-binary sqlalchemy
+
+      - name: Run migration integrity tests
+        run: |
+          pytest tests/migrations/ -v
+
+      - name: Check for schema drift
+        run: |
+          python scripts/check_migration_drift.py
+
+      - name: Block stub migrations
+        run: |
+          python scripts/check_no_stub_migrations.py
+
+      - name: Verify migrations are reversible end-to-end
+        run: |
+          python -c "
+          from alembic.config import Config
+          from alembic import command
+          cfg = Config('alembic.ini')
+          cfg.set_main_option('sqlalchemy.url', 'postgresql+pyscopg2://payspyre:dev123@localhost:5432/payspyre_test')
+          command.upgrade(cfg, 'head')
+          command.downgrade(cfg, 'base')
+          command.upgrade(cfg, 'head')
+          print('✅ Migrations are reversible')
+          "
