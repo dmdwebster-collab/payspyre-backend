@@ -152,7 +152,7 @@ def downgrade():
     op.drop_index(op.f('ix_sessions_refresh_token'), table_name='sessions')
     op.drop_table('sessions')
 
-    op.drop_index('idx_user_roles_unique', table_name='user_roles')
+    op.drop_constraint('idx_user_roles_unique', 'user_roles')
     op.drop_index(op.f('ix_user_roles_user_id'), table_name='user_roles')
     op.drop_index(op.f('ix_user_roles_role_id'), table_name='user_roles')
     op.drop_table('user_roles')
@@ -163,7 +163,7 @@ def downgrade():
     op.drop_index(op.f('ix_users_email'), table_name='users')
     op.drop_table('users')
 
-    op.drop_index('idx_role_permissions_unique', table_name='role_permissions')
+    op.drop_constraint('idx_role_permissions_unique', 'role_permissions')
     op.drop_index(op.f('ix_role_permissions_role_id'), table_name='role_permissions')
     op.drop_index(op.f('ix_role_permissions_permission_id'), table_name='role_permissions')
     op.drop_table('role_permissions')
