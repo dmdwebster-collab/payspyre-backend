@@ -36,9 +36,6 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # Skip RLS setup until tables are fully expanded
-    # TODO: Move this migration to after tables are fully defined
-    return
     # ========================================================================
     # HELPER FUNCTIONS - Enable application to set tenant context
     # ========================================================================
@@ -79,6 +76,7 @@ def upgrade() -> None:
     op.execute("ALTER TABLE loan_applications ENABLE ROW LEVEL SECURITY")
 
     # Admin: Full access
+    op.execute("DROP POLICY IF EXISTS admin_full_access_loan_applications ON loan_applications")
     op.execute("""
         CREATE POLICY admin_full_access_loan_applications ON loan_applications
         FOR ALL
@@ -87,6 +85,7 @@ def upgrade() -> None:
     """)
 
     # Vendor: See only their applications
+    op.execute("DROP POLICY IF EXISTS vendor_isolation_loan_applications ON loan_applications")
     op.execute("""
         CREATE POLICY vendor_isolation_loan_applications ON loan_applications
         FOR SELECT
@@ -97,6 +96,7 @@ def upgrade() -> None:
     """)
 
     # Vendor: Update only their applications (status changes)
+    op.execute("DROP POLICY IF EXISTS vendor_update_loan_applications ON loan_applications")
     op.execute("""
         CREATE POLICY vendor_update_loan_applications ON loan_applications
         FOR UPDATE
@@ -111,6 +111,7 @@ def upgrade() -> None:
     """)
 
     # Borrower: See only their applications
+    op.execute("DROP POLICY IF EXISTS borrower_isolation_loan_applications ON loan_applications")
     op.execute("""
         CREATE POLICY borrower_isolation_loan_applications ON loan_applications
         FOR SELECT
@@ -126,6 +127,7 @@ def upgrade() -> None:
 
     op.execute("ALTER TABLE borrowers ENABLE ROW LEVEL SECURITY")
 
+    op.execute("DROP POLICY IF EXISTS admin_full_access_borrowers ON borrowers")
     op.execute("""
         CREATE POLICY admin_full_access_borrowers ON borrowers
         FOR ALL
@@ -133,12 +135,14 @@ def upgrade() -> None:
         WITH CHECK (is_admin_user());
     """)
 
+    op.execute("DROP POLICY IF EXISTS borrower_self_update_borrowers ON borrowers")
     op.execute("""
         CREATE POLICY borrower_self_update_borrowers ON borrowers
         FOR SELECT
         USING (is_admin_user() OR id = get_current_borrower_id());
     """)
 
+    op.execute("DROP POLICY IF EXISTS borrower_update_own_borrowers ON borrowers")
     op.execute("""
         CREATE POLICY borrower_update_own_borrowers ON borrowers
         FOR UPDATE
@@ -152,6 +156,7 @@ def upgrade() -> None:
 
     op.execute("ALTER TABLE vendors ENABLE ROW LEVEL SECURITY")
 
+    op.execute("DROP POLICY IF EXISTS admin_full_access_vendors ON vendors")
     op.execute("""
         CREATE POLICY admin_full_access_vendors ON vendors
         FOR ALL
@@ -159,12 +164,14 @@ def upgrade() -> None:
         WITH CHECK (is_admin_user());
     """)
 
+    op.execute("DROP POLICY IF EXISTS vendor_self_access_vendors ON vendors")
     op.execute("""
         CREATE POLICY vendor_self_access_vendors ON vendors
         FOR SELECT
         USING (is_admin_user() OR id = get_current_vendor_id());
     """)
 
+    op.execute("DROP POLICY IF EXISTS vendor_self_update_vendors ON vendors")
     op.execute("""
         CREATE POLICY vendor_self_update_vendors ON vendors
         FOR UPDATE
@@ -173,76 +180,14 @@ def upgrade() -> None:
     """)
 
     # ========================================================================
-    # DOCUMENTS - Multi-tenant isolation
-    # ========================================================================
-
-    op.execute("ALTER TABLE documents ENABLE ROW LEVEL SECURITY")
-
-    op.execute("""
-        CREATE POLICY admin_full_access_documents ON documents
-        FOR ALL
-        USING (is_admin_user())
-        WITH CHECK (is_admin_user());
-    """)
-
-    # Vendor: See documents for their applications
-    op.execute("""
-        CREATE POLICY vendor_isolation_documents ON documents
-        FOR SELECT
-        USING (
-            is_admin_user()
-            OR vendor_id = get_current_vendor_id()
-            OR (
-                SELECT vendor_id FROM loan_applications WHERE id = documents.loan_application_id
-            ) = get_current_vendor_id()
-        );
-    """)
-
-    # Borrower: See their own documents
-    op.execute("""
-        CREATE POLICY borrower_isolation_documents ON documents
-        FOR SELECT
-        USING (
-            is_admin_user()
-            OR borrower_id = get_current_borrower_id()
-            OR (
-                SELECT borrower_id FROM loan_applications WHERE id = documents.loan_application_id
-            ) = get_current_borrower_id()
-        );
-    """)
-
-    # ========================================================================
-    # VENDOR ONBOARDING DOCUMENTS - Vendor isolation
-    # ========================================================================
-
-    op.execute("ALTER TABLE vendor_onboarding_documents ENABLE ROW LEVEL SECURITY")
-
-    op.execute("""
-        CREATE POLICY admin_full_access_vendor_docs ON vendor_onboarding_documents
-        FOR ALL
-        USING (is_admin_user())
-        WITH CHECK (is_admin_user());
-    """)
-
-    op.execute("""
-        CREATE POLICY vendor_isolation_vendor_docs ON vendor_onboarding_documents
-        FOR SELECT
-        USING (is_admin_user() OR vendor_id = get_current_vendor_id());
-    """)
-
-    op.execute("""
-        CREATE POLICY vendor_update_vendor_docs ON vendor_onboarding_documents
-        FOR UPDATE
-        USING (vendor_id = get_current_vendor_id())
-        WITH CHECK (vendor_id = get_current_vendor_id());
-    """)
-
-    # ========================================================================
     # KYC SESSIONS - Application-level isolation
+    # ========================================================================
+    # NOTE: documents RLS policies moved to migration 007 where table is created
     # ========================================================================
 
     op.execute("ALTER TABLE kyc_sessions ENABLE ROW LEVEL SECURITY")
 
+    op.execute("DROP POLICY IF EXISTS admin_full_access_kyc_sessions ON kyc_sessions")
     op.execute("""
         CREATE POLICY admin_full_access_kyc_sessions ON kyc_sessions
         FOR ALL
@@ -250,6 +195,7 @@ def upgrade() -> None:
         WITH CHECK (is_admin_user());
     """)
 
+    op.execute("DROP POLICY IF EXISTS vendor_isolation_kyc_sessions ON kyc_sessions")
     op.execute("""
         CREATE POLICY vendor_isolation_kyc_sessions ON kyc_sessions
         FOR SELECT
@@ -261,6 +207,7 @@ def upgrade() -> None:
         );
     """)
 
+    op.execute("DROP POLICY IF EXISTS borrower_isolation_kyc_sessions ON kyc_sessions")
     op.execute("""
         CREATE POLICY borrower_isolation_kyc_sessions ON kyc_sessions
         FOR SELECT
@@ -276,6 +223,7 @@ def upgrade() -> None:
 
     op.execute("ALTER TABLE kyc_results ENABLE ROW LEVEL SECURITY")
 
+    op.execute("DROP POLICY IF EXISTS admin_full_access_kyc_results ON kyc_results")
     op.execute("""
         CREATE POLICY admin_full_access_kyc_results ON kyc_results
         FOR ALL
@@ -283,6 +231,7 @@ def upgrade() -> None:
         WITH CHECK (is_admin_user());
     """)
 
+    op.execute("DROP POLICY IF EXISTS kyc_results_read_only ON kyc_results")
     op.execute("""
         CREATE POLICY kyc_results_read_only ON kyc_results
         FOR SELECT
@@ -304,6 +253,7 @@ def upgrade() -> None:
 
     op.execute("ALTER TABLE notifications ENABLE ROW LEVEL SECURITY")
 
+    op.execute("DROP POLICY IF EXISTS admin_full_access_notifications ON notifications")
     op.execute("""
         CREATE POLICY admin_full_access_notifications ON notifications
         FOR ALL
@@ -311,6 +261,7 @@ def upgrade() -> None:
         WITH CHECK (is_admin_user());
     """)
 
+    op.execute("DROP POLICY IF EXISTS user_isolation_notifications ON notifications")
     op.execute("""
         CREATE POLICY user_isolation_notifications ON notifications
         FOR ALL
@@ -320,7 +271,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    return
     # Drop policies in reverse order
     op.execute("DROP POLICY IF EXISTS user_isolation_notifications ON notifications")
     op.execute("DROP POLICY IF EXISTS admin_full_access_notifications ON notifications")
@@ -334,16 +284,6 @@ def downgrade() -> None:
     op.execute("DROP POLICY IF EXISTS vendor_isolation_kyc_sessions ON kyc_sessions")
     op.execute("DROP POLICY IF EXISTS admin_full_access_kyc_sessions ON kyc_sessions")
     op.execute("ALTER TABLE kyc_sessions DISABLE ROW LEVEL SECURITY")
-
-    op.execute("DROP POLICY IF EXISTS vendor_update_vendor_docs ON vendor_onboarding_documents")
-    op.execute("DROP POLICY IF EXISTS vendor_isolation_vendor_docs ON vendor_onboarding_documents")
-    op.execute("DROP POLICY IF EXISTS admin_full_access_vendor_docs ON vendor_onboarding_documents")
-    op.execute("ALTER TABLE vendor_onboarding_documents DISABLE ROW LEVEL SECURITY")
-
-    op.execute("DROP POLICY IF EXISTS borrower_isolation_documents ON documents")
-    op.execute("DROP POLICY IF EXISTS vendor_isolation_documents ON documents")
-    op.execute("DROP POLICY IF EXISTS admin_full_access_documents ON documents")
-    op.execute("ALTER TABLE documents DISABLE ROW LEVEL SECURITY")
 
     op.execute("DROP POLICY IF EXISTS vendor_self_update_vendors ON vendors")
     op.execute("DROP POLICY IF EXISTS vendor_self_access_vendors ON vendors")
