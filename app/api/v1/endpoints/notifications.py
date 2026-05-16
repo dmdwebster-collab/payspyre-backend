@@ -14,7 +14,7 @@ from app.schemas.notification import (
     NotificationCreate, NotificationPreferenceCreate, NotificationPreferenceResponse,
     NotificationPreferenceUpdate, NotificationQueueResponse,
     NotificationResponse, NotificationTemplateCreate, NotificationTemplateResponse,
-    NotificationTemplateUpdate, WebhookDeliveryCreate, WebhookDeliveryResponse
+    NotificationTemplateUpdate, NotificationUpdate, WebhookDeliveryCreate, WebhookDeliveryResponse
 )
 from app.services.notifications import NotificationQueue
 

@@ -152,7 +152,7 @@ def downgrade():
     op.drop_index(op.f('ix_sessions_refresh_token'), table_name='sessions')
     op.drop_table('sessions')
 
-    op.drop_index('idx_user_roles_unique', table_name='user_roles')
+    op.drop_constraint('idx_user_roles_unique', 'user_roles')
     op.drop_index(op.f('ix_user_roles_user_id'), table_name='user_roles')
     op.drop_index(op.f('ix_user_roles_role_id'), table_name='user_roles')
     op.drop_table('user_roles')
@@ -161,9 +161,18 @@ def downgrade():
     op.drop_index(op.f('ix_users_email_verification_token'), table_name='users')
     op.drop_index('idx_users_email_verified', table_name='users')
     op.drop_index(op.f('ix_users_email'), table_name='users')
+
+    # Drop tables from migration 001 that reference users before dropping users
+    # Order matters: drop child tables before parent tables
+    op.drop_table('kyc_results')  # has FK to kyc_sessions
+    op.drop_table('kyc_events')  # has FK to kyc_sessions
+    op.drop_table('kyc_co_borrower_links')  # has FK to loan_applications
+    op.drop_table('kyc_sessions')  # has FK to users (reviewed_by, submitted_by)
+    op.drop_table('manual_kyb_reviews')  # has FK to users (reviewed_by, submitted_by)
+
     op.drop_table('users')
 
-    op.drop_index('idx_role_permissions_unique', table_name='role_permissions')
+    op.drop_constraint('idx_role_permissions_unique', 'role_permissions')
     op.drop_index(op.f('ix_role_permissions_role_id'), table_name='role_permissions')
     op.drop_index(op.f('ix_role_permissions_permission_id'), table_name='role_permissions')
     op.drop_table('role_permissions')

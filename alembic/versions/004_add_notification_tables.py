@@ -168,3 +168,11 @@ def downgrade() -> None:
     op.drop_index('idx_template_category', table_name='notification_templates')
     op.drop_index('idx_template_type', table_name='notification_templates')
     op.drop_table('notification_templates')
+
+    # Drop enum types
+    sa.Enum(name='notification_type').drop(op.get_bind())
+    sa.Enum(name='template_category').drop(op.get_bind())
+    sa.Enum(name='notification_priority').drop(op.get_bind())
+    sa.Enum(name='notification_status').drop(op.get_bind())
+    sa.Enum(name='delivery_status').drop(op.get_bind())
+    sa.Enum(name='webhook_status').drop(op.get_bind())

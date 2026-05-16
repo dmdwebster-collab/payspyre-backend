@@ -84,5 +84,8 @@ def downgrade():
     op.drop_index('idx_credit_inquiry_borrower', 'credit_inquiries')
     op.drop_table('credit_inquiries')
 
+    # Drop enum type
+    sa.Enum(name='inquiry_status').drop(op.get_bind())
+
     # Note: credit_history_months and credit_utilization columns
     # are dropped as part of migration 001 downgrade

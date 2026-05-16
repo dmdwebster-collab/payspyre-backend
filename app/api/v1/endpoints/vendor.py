@@ -10,16 +10,13 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from app.db.base import get_db
-from app.models.loan import Vendor, VendorOnboardingDocument, LoanApplication
+from app.models.loan import Vendor, LoanApplication
 from app.schemas.vendor import (
     VendorCreate,
     VendorUpdate,
     VendorResponse,
     VendorDetailResponse,
     VendorListResponse,
-    OnboardingDocumentCreate,
-    OnboardingDocumentResponse,
-    ComplianceStatusResponse,
     ComplianceReviewCreate,
     VendorMetricsResponse,
 )
@@ -117,69 +114,6 @@ async def update_vendor(
     db.refresh(vendor)
 
     return vendor
-
-
-@router.post("/{vendor_id}/onboarding", response_model=OnboardingDocumentResponse, status_code=status.HTTP_201_CREATED)
-@limiter.limit("20/minute")
-async def submit_onboarding_document(
-    request: Request,
-    vendor_id: UUID,
-    data: OnboardingDocumentCreate,
-    db: Session = Depends(get_db),
-):
-    vendor = db.query(Vendor).filter(Vendor.id == vendor_id).first()
-    if not vendor:
-        raise HTTPException(status_code=404, detail="Vendor not found")
-
-    document = VendorOnboardingDocument(
-        vendor_id=vendor_id,
-        **data.model_dump(),
-    )
-    db.add(document)
-    db.commit()
-    db.refresh(document)
-
-    return document
-
-
-@router.get("/{vendor_id}/compliance", response_model=ComplianceStatusResponse)
-@limiter.limit("100/minute")
-async def get_compliance_status(request: Request, vendor_id: UUID, db: Session = Depends(get_db)):
-    vendor = db.query(Vendor).filter(Vendor.id == vendor_id).first()
-    if not vendor:
-        raise HTTPException(status_code=404, detail="Vendor not found")
-
-    documents = db.query(VendorOnboardingDocument).filter(
-        VendorOnboardingDocument.vendor_id == vendor_id
-    ).all()
-
-    documents_required = 3  # business_license, incorporation, tax_id
-    documents_submitted = len(documents)
-    documents_approved = sum(1 for d in documents if d.status == "approved")
-
-    license_verified = vendor.license_number is not None
-    license_expiry_valid = vendor.license_expiry is None or vendor.license_expiry > datetime.utcnow().date()
-
-    if documents_required > 0:
-        compliance_score = Decimal((documents_approved / documents_required) * 100)
-    else:
-        compliance_score = Decimal("100.00")
-
-    compliance_score = min(compliance_score, Decimal("100.00"))
-
-    return ComplianceStatusResponse(
-        vendor_id=vendor.id,
-        business_name=vendor.business_name,
-        status=vendor.status,
-        license_verified=license_verified,
-        license_expiry_valid=license_expiry_valid,
-        documents_required=documents_required,
-        documents_submitted=documents_submitted,
-        documents_approved=documents_approved,
-        compliance_score=compliance_score.quantize(Decimal("0.01")),
-        last_reviewed_at=vendor.last_reviewed_at,
-        next_review_due=vendor.next_review_due,
-    )
 
 
 @router.post("/{vendor_id}/compliance/review", response_model=VendorResponse)

@@ -123,7 +123,7 @@ def test_login_invalid_credentials(client):
     assert response.status_code == 401
 
 
-def test_login_unverified_user(client, db):
+def test_login_unverified_user(client, db_session):
     user = User(
         email="unverified@example.com",
         password_hash=get_password_hash("Password123"),
@@ -132,8 +132,8 @@ def test_login_unverified_user(client, db):
         is_active=True,
         is_verified=False,
     )
-    db.add(user)
-    db.commit()
+    db_session.add(user)
+    db_session.commit()
 
     response = client.post(
         "/api/v1/auth/login",
@@ -214,7 +214,7 @@ def test_forgot_password_nonexistent(client):
     assert response.status_code == 200
 
 
-def test_reset_password(client, db):
+def test_reset_password(client, db_session):
     user = User(
         email="reset@example.com",
         password_hash=get_password_hash("OldPassword123"),
@@ -225,8 +225,8 @@ def test_reset_password(client, db):
         password_reset_token="test_reset_token",
         password_reset_expires=datetime.utcnow() + timedelta(hours=1),
     )
-    db.add(user)
-    db.commit()
+    db_session.add(user)
+    db_session.commit()
 
     response = client.post(
         "/api/v1/auth/reset-password",
@@ -238,7 +238,7 @@ def test_reset_password(client, db):
     assert response.status_code == 200
 
 
-def test_verify_email(client, db):
+def test_verify_email(client, db_session):
     user = User(
         email="verify@example.com",
         password_hash=get_password_hash("Password123"),
@@ -248,8 +248,8 @@ def test_verify_email(client, db):
         is_verified=False,
         email_verification_token="test_verify_token",
     )
-    db.add(user)
-    db.commit()
+    db_session.add(user)
+    db_session.commit()
 
     response = client.post(
         "/api/v1/auth/verify-email",
@@ -327,7 +327,7 @@ def test_revoke_api_key(client, auth_headers):
     assert response.status_code == 200
 
 
-def test_list_users_as_admin(client, db):
+def test_list_users_as_admin(client, db_session):
     admin = User(
         email="admin@test.com",
         password_hash=get_password_hash("AdminPassword123"),
@@ -336,14 +336,14 @@ def test_list_users_as_admin(client, db):
         is_active=True,
         is_verified=True,
     )
-    db.add(admin)
-    db.commit()
+    db_session.add(admin)
+    db_session.commit()
 
-    admin_role = db.query(Role).filter(Role.name == "admin").first()
+    admin_role = db_session.query(Role).filter(Role.name == "admin").first()
     if admin_role:
         user_role = UserRoleLink(user_id=admin.id, role_id=admin_role.id)
-        db.add(user_role)
-        db.commit()
+        db_session.add(user_role)
+        db_session.commit()
 
     token = create_access_token(data={"sub": str(admin.id)})
     headers = {"Authorization": f"Bearer {token}"}

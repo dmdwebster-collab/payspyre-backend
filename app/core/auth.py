@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, TYPE_CHECKING
 from uuid import UUID
 
 from fastapi import Depends, HTTPException, Request, status
@@ -15,6 +15,9 @@ from app.core.security import (
 )
 from app.db.base import get_db
 from app.schemas.auth import TokenPayload
+
+if TYPE_CHECKING:
+    from app.models.user import User, ApiKey
 
 security = HTTPBearer()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
@@ -80,7 +83,7 @@ def require_roles(*required_roles: str):
 
 
 def require_permission(resource: str, action: str):
-    def permission_checker(current_user: User = Depends(get_current_user)) -> User:
+    def permission_checker(current_user = Depends(get_current_user)):
         for user_role in current_user.roles:
             role = user_role.role
             for role_perm in role.permissions:
@@ -98,7 +101,9 @@ def require_permission(resource: str, action: str):
 def get_api_user(
     request: Request,
     db: Session = Depends(get_db)
-) -> Optional[User]:
+) -> Optional:
+    from app.models.user import User, ApiKey
+
     api_key = request.headers.get("X-API-Key")
     if not api_key:
         return None
@@ -127,7 +132,9 @@ def get_api_user(
 async def get_current_user_or_api_key(
     request: Request,
     db: Session = Depends(get_db)
-) -> User:
+):
+    from app.models.user import User
+
     api_user = get_api_user(request, db)
     if api_user:
         return api_user
@@ -200,7 +207,7 @@ webhook_rate_limiter = RateLimiter(
 # User Context Management for RLS
 # ============================================================================
 
-def _extract_user_vendor_borrower_id(user: User, db: Session) -> Dict[str, Optional[str]]:
+def _extract_user_vendor_borrower_id(user, db: Session) -> Dict[str, Optional[str]]:
     """
     Extract vendor_id or borrower_id from user if they have a vendor/borrower role.
 
@@ -241,7 +248,9 @@ def _extract_user_vendor_borrower_id(user: User, db: Session) -> Dict[str, Optio
 def get_current_user_from_token(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db)
-) -> User:
+):
+    from app.models.user import User
+
     """
     Authenticate user from JWT token and set RLS context.
 
@@ -350,13 +359,15 @@ class RLSAuthMiddleware:
 def get_optional_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False)),
     db: Session = Depends(get_db)
-) -> Optional[User]:
+) -> Optional:
     """
     Get current user if authenticated, otherwise return None.
 
     This does NOT set RLS context. Use for public endpoints that may
     optionally use authenticated user data.
     """
+    from app.models.user import User
+
     if not credentials:
         return None
 
