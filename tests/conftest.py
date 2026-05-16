@@ -4,6 +4,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from fastapi.testclient import TestClient
 
+# Disable rate limiting for tests
+os.environ["RATE_LIMIT_ENABLED"] = "false"
+
 # Use PostgreSQL for tests to match migrated schema
 TEST_DATABASE_URL = os.getenv(
     "TEST_DATABASE_URL",

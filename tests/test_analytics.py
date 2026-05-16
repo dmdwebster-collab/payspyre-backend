@@ -95,7 +95,6 @@ def test_data(db_session):
     }
 
 
-@pytest.mark.skip("Funding tables not yet migrated - TODO: create migration for payments, payment_schedule, etc.")
 def test_get_analytics_basic(client, test_data):
     """Test basic analytics retrieval."""
     response = client.get("/api/v1/analytics")
@@ -114,7 +113,6 @@ def test_get_analytics_basic(client, test_data):
     assert "geographic_distribution" in data
 
 
-@pytest.mark.skip("Funding tables not yet migrated - TODO: create migration for payments, payment_schedule, etc.")
 def test_get_analytics_with_date_range(client, test_data):
     """Test analytics with custom date range."""
     end_date = datetime.now().strftime("%Y-%m-%d")
@@ -132,7 +130,6 @@ def test_get_analytics_with_date_range(client, test_data):
     assert data["loan_metrics"]["totalCount"] > 0
 
 
-@pytest.mark.skip("Funding tables not yet migrated - TODO: create migration for payments, payment_schedule, etc.")
 def test_get_analytics_weekly_granularity(client, test_data):
     """Test analytics with weekly granularity."""
     response = client.get("/api/v1/analytics?granularity=weekly")

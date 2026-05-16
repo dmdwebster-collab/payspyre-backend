@@ -99,7 +99,7 @@ class PaymentSchedule(Base):
     interest_amount = Column(Numeric(10, 2), nullable=False)
     remaining_balance = Column(Numeric(10, 2), nullable=False)
 
-    is_paid = Column(String(20), nullable=False, default=False)
+    is_paid = Column(String(20), nullable=False, default="false")
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 

@@ -48,7 +48,7 @@ async def register(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    rate_limit(auth_rate_limiter)(request)
+    await await rate_limit(auth_rate_limiter)(request)
 
     auth_service = AuthService(db)
     try:
@@ -72,7 +72,7 @@ async def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db)
 ):
-    rate_limit(auth_rate_limiter)(request)
+    await rate_limit(auth_rate_limiter)(request)
 
     auth_service = AuthService(db)
     ip_address = request.client.host if request.client else None
@@ -104,7 +104,7 @@ async def refresh_token(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    rate_limit(auth_rate_limiter)(request)
+    await rate_limit(auth_rate_limiter)(request)
 
     auth_service = AuthService(db)
     ip_address = request.client.host if request.client else None
@@ -181,7 +181,7 @@ async def forgot_password(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    rate_limit(auth_rate_limiter)(request)
+    await rate_limit(auth_rate_limiter)(request)
 
     auth_service = AuthService(db)
     user = auth_service.initiate_password_reset(reset_data.email)

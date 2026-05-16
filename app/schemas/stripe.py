@@ -230,9 +230,9 @@ class PaymentMethodRegistrationRequest(BaseModel):
 
 class PaymentMethodRegistrationResponse(BaseModel):
     success: bool
-    payment_method_id: Optional[str]
-    customer_id: Optional[str]
-    error: Optional[str]
+    payment_method_id: Optional[str] = None
+    customer_id: Optional[str] = None
+    error: Optional[str] = None
 
 
 class SetupIntentCreate(BaseModel):

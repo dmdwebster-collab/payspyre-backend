@@ -537,11 +537,11 @@ async def get_platform_balance():
         available=[{
             "amount": Decimal(str(item.amount / 100)),
             "currency": item.currency,
-        } for item in balance.get("available", [])],
+        } for item in getattr(balance, "available", [])],
         pending=[{
             "amount": Decimal(str(item.amount / 100)),
             "currency": item.currency,
-        } for item in balance.get("pending", [])],
+        } for item in getattr(balance, "pending", [])],
     )
 
 
@@ -560,11 +560,11 @@ async def get_vendor_balance(vendor_id: UUID, db: Session = Depends(get_db)):
         available=[{
             "amount": Decimal(str(item.amount / 100)),
             "currency": item.currency,
-        } for item in balance.get("available", [])],
+        } for item in getattr(balance, "available", [])],
         pending=[{
             "amount": Decimal(str(item.amount / 100)),
             "currency": item.currency,
-        } for item in balance.get("pending", [])],
+        } for item in getattr(balance, "pending", [])],
         vendor_id=vendor_id,
     )
 

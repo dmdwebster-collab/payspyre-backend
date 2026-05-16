@@ -2,9 +2,21 @@ import pytest
 from uuid import uuid4
 from datetime import datetime, date
 from decimal import Decimal
+from unittest.mock import Mock
 
 from app.models.kyc import KycSession, KycResult
 from app.models.loan import Borrower, LoanApplication, Vendor
+from starlette.requests import Request
+
+
+@pytest.fixture
+def mock_request():
+    """Create a mock Request object for testing."""
+    request = Mock(spec=Request)
+    request.client = Mock()
+    request.client.host = "127.0.0.1"
+    request.headers = {}
+    return request
 
 
 @pytest.fixture
@@ -110,14 +122,14 @@ def setup_underwriting_data(db_session):
 
 
 @pytest.mark.asyncio
-async def test_evaluate_application_approve(setup_underwriting_data, db_session):
+async def test_evaluate_application_approve(setup_underwriting_data, db_session, mock_request):
     """Test evaluation with clean record should approve"""
     data = setup_underwriting_data
     application_id = data["application"].id
 
     from app.api.v1.endpoints.underwriting import evaluate_application
 
-    result = await evaluate_application(application_id, db_session)
+    result = await evaluate_application(mock_request, application_id, db_session)
 
     assert result.decision == "approve"
     assert result.risk_score >= 0.85
@@ -130,7 +142,7 @@ async def test_evaluate_application_approve(setup_underwriting_data, db_session)
 
 
 @pytest.mark.asyncio
-async def test_evaluate_application_requires_kyc(db_session):
+async def test_evaluate_application_requires_kyc(db_session, mock_request):
     """Test evaluation fails without completed KYC"""
     from app.api.v1.endpoints.underwriting import evaluate_application
 
@@ -177,14 +189,14 @@ async def test_evaluate_application_requires_kyc(db_session):
     from fastapi import HTTPException
 
     with pytest.raises(HTTPException) as exc_info:
-        await evaluate_application(application.id, db_session)
+        await evaluate_application(mock_request, application.id, db_session)
 
     assert exc_info.value.status_code == 400
     assert "No completed KYC sessions" in exc_info.value.detail
 
 
 @pytest.mark.asyncio
-async def test_manual_review_approve(setup_underwriting_data, db_session):
+async def test_manual_review_approve(setup_underwriting_data, db_session, mock_request):
     """Test manual review can approve"""
     data = setup_underwriting_data
     application_id = data["application"].id
@@ -196,13 +208,13 @@ async def test_manual_review_approve(setup_underwriting_data, db_session):
     from app.api.v1.endpoints.underwriting import submit_manual_review
     from app.schemas.underwriting import UnderwritingManualReviewRequest
 
-    request = UnderwritingManualReviewRequest(
+    review_request = UnderwritingManualReviewRequest(
         application_id=application_id,
         approved=True,
         notes="Credit score verified, good payment history",
     )
 
-    result = await submit_manual_review(request, db_session)
+    result = await submit_manual_review(mock_request, review_request, db_session)
 
     assert result.decision == "approve"
     assert result.status == "approved"
@@ -214,7 +226,7 @@ async def test_manual_review_approve(setup_underwriting_data, db_session):
 
 
 @pytest.mark.asyncio
-async def test_manual_review_reject(setup_underwriting_data, db_session):
+async def test_manual_review_reject(setup_underwriting_data, db_session, mock_request):
     """Test manual review can reject"""
     data = setup_underwriting_data
     application_id = data["application"].id
@@ -225,13 +237,13 @@ async def test_manual_review_reject(setup_underwriting_data, db_session):
     from app.api.v1.endpoints.underwriting import submit_manual_review
     from app.schemas.underwriting import UnderwritingManualReviewRequest
 
-    request = UnderwritingManualReviewRequest(
+    review_request = UnderwritingManualReviewRequest(
         application_id=application_id,
         approved=False,
         notes="Insufficient income for requested amount",
     )
 
-    result = await submit_manual_review(request, db_session)
+    result = await submit_manual_review(mock_request, review_request, db_session)
 
     assert result.decision == "rejected"
     assert result.status == "rejected"
@@ -241,14 +253,14 @@ async def test_manual_review_reject(setup_underwriting_data, db_session):
 
 
 @pytest.mark.asyncio
-async def test_get_underwriting_status(setup_underwriting_data, db_session):
+async def test_get_underwriting_status(setup_underwriting_data, db_session, mock_request):
     """Test getting underwriting status"""
     data = setup_underwriting_data
     application_id = data["application"].id
 
     from app.api.v1.endpoints.underwriting import get_underwriting_status
 
-    result = await get_underwriting_status(application_id, db_session)
+    result = await get_underwriting_status(mock_request, application_id, db_session)
 
     assert result.application_id == application_id
     assert result.status == "pending_documents"
@@ -256,7 +268,7 @@ async def test_get_underwriting_status(setup_underwriting_data, db_session):
 
 
 @pytest.mark.asyncio
-async def test_request_rereview(setup_underwriting_data, db_session):
+async def test_request_rereview(setup_underwriting_data, db_session, mock_request):
     """Test requesting re-review for rejected application"""
     data = setup_underwriting_data
     application_id = data["application"].id
@@ -269,7 +281,7 @@ async def test_request_rereview(setup_underwriting_data, db_session):
 
     from app.api.v1.endpoints.underwriting import request_rereview
 
-    result = await request_rereview(application_id, db_session)
+    result = await request_rereview(mock_request, application_id, db_session)
 
     assert result.status == "underwriting"
     assert "Re-review requested" in result.decision_reason

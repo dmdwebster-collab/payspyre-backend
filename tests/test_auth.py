@@ -328,6 +328,18 @@ def test_revoke_api_key(client, auth_headers):
 
 
 def test_list_users_as_admin(client, db_session):
+    # Create admin role if it doesn't exist
+    admin_role = db_session.query(Role).filter(Role.name == "admin").first()
+    if not admin_role:
+        admin_role = Role(
+            name="admin",
+            description="Administrator with full access",
+            is_active=True,
+        )
+        db_session.add(admin_role)
+        db_session.commit()
+        db_session.refresh(admin_role)
+
     admin = User(
         email="admin@test.com",
         password_hash=get_password_hash("AdminPassword123"),
@@ -339,11 +351,9 @@ def test_list_users_as_admin(client, db_session):
     db_session.add(admin)
     db_session.commit()
 
-    admin_role = db_session.query(Role).filter(Role.name == "admin").first()
-    if admin_role:
-        user_role = UserRoleLink(user_id=admin.id, role_id=admin_role.id)
-        db_session.add(user_role)
-        db_session.commit()
+    user_role = UserRoleLink(user_id=admin.id, role_id=admin_role.id)
+    db_session.add(user_role)
+    db_session.commit()
 
     token = create_access_token(data={"sub": str(admin.id)})
     headers = {"Authorization": f"Bearer {token}"}
