@@ -64,7 +64,19 @@ def db_session():
     is_local = "localhost" in TEST_DATABASE_URL
     is_supabase = "supabase" in TEST_DATABASE_URL.lower()
 
+    # Check if migrations have been run (alembic_version table exists)
+    has_migrations = False
     if is_local and not is_supabase:
+        try:
+            from sqlalchemy import text
+            test_conn = test_engine.connect()
+            result = test_conn.execute(text("SELECT 1 FROM information_schema.tables WHERE table_name = 'alembic_version'"))
+            has_migrations = result.fetchone() is not None
+            test_conn.close()
+        except Exception:
+            pass
+
+    if is_local and not is_supabase and not has_migrations:
         Base.metadata.create_all(bind=test_engine)
     session = TestingSessionLocal()
     try:
