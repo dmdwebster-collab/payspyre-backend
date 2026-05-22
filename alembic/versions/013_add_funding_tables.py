@@ -27,31 +27,78 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     # ========================================================================
-    # CREATE ENUM TYPES
+    # CREATE ENUM TYPES (idempotent)
     # ========================================================================
-    op.execute("CREATE TYPE disbursement_method AS ENUM ('etransfer', 'wire', 'cheque')")
-    op.execute("CREATE TYPE funding_status AS ENUM ('pending', 'processing', 'completed', 'failed')")
-    op.execute("CREATE TYPE payment_method AS ENUM ('pre_authorized_debit', 'etransfer', 'cheque')")
-    op.execute("CREATE TYPE payment_status AS ENUM ('pending', 'processing', 'completed', 'failed', 'refunded')")
-    op.execute("CREATE TYPE refund_method AS ENUM ('etransfer', 'wire', 'cheque', 'original_payment')")
-    op.execute("CREATE TYPE refund_status AS ENUM ('pending', 'processing', 'completed', 'failed')")
+    # Check if type exists before creating to avoid duplicate_object errors
+    op.execute("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'disbursement_method') THEN
+                CREATE TYPE disbursement_method AS ENUM ('etransfer', 'wire', 'cheque');
+            END IF;
+        END$$;
+    """)
+    op.execute("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'funding_status') THEN
+                CREATE TYPE funding_status AS ENUM ('pending', 'processing', 'completed', 'failed');
+            END IF;
+        END$$;
+    """)
+    op.execute("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'payment_method') THEN
+                CREATE TYPE payment_method AS ENUM ('pre_authorized_debit', 'etransfer', 'cheque');
+            END IF;
+        END$$;
+    """)
+    op.execute("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'payment_status') THEN
+                CREATE TYPE payment_status AS ENUM ('pending', 'processing', 'completed', 'failed', 'refunded');
+            END IF;
+        END$$;
+    """)
+    op.execute("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'refund_method') THEN
+                CREATE TYPE refund_method AS ENUM ('etransfer', 'wire', 'cheque', 'original_payment');
+            END IF;
+        END$$;
+    """)
+    op.execute("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'refund_status') THEN
+                CREATE TYPE refund_status AS ENUM ('pending', 'processing', 'completed', 'failed');
+            END IF;
+        END$$;
+    """)
 
     # ========================================================================
     # CREATE funding TABLE
     # ========================================================================
+    # Use postgresql.ENUM with create_type=False to avoid duplicate enum creation
+    disbursement_method = postgresql.ENUM(name='disbursement_method', create_type=False)
+    funding_status = postgresql.ENUM(name='funding_status', create_type=False)
+
     op.create_table(
         'funding',
         sa.Column('id', postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column('application_id', postgresql.UUID(as_uuid=True), sa.ForeignKey('loan_applications.id'), nullable=False),
         sa.Column('disbursement_amount', sa.Numeric(10, 2), nullable=False),
-        sa.Column('disbursement_method', sa.Enum('etransfer', 'wire', 'cheque', name='disbursement_method'), nullable=False),
+        sa.Column('disbursement_method', disbursement_method, nullable=False),
         sa.Column('vendor_account_number', sa.String(50), nullable=True),
         sa.Column('vendor_institution_number', sa.String(20), nullable=True),
         sa.Column('vendor_transit_number', sa.String(20), nullable=True),
         sa.Column('disbursement_date', sa.DateTime(timezone=True), nullable=True),
         sa.Column('reference_number', sa.String(100), nullable=True),
         sa.Column('stripe_transfer_id', sa.String(255), nullable=True),
-        sa.Column('status', sa.Enum('pending', 'processing', 'completed', 'failed', name='funding_status'), nullable=False, server_default='pending'),
+        sa.Column('status', funding_status, nullable=False, server_default='pending'),
         sa.Column('failure_reason', sa.Text(), nullable=True),
         sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('NOW()')),
         sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('NOW()'), onupdate=sa.text('NOW()')),
@@ -81,15 +128,18 @@ def upgrade() -> None:
     # ========================================================================
     # CREATE payments TABLE
     # ========================================================================
+    payment_method = postgresql.ENUM(name='payment_method', create_type=False)
+    payment_status = postgresql.ENUM(name='payment_status', create_type=False)
+
     op.create_table(
         'payments',
         sa.Column('id', postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column('application_id', postgresql.UUID(as_uuid=True), sa.ForeignKey('loan_applications.id'), nullable=False),
         sa.Column('amount', sa.Numeric(10, 2), nullable=False),
-        sa.Column('payment_method', sa.Enum('pre_authorized_debit', 'etransfer', 'cheque', name='payment_method'), nullable=False),
+        sa.Column('payment_method', payment_method, nullable=False),
         sa.Column('payment_date', sa.DateTime(timezone=True), nullable=False),
         sa.Column('transaction_id', sa.String(100), nullable=True),
-        sa.Column('status', sa.Enum('pending', 'processing', 'completed', 'failed', 'refunded', name='payment_status'), nullable=False, server_default='pending'),
+        sa.Column('status', payment_status, nullable=False, server_default='pending'),
         sa.Column('principal_amount', sa.Numeric(10, 2), nullable=False, server_default='0'),
         sa.Column('interest_amount', sa.Numeric(10, 2), nullable=False, server_default='0'),
         sa.Column('late_fee_amount', sa.Numeric(10, 2), nullable=False, server_default='0'),
@@ -127,14 +177,17 @@ def upgrade() -> None:
     # ========================================================================
     # CREATE refunds TABLE
     # ========================================================================
+    refund_method = postgresql.ENUM(name='refund_method', create_type=False)
+    refund_status = postgresql.ENUM(name='refund_status', create_type=False)
+
     op.create_table(
         'refunds',
         sa.Column('id', postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column('payment_id', postgresql.UUID(as_uuid=True), sa.ForeignKey('payments.id'), nullable=False),
         sa.Column('amount', sa.Numeric(10, 2), nullable=False),
         sa.Column('reason', sa.Text(), nullable=False),
-        sa.Column('refund_method', sa.Enum('etransfer', 'wire', 'cheque', 'original_payment', name='refund_method'), nullable=False),
-        sa.Column('status', sa.Enum('pending', 'processing', 'completed', 'failed', name='refund_status'), nullable=False, server_default='pending'),
+        sa.Column('refund_method', refund_method, nullable=False),
+        sa.Column('status', refund_status, nullable=False, server_default='pending'),
         sa.Column('reference_number', sa.String(100), nullable=True),
         sa.Column('failure_reason', sa.Text(), nullable=True),
         sa.Column('processed_at', sa.DateTime(timezone=True), nullable=True),

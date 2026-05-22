@@ -2,7 +2,7 @@ from datetime import datetime
 from uuid import UUID, uuid4
 from typing import Optional, Any
 
-from sqlalchemy import Column, DateTime, String, Numeric, BigInteger, Boolean, func, Text
+from sqlalchemy import Column, DateTime, String, Numeric, BigInteger, Boolean, func, Text, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 
@@ -13,7 +13,7 @@ class PlatformPatientField(Base):
     __tablename__ = "platform_patient_fields"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    patient_id = Column(UUID(as_uuid=True), nullable=False)  # FK to platform_patients
+    patient_id = Column(UUID(as_uuid=True), ForeignKey("platform_patients.id"), nullable=False)
     field_key = Column(String, nullable=False)
     field_value = Column(JSONB, nullable=False)
     source = Column(String, nullable=False)
@@ -22,7 +22,7 @@ class PlatformPatientField(Base):
     verified_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     is_current = Column(Boolean, nullable=False, default=True)
     superseded_at = Column(DateTime(timezone=True), nullable=True)
-    superseded_by_id = Column(BigInteger, nullable=True)  # Self-referential FK
+    superseded_by_id = Column(BigInteger, ForeignKey("platform_patient_fields.id"), nullable=True)
 
     # Relationships
     patient = relationship("PlatformPatient", back_populates="fields")
