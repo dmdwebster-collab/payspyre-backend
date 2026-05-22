@@ -27,14 +27,14 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     # ========================================================================
-    # CREATE ENUM TYPES
+    # CREATE ENUM TYPES (idempotent)
     # ========================================================================
-    op.execute("CREATE TYPE IF NOT EXISTS disbursement_method AS ENUM ('etransfer', 'wire', 'cheque')")
-    op.execute("CREATE TYPE IF NOT EXISTS funding_status AS ENUM ('pending', 'processing', 'completed', 'failed')")
-    op.execute("CREATE TYPE IF NOT EXISTS payment_method AS ENUM ('pre_authorized_debit', 'etransfer', 'cheque')")
-    op.execute("CREATE TYPE IF NOT EXISTS payment_status AS ENUM ('pending', 'processing', 'completed', 'failed', 'refunded')")
-    op.execute("CREATE TYPE IF NOT EXISTS refund_method AS ENUM ('etransfer', 'wire', 'cheque', 'original_payment')")
-    op.execute("CREATE TYPE IF NOT EXISTS refund_status AS ENUM ('pending', 'processing', 'completed', 'failed')")
+    op.execute("DO $$ BEGIN CREATE TYPE disbursement_method AS ENUM ('etransfer', 'wire', 'cheque'); EXCEPTION WHEN duplicate_object THEN null; END $$;")
+    op.execute("DO $$ BEGIN CREATE TYPE funding_status AS ENUM ('pending', 'processing', 'completed', 'failed'); EXCEPTION WHEN duplicate_object THEN null; END $$;")
+    op.execute("DO $$ BEGIN CREATE TYPE payment_method AS ENUM ('pre_authorized_debit', 'etransfer', 'cheque'); EXCEPTION WHEN duplicate_object THEN null; END $$;")
+    op.execute("DO $$ BEGIN CREATE TYPE payment_status AS ENUM ('pending', 'processing', 'completed', 'failed', 'refunded'); EXCEPTION WHEN duplicate_object THEN null; END $$;")
+    op.execute("DO $$ BEGIN CREATE TYPE refund_method AS ENUM ('etransfer', 'wire', 'cheque', 'original_payment'); EXCEPTION WHEN duplicate_object THEN null; END $$;")
+    op.execute("DO $$ BEGIN CREATE TYPE refund_status AS ENUM ('pending', 'processing', 'completed', 'failed'); EXCEPTION WHEN duplicate_object THEN null; END $$;")
 
     # ========================================================================
     # CREATE funding TABLE
