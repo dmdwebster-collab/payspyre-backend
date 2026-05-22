@@ -84,7 +84,7 @@ def db_session():
     finally:
         session.rollback()
         session.close()
-        if is_local and not is_supabase:
+        if is_local and not is_supabase and not has_migrations:
             Base.metadata.drop_all(bind=test_engine)
 
 
