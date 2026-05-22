@@ -10,11 +10,25 @@
 -- ============================================================
 
 -- ============================================================
+
+
+-- ============================================================
+-- Alembic version tracking table (must exist for migrations)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS alembic_version (
+    version_num VARCHAR(255) NOT NULL,
+    CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num)
+);
+
+
 -- Migration 015: 015_create_platform_patients.py
 -- Platform patients table — canonical human record
 -- ============================================================
 
-CREATE TYPE platform_verification_depth AS ENUM (
+DO $$
+BEGIN
+    CREATE TYPE platform_verification_depth AS ENUM (
     'none',
     'email_verified',
     'phone_verified',
@@ -22,16 +36,24 @@ CREATE TYPE platform_verification_depth AS ENUM (
     'id_bank_verified',
     'id_bank_cb_verified'
 );
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
 
-CREATE TYPE platform_lead_state AS ENUM (
+DO $$
+BEGIN
+    CREATE TYPE platform_lead_state AS ENUM (
     'unqualified',
     'pre_qualified',
     'pre_approved',
     'approved',
     'declined'
 );
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
 
-CREATE TABLE platform_patients (
+CREATE TABLE IF NOT EXISTS platform_patients (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -78,15 +100,14 @@ BEFORE UPDATE ON platform_patients
 FOR EACH ROW
 EXECUTE FUNCTION update_platform_patients_updated_at();
 
-INSERT INTO alembic_version (version_num)
-VALUES ('015_create_platform_patients');
+INSERT INTO alembic_version (version_num) VALUES ('015_create_platform_patients') ON CONFLICT (version_num) DO NOTHING;
 
 -- ============================================================
 -- Migration 016: 016_create_platform_patient_fields.py
 -- Source-tagged field audit trail — every field value with source
 -- ============================================================
 
-CREATE TABLE platform_patient_fields (
+CREATE TABLE IF NOT EXISTS platform_patient_fields (
     id BIGSERIAL PRIMARY KEY,
     patient_id UUID NOT NULL REFERENCES platform_patients(id),
     field_key TEXT NOT NULL,
@@ -106,34 +127,48 @@ CREATE INDEX idx_platform_patient_fields_source ON platform_patient_fields (sour
 ALTER TABLE platform_patient_fields ADD CONSTRAINT fk_platform_patient_fields_superseded_by
     FOREIGN KEY(superseded_by_id) REFERENCES platform_patient_fields(id);
 
-INSERT INTO alembic_version (version_num)
-VALUES ('016_create_platform_patient_fields');
+INSERT INTO alembic_version (version_num) VALUES ('016_create_platform_patient_fields') ON CONFLICT (version_num) DO NOTHING;
 
 -- ============================================================
 -- Migration 017: 017_create_platform_credit_products.py
 -- Credit product configuration — verification matrix (Dave's toggle)
 -- ============================================================
 
-CREATE TYPE platform_credit_product_status AS ENUM (
+DO $$
+BEGIN
+    CREATE TYPE platform_credit_product_status AS ENUM (
     'draft',
     'active',
     'archived'
 );
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
 
-CREATE TYPE platform_vertical AS ENUM (
+DO $$
+BEGIN
+    CREATE TYPE platform_vertical AS ENUM (
     'dental',
     'auto',
     'veterinary'
 );
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
 
-CREATE TYPE platform_funding_source AS ENUM (
+DO $$
+BEGIN
+    CREATE TYPE platform_funding_source AS ENUM (
     'payspyre_capital',
     'partner_lender',
     'hybrid',
     'clinic_self'
 );
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
 
-CREATE TABLE platform_credit_products (
+CREATE TABLE IF NOT EXISTS platform_credit_products (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     code TEXT NOT NULL UNIQUE,
     name TEXT NOT NULL,
@@ -174,15 +209,16 @@ BEFORE UPDATE ON platform_credit_products
 FOR EACH ROW
 EXECUTE FUNCTION update_platform_credit_products_updated_at();
 
-INSERT INTO alembic_version (version_num)
-VALUES ('017_create_platform_credit_products');
+INSERT INTO alembic_version (version_num) VALUES ('017_create_platform_credit_products') ON CONFLICT (version_num) DO NOTHING;
 
 -- ============================================================
 -- Migration 018: 018_create_platform_credit_applications.py
 -- Credit applications with co-applicant linkage and flow state
 -- ============================================================
 
-CREATE TYPE platform_application_status AS ENUM (
+DO $$
+BEGIN
+    CREATE TYPE platform_application_status AS ENUM (
     'started',
     'verifying',
     'pre_qualified',
@@ -193,19 +229,32 @@ CREATE TYPE platform_application_status AS ENUM (
     'withdrawn',
     'expired'
 );
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
 
-CREATE TYPE platform_amount_source AS ENUM (
+DO $$
+BEGIN
+    CREATE TYPE platform_amount_source AS ENUM (
     'clinic',
     'patient',
     'clinic_then_patient_adjusted'
 );
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
 
-CREATE TYPE platform_applicant_role AS ENUM (
+DO $$
+BEGIN
+    CREATE TYPE platform_applicant_role AS ENUM (
     'primary',
     'co_applicant'
 );
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
 
-CREATE TABLE platform_credit_applications (
+CREATE TABLE IF NOT EXISTS platform_credit_applications (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     patient_id UUID NOT NULL REFERENCES platform_patients(id),
     credit_product_id UUID NOT NULL REFERENCES platform_credit_products(id),
@@ -260,15 +309,16 @@ BEFORE UPDATE ON platform_credit_applications
 FOR EACH ROW
 EXECUTE FUNCTION update_platform_credit_applications_updated_at();
 
-INSERT INTO alembic_version (version_num)
-VALUES ('018_create_platform_credit_applications');
+INSERT INTO alembic_version (version_num) VALUES ('018_create_platform_credit_applications') ON CONFLICT (version_num) DO NOTHING;
 
 -- ============================================================
 -- Migration 019: 019_create_platform_verifications.py
 -- Unified verification tracking across all types
 -- ============================================================
 
-CREATE TYPE platform_verification_type AS ENUM (
+DO $$
+BEGIN
+    CREATE TYPE platform_verification_type AS ENUM (
     'kyc_id',
     'bank_link',
     'bureau_soft',
@@ -276,16 +326,24 @@ CREATE TYPE platform_verification_type AS ENUM (
     'income_attestation',
     'address_proof'
 );
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
 
-CREATE TYPE platform_verification_status AS ENUM (
+DO $$
+BEGIN
+    CREATE TYPE platform_verification_status AS ENUM (
     'pending',
     'in_progress',
     'passed',
     'failed',
     'expired'
 );
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
 
-CREATE TABLE platform_verifications (
+CREATE TABLE IF NOT EXISTS platform_verifications (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     patient_id UUID NOT NULL REFERENCES platform_patients(id),
     application_id UUID REFERENCES platform_credit_applications(id),
@@ -303,15 +361,16 @@ CREATE INDEX idx_platform_verifications_patient ON platform_verifications (patie
 CREATE INDEX idx_platform_verifications_application ON platform_verifications (application_id);
 CREATE INDEX idx_platform_verifications_type_status ON platform_verifications (verification_type, status);
 
-INSERT INTO alembic_version (version_num)
-VALUES ('019_create_platform_verifications');
+INSERT INTO alembic_version (version_num) VALUES ('019_create_platform_verifications') ON CONFLICT (version_num) DO NOTHING;
 
 -- ============================================================
 -- Migration 020: 020_create_platform_consents.py
 -- Granular per-purpose consent with immutable text versioning
 -- ============================================================
 
-CREATE TYPE platform_consent_purpose AS ENUM (
+DO $$
+BEGIN
+    CREATE TYPE platform_consent_purpose AS ENUM (
     'id_verification',
     'bank_verification',
     'soft_bureau_pull',
@@ -322,8 +381,11 @@ CREATE TYPE platform_consent_purpose AS ENUM (
     'cross_sell_eligibility',
     'aggregate_data_use'
 );
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
 
-CREATE TABLE platform_consents (
+CREATE TABLE IF NOT EXISTS platform_consents (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     patient_id UUID NOT NULL REFERENCES platform_patients(id),
     purpose platform_consent_purpose NOT NULL,
@@ -343,15 +405,14 @@ CREATE INDEX idx_platform_consents_application ON platform_consents (application
 ALTER TABLE platform_verifications ADD CONSTRAINT fk_platform_verifications_consent
     FOREIGN KEY(consent_id) REFERENCES platform_consents(id);
 
-INSERT INTO alembic_version (version_num)
-VALUES ('020_create_platform_consents');
+INSERT INTO alembic_version (version_num) VALUES ('020_create_platform_consents') ON CONFLICT (version_num) DO NOTHING;
 
 -- ============================================================
 -- Migration 021: 021_create_platform_events.py
 -- Platform-wide append-only event log with WORM protection
 -- ============================================================
 
-CREATE TABLE platform_events (
+CREATE TABLE IF NOT EXISTS platform_events (
     id BIGSERIAL PRIMARY KEY,
     occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     patient_id UUID REFERENCES platform_patients(id),
@@ -383,8 +444,7 @@ COMMENT ON TABLE platform_events IS 'Platform-wide append-only event log. WORM p
 
 COMMENT ON FUNCTION prevent_platform_events_modification() IS 'Security function: prevents modification of platform_events table. Enforces WORM (Write-Once-Read-Many) for audit compliance.';
 
-INSERT INTO alembic_version (version_num)
-VALUES ('021_create_platform_events');
+INSERT INTO alembic_version (version_num) VALUES ('021_create_platform_events') ON CONFLICT (version_num) DO NOTHING;
 
 -- ============================================================
 -- VERIFICATION BLOCK
