@@ -1,7 +1,7 @@
 """Create platform_patients table
 
 Revision ID: 015_create_platform_patients
-Revises: 014_add_kyc_orchestration_tables
+Revises: 013_add_funding_tables
 Create Date: 2026-05-21
 
 Part of PR P1: Platform Foundation Migrations
@@ -42,7 +42,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = '015_create_platform_patients'
-down_revision: Union[str, None] = '014_add_kyc_orchestration_tables'
+down_revision: Union[str, None] = '013_add_funding_tables'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
