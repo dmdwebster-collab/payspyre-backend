@@ -29,12 +29,55 @@ def upgrade() -> None:
     # ========================================================================
     # CREATE ENUM TYPES (idempotent)
     # ========================================================================
-    op.execute("DO $$ BEGIN CREATE TYPE disbursement_method AS ENUM ('etransfer', 'wire', 'cheque'); EXCEPTION WHEN duplicate_object THEN null; END $$;")
-    op.execute("DO $$ BEGIN CREATE TYPE funding_status AS ENUM ('pending', 'processing', 'completed', 'failed'); EXCEPTION WHEN duplicate_object THEN null; END $$;")
-    op.execute("DO $$ BEGIN CREATE TYPE payment_method AS ENUM ('pre_authorized_debit', 'etransfer', 'cheque'); EXCEPTION WHEN duplicate_object THEN null; END $$;")
-    op.execute("DO $$ BEGIN CREATE TYPE payment_status AS ENUM ('pending', 'processing', 'completed', 'failed', 'refunded'); EXCEPTION WHEN duplicate_object THEN null; END $$;")
-    op.execute("DO $$ BEGIN CREATE TYPE refund_method AS ENUM ('etransfer', 'wire', 'cheque', 'original_payment'); EXCEPTION WHEN duplicate_object THEN null; END $$;")
-    op.execute("DO $$ BEGIN CREATE TYPE refund_status AS ENUM ('pending', 'processing', 'completed', 'failed'); EXCEPTION WHEN duplicate_object THEN null; END $$;")
+    # Check if type exists before creating to avoid duplicate_object errors
+    op.execute("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'disbursement_method') THEN
+                CREATE TYPE disbursement_method AS ENUM ('etransfer', 'wire', 'cheque');
+            END IF;
+        END$$;
+    """)
+    op.execute("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'funding_status') THEN
+                CREATE TYPE funding_status AS ENUM ('pending', 'processing', 'completed', 'failed');
+            END IF;
+        END$$;
+    """)
+    op.execute("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'payment_method') THEN
+                CREATE TYPE payment_method AS ENUM ('pre_authorized_debit', 'etransfer', 'cheque');
+            END IF;
+        END$$;
+    """)
+    op.execute("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'payment_status') THEN
+                CREATE TYPE payment_status AS ENUM ('pending', 'processing', 'completed', 'failed', 'refunded');
+            END IF;
+        END$$;
+    """)
+    op.execute("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'refund_method') THEN
+                CREATE TYPE refund_method AS ENUM ('etransfer', 'wire', 'cheque', 'original_payment');
+            END IF;
+        END$$;
+    """)
+    op.execute("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'refund_status') THEN
+                CREATE TYPE refund_status AS ENUM ('pending', 'processing', 'completed', 'failed');
+            END IF;
+        END$$;
+    """)
 
     # ========================================================================
     # CREATE funding TABLE
