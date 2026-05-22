@@ -57,6 +57,16 @@ jobs:
         run: |
           pip install -e .
 
+      - name: Run Alembic migrations
+        run: |
+          python -c "
+          from alembic.config import Config
+          from alembic import command
+          cfg = Config('alembic.ini')
+          cfg.set_main_option('sqlalchemy.url', 'postgresql+psycopg2://payspyre:dev123@localhost:5432/payspyre_test')
+          command.upgrade(cfg, 'head')
+          "
+
       - name: Run P2 integration tests against local PostgreSQL
         run: |
           python -m pytest tests/test_patient_profile_001_source_tagging.py tests/test_patient_profile_002_discrepancies.py -v --tb=short
