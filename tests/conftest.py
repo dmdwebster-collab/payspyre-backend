@@ -58,14 +58,22 @@ def db_session():
         cursor.close()
         conn.close()
 
-    Base.metadata.create_all(bind=test_engine)
+        # Skip create_all/drop_all when running against a migrated database (e.g. Supabase).
+    # Migrations are the source of truth — SQLAlchemy models may have stale FKs.
+    # Note: stripe_transactions has FK to payments table which doesn't exist - known issue.
+    is_local = "localhost" in TEST_DATABASE_URL
+    is_supabase = "supabase" in TEST_DATABASE_URL.lower()
+
+    if is_local and not is_supabase:
+        Base.metadata.create_all(bind=test_engine)
     session = TestingSessionLocal()
     try:
         yield session
     finally:
         session.rollback()
         session.close()
-        Base.metadata.drop_all(bind=test_engine)
+        if is_local and not is_supabase:
+            Base.metadata.drop_all(bind=test_engine)
 
 
 @pytest.fixture(scope="function")

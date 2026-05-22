@@ -1,7 +1,7 @@
-"""Integration tests for Patient Profile Service - Source Tagging (PR P2)
+﻿"""Integration tests for Patient Profile Service - Source Tagging (PR P2)
 
 Tests source-tagged field writes, supersession, and immutable history.
-Validates platform_patient_fields behavior per spec §2.2.
+Validates platform_patient_fields behavior per spec Â§2.2.
 
 Critical validations:
 - Fields are written with correct source tagging
@@ -13,11 +13,11 @@ Critical validations:
 import pytest
 from sqlalchemy import text
 from sqlalchemy.orm import Session
-from datetime import datetime
+from datetime import datetime, date
 from uuid import uuid4
 
 from app.services.patient_profile import PatientProfileService
-from app.schemas.patient import PatientQuickstartRequest
+from app.schemas.patient import PatientQuickstartRequest, PatientFieldUpdateRequest
 from app.models.platform.patient import PlatformPatient
 from app.models.platform.patient_field import PlatformPatientField
 
@@ -27,12 +27,14 @@ class TestPatientQuickstart:
 
     def test_quickstart_creates_patient_and_fields(self, db_session: Session):
         """Quickstart should create patient record + source-tagged fields"""
-        service = PatientProfileService(db)
+        service = PatientProfileService(db_session)
+        import uuid
+        unique_suffix = uuid.uuid4().hex[:8]
         data = PatientQuickstartRequest(
             legal_first_name="John",
             legal_last_name="Doe",
-            email="john.doe@example.com",
-            phone_e164="+16045551234",
+            email=f"john.doe.{unique_suffix}@example.com",
+            phone_e164=f"+1604555{unique_suffix}",
             dob=date(1990, 5, 15),
         )
 
@@ -41,10 +43,11 @@ class TestPatientQuickstart:
         # Verify patient created
         assert patient.id is not None
         assert patient.legal_first_name == "John"
-        assert patient.email == "john.doe@example.com"
+        assert patient.email.startswith("john.doe.")
+        assert patient.email.endswith("@example.com")
 
         # Verify source-tagged fields created
-        fields = db.query(PlatformPatientField).filter(
+        fields = db_session.query(PlatformPatientField).filter(
             PlatformPatientField.patient_id == patient.id,
             PlatformPatientField.is_current == True,
         ).all()
@@ -62,17 +65,19 @@ class TestPatientQuickstart:
 
     def test_quickstart_logs_event(self, db_session: Session):
         """Quickstart should log patient.quickstart_completed event"""
-        service = PatientProfileService(db)
+        service = PatientProfileService(db_session)
+        import uuid
+        unique_suffix = uuid.uuid4().hex[:8]
         data = PatientQuickstartRequest(
             legal_first_name="Jane",
             legal_last_name="Smith",
-            email="jane.smith@example.com",
+            email=f"jane.smith.{unique_suffix}@example.com",
         )
 
         patient = service.create_patient_quickstart(data)
 
         # Check for quickstart event
-        result = db.execute(text("""
+        result = db_session.execute(text("""
             SELECT event_type, actor, payload
             FROM platform_events
             WHERE patient_id = :patient_id
@@ -82,7 +87,8 @@ class TestPatientQuickstart:
         assert result is not None
         assert result[0] == "patient.quickstart_completed"
         assert result[1] == "patient"
-        assert result[2]["email"] == "jane.smith@example.com"
+        assert result[2]["email"].startswith("jane.smith.")
+        assert result[2]["email"].endswith("@example.com")
 
 
 class TestSourceTaggedFieldWrites:
@@ -90,8 +96,8 @@ class TestSourceTaggedFieldWrites:
 
     def test_write_field_creates_record(self, db_session: Session):
         """Writing a field should create platform_patient_field record"""
-        service = PatientProfileService(db)
-        patient_id = self._create_test_patient(db)
+        service = PatientProfileService(db_session)
+        patient_id = _create_test_patient(db_session)
 
         field = service._write_field(
             patient_id=patient_id,
@@ -109,8 +115,8 @@ class TestSourceTaggedFieldWrites:
 
     def test_write_field_supersedes_same_source(self, db_session: Session):
         """Writing same field from same source should supersede old value"""
-        service = PatientProfileService(db)
-        patient_id = self._create_test_patient(db)
+        service = PatientProfileService(db_session)
+        patient_id = _create_test_patient(db_session)
 
         # Write initial value
         field1 = service._write_field(
@@ -129,7 +135,7 @@ class TestSourceTaggedFieldWrites:
         )
 
         # First field should be superseded
-        db.refresh(field1)
+        db_session.refresh(field1)
         assert field1.is_current is False
         assert field1.superseded_at is not None
         assert field1.superseded_by_id == field2.id
@@ -139,8 +145,8 @@ class TestSourceTaggedFieldWrites:
 
     def test_write_field_different_sources_parallel(self, db_session: Session):
         """Writing same field from different sources creates parallel current values"""
-        service = PatientProfileService(db)
-        patient_id = self._create_test_patient(db)
+        service = PatientProfileService(db_session)
+        patient_id = _create_test_patient(db_session)
 
         # Write from practice_prefill
         field1 = service._write_field(
@@ -159,13 +165,13 @@ class TestSourceTaggedFieldWrites:
         )
 
         # Both should be current (different sources)
-        db.refresh(field1)
-        db.refresh(field2)
+        db_session.refresh(field1)
+        db_session.refresh(field2)
         assert field1.is_current is True
         assert field2.is_current is True
 
         # Query current fields for this key should return 2
-        current_fields = db.query(PlatformPatientField).filter(
+        current_fields = db_session.query(PlatformPatientField).filter(
             PlatformPatientField.patient_id == patient_id,
             PlatformPatientField.field_key == "legal_first_name",
             PlatformPatientField.is_current == True,
@@ -174,8 +180,8 @@ class TestSourceTaggedFieldWrites:
 
     def test_invalid_source_raises_error(self, db_session: Session):
         """Writing with invalid source should raise ValueError"""
-        service = PatientProfileService(db)
-        patient_id = self._create_test_patient(db)
+        service = PatientProfileService(db_session)
+        patient_id = _create_test_patient(db_session)
 
         with pytest.raises(ValueError, match="Invalid source"):
             service._write_field(
@@ -191,8 +197,8 @@ class TestImmutableHistory:
 
     def test_field_history_preserved(self, db_session: Session):
         """Field history should preserve all values including superseded"""
-        service = PatientProfileService(db)
-        patient_id = self._create_test_patient(db)
+        service = PatientProfileService(db_session)
+        patient_id = _create_test_patient(db_session)
 
         # Write 3 versions of same field
         service._write_field(
@@ -225,8 +231,8 @@ class TestImmutableHistory:
 
     def test_superseded_fields_have_timestamps(self, db_session: Session):
         """Superseded fields should have superseded_at timestamp"""
-        service = PatientProfileService(db)
-        patient_id = self._create_test_patient(db)
+        service = PatientProfileService(db_session)
+        patient_id = _create_test_patient(db_session)
 
         field1 = service._write_field(
             patient_id=patient_id,
@@ -243,7 +249,7 @@ class TestImmutableHistory:
             source="self_reported",
         )
 
-        db.refresh(field1)
+        db_session.refresh(field1)
         assert field1.superseded_at is not None
         assert field1.superseded_at <= datetime.utcnow()
 
@@ -253,8 +259,8 @@ class TestUpdatePatientField:
 
     def test_update_field_logs_discrepancy_on_mismatch(self, db_session: Session):
         """Updating field from different source with different value should log discrepancy"""
-        service = PatientProfileService(db)
-        patient_id = self._create_test_patient(db)
+        service = PatientProfileService(db_session)
+        patient_id = _create_test_patient(db_session)
 
         # Set initial value from self_reported
         service.update_patient_field(
@@ -277,7 +283,7 @@ class TestUpdatePatientField:
         )
 
         # Check for discrepancy event
-        result = db.execute(text("""
+        result = db_session.execute(text("""
             SELECT event_type, payload
             FROM platform_events
             WHERE patient_id = :patient_id
@@ -295,8 +301,8 @@ class TestUpdatePatientField:
 
     def test_update_field_no_discrepancy_on_same_value(self, db_session: Session):
         """Updating field with same value from different source should not log discrepancy"""
-        service = PatientProfileService(db)
-        patient_id = self._create_test_patient(db)
+        service = PatientProfileService(db_session)
+        patient_id = _create_test_patient(db_session)
 
         # Set initial value
         service.update_patient_field(
@@ -319,7 +325,7 @@ class TestUpdatePatientField:
         )
 
         # Should NOT have discrepancy event
-        result = db.execute(text("""
+        result = db_session.execute(text("""
             SELECT COUNT(*)
             FROM platform_events
             WHERE patient_id = :patient_id
@@ -330,7 +336,7 @@ class TestUpdatePatientField:
 
     def test_update_nonexistent_patient_raises_error(self, db_session: Session):
         """Updating field for non-existent patient should raise ValueError"""
-        service = PatientProfileService(db)
+        service = PatientProfileService(db_session)
         fake_id = uuid4()
 
         with pytest.raises(ValueError, match="not found"):
@@ -347,12 +353,17 @@ class TestUpdatePatientField:
 # Helper fixtures
 def _create_test_patient(db_session: Session) -> uuid4:
     """Create a test patient and return ID"""
+    import uuid
     patient = PlatformPatient(
         legal_first_name="Test",
         legal_last_name="Patient",
-        email="test@example.com",
+        email=f"test-{uuid.uuid4().hex[:8]}@example.com",
     )
     db_session.add(patient)
     db_session.commit()
     db_session.refresh(patient)
     return patient.id
+
+
+
+

@@ -1,7 +1,7 @@
-"""Integration tests for Patient Profile Service - Discrepancy Detection (PR P2)
+﻿"""Integration tests for Patient Profile Service - Discrepancy Detection (PR P2)
 
 Tests discrepancy detection between self_reported and practice_prefill values.
-Validates per-spec §8.4: discrepancies detected when same field has different
+Validates per-spec Â§8.4: discrepancies detected when same field has different
 values from different sources.
 
 Critical validations:
@@ -13,7 +13,7 @@ Critical validations:
 """
 import pytest
 from sqlalchemy.orm import Session
-from datetime import datetime
+from datetime import datetime, date
 from uuid import uuid4
 
 from app.services.patient_profile import PatientProfileService
@@ -27,8 +27,8 @@ class TestDiscrepancyDetection:
 
     def test_no_discrepancies_with_single_source(self, db_session: Session):
         """Single source values should not create discrepancies"""
-        service = PatientProfileService(db)
-        patient_id = self._create_test_patient(db)
+        service = PatientProfileService(db_session)
+        patient_id = _create_test_patient(db_session)
 
         # Write multiple fields from same source
         service._write_field(
@@ -49,8 +49,8 @@ class TestDiscrepancyDetection:
 
     def test_discrepancy_detected_different_values_different_sources(self, db_session: Session):
         """Different values from different sources should create discrepancy"""
-        service = PatientProfileService(db)
-        patient_id = self._create_test_patient(db)
+        service = PatientProfileService(db_session)
+        patient_id = _create_test_patient(db_session)
 
         # Write same field from different sources with different values
         service._write_field(
@@ -74,8 +74,8 @@ class TestDiscrepancyDetection:
 
     def test_same_value_different_sources_not_discrepancy(self, db_session: Session):
         """Same value from different sources should NOT be a discrepancy"""
-        service = PatientProfileService(db)
-        patient_id = self._create_test_patient(db)
+        service = PatientProfileService(db_session)
+        patient_id = _create_test_patient(db_session)
 
         # Write same field from different sources with SAME value
         service._write_field(
@@ -96,8 +96,8 @@ class TestDiscrepancyDetection:
 
     def test_multiple_discrepancies_detected(self, db_session: Session):
         """Multiple fields with conflicts should all be detected"""
-        service = PatientProfileService(db)
-        patient_id = self._create_test_patient(db)
+        service = PatientProfileService(db_session)
+        patient_id = _create_test_patient(db_session)
 
         # Create discrepancies for 3 fields
         service._write_field(
@@ -149,8 +149,8 @@ class TestDiscrepancyDetection:
 
     def test_three_sources_with_two_conflicting(self, db_session: Session):
         """Three sources where two agree, one differs -> discrepancy detected"""
-        service = PatientProfileService(db)
-        patient_id = self._create_test_patient(db)
+        service = PatientProfileService(db_session)
+        patient_id = _create_test_patient(db_session)
 
         # self_reported: John
         service._write_field(
@@ -185,8 +185,8 @@ class TestDiscrepancyDetection:
 
     def test_superseded_values_not_in_discrepancy_check(self, db_session: Session):
         """Superseded values should NOT participate in discrepancy detection"""
-        service = PatientProfileService(db)
-        patient_id = self._create_test_patient(db)
+        service = PatientProfileService(db_session)
+        patient_id = _create_test_patient(db_session)
 
         # Write from self_reported
         field1 = service._write_field(
@@ -226,8 +226,8 @@ class TestDiscrepancyResponseStructure:
 
     def test_discrepancy_has_detected_at_timestamp(self, db_session: Session):
         """Discrepancy objects should include detected_at timestamp"""
-        service = PatientProfileService(db)
-        patient_id = self._create_test_patient(db)
+        service = PatientProfileService(db_session)
+        patient_id = _create_test_patient(db_session)
 
         service._write_field(
             patient_id=patient_id,
@@ -249,8 +249,8 @@ class TestDiscrepancyResponseStructure:
 
     def test_discrepancy_values_dict_source_to_value(self, db_session: Session):
         """Discrepancy.values should be dict mapping source -> value"""
-        service = PatientProfileService(db)
-        patient_id = self._create_test_patient(db)
+        service = PatientProfileService(db_session)
+        patient_id = _create_test_patient(db_session)
 
         service._write_field(
             patient_id=patient_id,
@@ -286,8 +286,8 @@ class TestDiscrepancyEventLogging:
 
     def test_discrepancy_logged_on_field_update(self, db_session: Session):
         """Field update with conflicting value should log discrepancy event"""
-        service = PatientProfileService(db)
-        patient_id = self._create_test_patient(db)
+        service = PatientProfileService(db_session)
+        patient_id = _create_test_patient(db_session)
 
         # Set initial value
         service.update_patient_field(
@@ -311,7 +311,7 @@ class TestDiscrepancyEventLogging:
 
         # Should have logged discrepancy event
         from sqlalchemy import text
-        result = db.execute(text("""
+        result = db_session.execute(text("""
             SELECT event_type, payload
             FROM platform_events
             WHERE patient_id = :patient_id
@@ -332,8 +332,8 @@ class TestGetPatientProfileWithDiscrepancies:
 
     def test_get_profile_returns_current_fields(self, db_session: Session):
         """get_patient_profile should return current fields from all sources"""
-        service = PatientProfileService(db)
-        patient_id = self._create_test_patient(db)
+        service = PatientProfileService(db_session)
+        patient_id = _create_test_patient(db_session)
 
         service._write_field(
             patient_id=patient_id,
@@ -362,12 +362,17 @@ class TestGetPatientProfileWithDiscrepancies:
 # Helper
 def _create_test_patient(db_session: Session) -> uuid4:
     """Create a test patient and return ID"""
+    import uuid
     patient = PlatformPatient(
         legal_first_name="Test",
         legal_last_name="Patient",
-        email="test@example.com",
+        email=f"test-{uuid.uuid4().hex[:8]}@example.com",
     )
     db_session.add(patient)
     db_session.commit()
     db_session.refresh(patient)
     return patient.id
+
+
+
+
