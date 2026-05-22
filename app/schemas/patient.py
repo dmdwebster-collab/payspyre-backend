@@ -34,11 +34,17 @@ class PatientFieldValue(BaseModel):
     confidence: Optional[float]
     verified_at: datetime
 
+    class Config:
+        from_attributes = True
+
 
 class FieldDiscrepancy(BaseModel):
     field_key: str
     values: dict[str, Any]  # source -> value mapping
     detected_at: datetime
+
+    class Config:
+        from_attributes = True
 
 
 class PatientProfileResponse(BaseModel):

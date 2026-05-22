@@ -251,7 +251,9 @@ class TestImmutableHistory:
 
         db_session.refresh(field1)
         assert field1.superseded_at is not None
-        assert field1.superseded_at <= datetime.utcnow()
+        # Compare aware datetimes (both are timezone-aware from Postgres)
+        from datetime import timezone
+        assert field1.superseded_at <= datetime.now(timezone.utc)
 
 
 class TestUpdatePatientField:

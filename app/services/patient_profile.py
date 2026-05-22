@@ -278,9 +278,9 @@ class PatientProfileService:
         self.db.commit()
         self.db.refresh(new_field)
 
-        # Link superseded record
+        # Link superseded record: old field points to new field
         if existing_current:
-            new_field.superseded_by_id = existing_current.id
+            existing_current.superseded_by_id = new_field.id
             self.db.commit()
 
         return new_field
