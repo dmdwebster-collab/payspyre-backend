@@ -32,6 +32,8 @@ metadata:
 - No ALTER TABLE on `loan_applications`
 - No data migration in PR P1
 
+**Note on `vendors` table:** This is a NEW table created in PR P1, not a reference to a pre-existing shared schema. The v1 `loan_applications` references `vendors`, but that table does not exist in this fresh Supabase project. A minimal `vendors` stub (id, name, slug) is created in PR P1 to satisfy FK constraints. Real vendors model with full CRUD UI is deferred to PR Pv (vendor-facing work).
+
 ---
 
 ## Decision 2: Auth/identity — JWKS-based JWT validation (Supabase-ready but not required)

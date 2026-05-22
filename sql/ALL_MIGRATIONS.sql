@@ -22,6 +22,26 @@ CREATE TABLE IF NOT EXISTS alembic_version (
 );
 
 
+-- ============================================================
+-- Minimal vendors stub (ADR 0001)
+-- ============================================================
+-- Real vendors model comes later (PR Pv — vendor-facing UI).
+-- For now: just enough to satisfy FK constraints on platform_credit_applications.
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS vendors (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name TEXT NOT NULL,
+    slug TEXT UNIQUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Seed one vendor for dev/test
+INSERT INTO vendors (name, slug) VALUES ('Kelowna Dental Centre', 'kdc')
+ON CONFLICT (slug) DO NOTHING;
+
+
 -- Migration 015: 015_create_platform_patients.py
 -- Platform patients table — canonical human record
 -- ============================================================
