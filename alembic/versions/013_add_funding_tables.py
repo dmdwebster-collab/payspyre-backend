@@ -29,12 +29,12 @@ def upgrade() -> None:
     # ========================================================================
     # CREATE ENUM TYPES
     # ========================================================================
-    op.execute("CREATE TYPE disbursement_method AS ENUM ('etransfer', 'wire', 'cheque')")
-    op.execute("CREATE TYPE funding_status AS ENUM ('pending', 'processing', 'completed', 'failed')")
-    op.execute("CREATE TYPE payment_method AS ENUM ('pre_authorized_debit', 'etransfer', 'cheque')")
-    op.execute("CREATE TYPE payment_status AS ENUM ('pending', 'processing', 'completed', 'failed', 'refunded')")
-    op.execute("CREATE TYPE refund_method AS ENUM ('etransfer', 'wire', 'cheque', 'original_payment')")
-    op.execute("CREATE TYPE refund_status AS ENUM ('pending', 'processing', 'completed', 'failed')")
+    op.execute("CREATE TYPE IF NOT EXISTS disbursement_method AS ENUM ('etransfer', 'wire', 'cheque')")
+    op.execute("CREATE TYPE IF NOT EXISTS funding_status AS ENUM ('pending', 'processing', 'completed', 'failed')")
+    op.execute("CREATE TYPE IF NOT EXISTS payment_method AS ENUM ('pre_authorized_debit', 'etransfer', 'cheque')")
+    op.execute("CREATE TYPE IF NOT EXISTS payment_status AS ENUM ('pending', 'processing', 'completed', 'failed', 'refunded')")
+    op.execute("CREATE TYPE IF NOT EXISTS refund_method AS ENUM ('etransfer', 'wire', 'cheque', 'original_payment')")
+    op.execute("CREATE TYPE IF NOT EXISTS refund_status AS ENUM ('pending', 'processing', 'completed', 'failed')")
 
     # ========================================================================
     # CREATE funding TABLE
