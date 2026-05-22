@@ -12,7 +12,7 @@ You are working in the `payspyre-backend` repo. The existing KYC orchestration (
 
 ## MVP scope (8 PRs)
 
-1. **PR P0** — Rename `clinic_id` → `vendor_id` everywhere (DB columns, models, services, tests, docs). One PR, no logic changes. **Do this before P1.**
+1. **PR P0** — Complete. Spec updated to use `vendor_id` (matching existing `vendors` table) instead of `clinic_id`.
 2. **PR P1** — Migrations for §2.1–2.7: `platform_patients`, `platform_patient_fields`, `platform_credit_products`, `platform_credit_applications`, `platform_verifications`, `platform_consents`, `platform_events`. Includes `REVOKE UPDATE, DELETE ON platform_events`. Add test that revoke took effect.
 3. **PR P2** — Patient profile service. CRUD with source-tagged field writes (`self_reported` | `practice_prefill` | `id_doc`). No UI yet.
 4. **PR P3** — Credit product service. Admin CRUD + JSON Schema validation for `verification_matrix`. Seed one product: `dental_full_arch_v1` with the §3.3 config.

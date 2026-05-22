@@ -219,7 +219,7 @@ CREATE TABLE platform_credit_applications (
     patient_proposed_amount_cents BIGINT, -- captured if patient entered/adjusted
 
     -- Origination context
-    clinic_id UUID,  -- nullable for direct-to-consumer
+    vendor_id UUID,  -- nullable for direct-to-consumer; references vendors.id
     treatment_plan_ref TEXT,
 
     -- State
@@ -357,7 +357,7 @@ CREATE TABLE platform_marketplace_listings (
 
     -- Marketplace economics
     base_lead_price_cents INTEGER NOT NULL,  -- pricing engine fills this in
-    accepted_clinic_id UUID,
+    accepted_vendor_id UUID,
     accepted_at TIMESTAMPTZ,
 
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -370,10 +370,10 @@ CREATE TABLE platform_marketplace_listings (
 Records when a clinic expresses interest in a listing — and when they're charged.
 
 ```sql
-CREATE TABLE platform_marketplace_clinic_interest (
+CREATE TABLE platform_marketplace_vendor_interest (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     listing_id UUID NOT NULL REFERENCES platform_marketplace_listings(id),
-    clinic_id UUID NOT NULL,
+    vendor_id UUID NOT NULL,
     expressed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     selected_by_patient_at TIMESTAMPTZ,
     appointment_booked_at TIMESTAMPTZ,
@@ -850,17 +850,17 @@ multipliers:
 charge_trigger: 'patient_selected'  # 'expressed_interest' | 'patient_selected' | 'appointment_booked' | 'treatment_completed'
 ```
 
-### 6.3 Clinic marketplace API
+### 6.3 Vendor marketplace API
 
 Endpoints needed:
 
 ```
-GET    /api/clinic/v1/marketplace/leads
+GET    /api/vendor/v1/marketplace/leads
        ?treatment_category=implants&max_distance_km=25&min_verification=id_verified
-POST   /api/clinic/v1/marketplace/leads/{listing_id}/express_interest
-GET    /api/clinic/v1/marketplace/listings/{listing_id}  (after interest expressed)
-POST   /api/clinic/v1/marketplace/listings/{listing_id}/book_appointment
-GET    /api/clinic/v1/marketplace/billing/leads  (history + charges)
+POST   /api/vendor/v1/marketplace/leads/{listing_id}/express_interest
+GET    /api/vendor/v1/marketplace/listings/{listing_id}  (after interest expressed)
+POST   /api/vendor/v1/marketplace/listings/{listing_id}/book_appointment
+GET    /api/vendor/v1/marketplace/billing/leads  (history + charges)
 ```
 
 Patient-side:
@@ -893,7 +893,7 @@ default_visibility:
     priority_placement: true
 ```
 
-PII never goes over the wire to clinics until the patient selects them. Pre-select, clinics see: treatment category, urgency, postal-code first-3 (FSA), verification depth, lead state, estimated budget range.
+PII never goes over the wire to vendors until the patient selects them. Pre-select, vendors see: treatment category, urgency, postal-code first-3 (FSA), verification depth, lead state, estimated budget range.
 
 ---
 
@@ -996,7 +996,7 @@ app/api/v1/endpoints/
 ├── platform_credit_products.py     # admin only — internal product config
 ├── platform_credit_applications.py
 ├── platform_marketplace.py         # patient-side
-├── platform_marketplace_clinic.py  # clinic-side
+├── platform_marketplace_vendor.py  # vendor-side
 ├── platform_cross_sell.py
 └── platform_admin.py               # back-office operations
 ```
@@ -1058,7 +1058,7 @@ Each follows the same pattern as the existing Didit webhook handler:
 
 - **PR P13** — Marketplace tables (§2.8, §2.9) + listing service + lead pricing engine (§6.2).
 - **PR P14** — Patient-side marketplace endpoints + listing creation UI flow.
-- **PR P15** — Clinic-side marketplace endpoints + clinic dashboard UI.
+- **PR P15** — Vendor-side marketplace endpoints + vendor dashboard UI.
 - **PR P16** — Lead billing (charge trigger logic, integration with existing billing system if any — confirm with Mike).
 
 ### Phase D — Cross-sell & monetization scaffolds
@@ -1082,7 +1082,7 @@ Per `app/services/metrics/platform_metrics.py`:
 
 | Metric | Tag dimensions |
 |--------|----------------|
-| `application.started` | credit_product_code, clinic_id, vertical |
+| `application.started` | credit_product_code, vendor_id, vertical |
 | `application.step_completed` | credit_product_code, step_type, result |
 | `application.completed` | credit_product_code, decision |
 | `verification.completed` | type, vendor, status, cost_cents |
@@ -1090,8 +1090,8 @@ Per `app/services/metrics/platform_metrics.py`:
 | `consent.revoked` | purpose |
 | `lead_state_changed` | from_state, to_state |
 | `marketplace.listing_created` | treatment_category, lead_state |
-| `marketplace.clinic_interest` | clinic_id, treatment_category |
-| `marketplace.lead_charged` | clinic_id, charge_trigger, amount_cents |
+| `marketplace.vendor_interest` | vendor_id, treatment_category |
+| `marketplace.lead_charged` | vendor_id, charge_trigger, amount_cents |
 
 Expose via Prometheus endpoint; ship to existing observability stack.
 
@@ -1121,7 +1121,7 @@ Restating from the KYC kickoff, extended for platform:
 If you hit any of these, **stop and ask Mike.**
 
 1. **Existing `applications` table.** Does one already exist in `payspyre-backend`? If so, do we migrate to `platform_credit_applications` or extend the existing one?
-2. **Clinic/practice table.** Where does `clinic_id` resolve to? Is there an existing `practices` or `clinics` table from KDC/Alvero shared via the same DB?
+2. **Vendor/practice table.** The existing `vendors` table serves as the clinic/practice table. `vendor_id` in v2 tables references `vendors.id`.
 3. **Auth/identity.** Does PaySpyre have its own user auth, or share with Alvero's Supabase Auth? Where do clinic users authenticate from?
 4. **Billing rails.** Is there an existing billing/invoicing system for clinics that the marketplace lead charges should plug into? Or do we build a new one?
 5. **Equifax soft-pull contractual access.** Confirmed with Mike that this is being pursued separately. PR P12 implements but feature-flags off pending confirmation.
