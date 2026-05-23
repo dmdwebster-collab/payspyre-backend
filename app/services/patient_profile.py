@@ -1,4 +1,5 @@
 from datetime import datetime
+from hashlib import sha256
 from typing import Optional, Any
 from uuid import UUID
 
@@ -14,6 +15,17 @@ from app.schemas.patient import (
     PatientFieldValue,
     FieldDiscrepancy,
 )
+
+
+def _hash_value(value: Any) -> str:
+    """
+    Deterministic short hash of a field value, for inclusion in WORM event payloads
+    without storing the raw PII. 12 hex chars = 48 bits — enough to confirm a later
+    value matches/differs but not to recover the original.
+    """
+    if value is None:
+        return "null"
+    return sha256(str(value).encode("utf-8")).hexdigest()[:12]
 
 
 class PatientProfileService:
@@ -76,11 +88,14 @@ class PatientProfileService:
             )
 
         # Log quickstart event
+        # Hard Rule #6: no PII in event payloads. Email is captured in the
+        # source-tagged patient_fields row (system of record); event log only
+        # records the fact that quickstart happened, never the values.
         self._log_event(
             patient_id=patient.id,
             event_type="patient.quickstart_completed",
             actor="patient",
-            payload={"email": data.email, "source": "self_reported"},
+            payload={"source": "self_reported"},
         )
 
         return patient
@@ -313,16 +328,24 @@ class PatientProfileService:
         new_source: str,
         actor: str,
     ) -> PlatformEvent:
-        """Log a field discrepancy detection event."""
+        """
+        Log a field discrepancy detection event.
+
+        Hard Rule #6: no PII in event payloads. Raw values are stored in
+        platform_patient_fields (system of record) — events only carry
+        deterministic short hashes so audit can confirm a mismatch happened
+        and link to the field rows, without writing the actual values into
+        the WORM event log.
+        """
         event = PlatformEvent(
             patient_id=patient_id,
             event_type="patient.field_discrepancy_detected",
             actor=actor,
             payload={
                 "field_key": field_key,
-                "existing_value": existing_value,
+                "existing_value_hash": _hash_value(existing_value),
                 "existing_source": existing_source,
-                "new_value": new_value,
+                "new_value_hash": _hash_value(new_value),
                 "new_source": new_source,
             },
         )

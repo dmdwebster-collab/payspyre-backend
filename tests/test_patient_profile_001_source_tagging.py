@@ -1,7 +1,7 @@
 ﻿"""Integration tests for Patient Profile Service - Source Tagging (PR P2)
 
 Tests source-tagged field writes, supersession, and immutable history.
-Validates platform_patient_fields behavior per spec Â§2.2.
+Validates platform_patient_fields behavior per spec §2.2.
 
 Critical validations:
 - Fields are written with correct source tagging
@@ -14,6 +14,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from datetime import datetime, date
+from hashlib import sha256
 from uuid import uuid4
 
 from app.services.patient_profile import PatientProfileService
@@ -87,8 +88,12 @@ class TestPatientQuickstart:
         assert result is not None
         assert result[0] == "patient.quickstart_completed"
         assert result[1] == "patient"
-        assert result[2]["email"].startswith("jane.smith.")
-        assert result[2]["email"].endswith("@example.com")
+        # Hard Rule #6: no PII in event payloads. Email is the system-of-record
+        # in platform_patient_fields, NOT in platform_events. Event payload only
+        # records the fact that quickstart happened, plus the source tag.
+        payload = result[2]
+        assert payload["source"] == "self_reported"
+        assert "email" not in payload
 
 
 class TestSourceTaggedFieldWrites:
@@ -296,10 +301,17 @@ class TestUpdatePatientField:
         assert result[0] == "patient.field_discrepancy_detected"
         payload = result[1]
         assert payload["field_key"] == "legal_first_name"
-        assert payload["existing_value"] == "John"
         assert payload["existing_source"] == "self_reported"
-        assert payload["new_value"] == "Jon"
         assert payload["new_source"] == "practice_prefill"
+        # Hard Rule #6: raw values are NOT stored in WORM event log — only
+        # deterministic short hashes. Raw values live in platform_patient_fields.
+        expected_existing_hash = sha256(b"John").hexdigest()[:12]
+        expected_new_hash = sha256(b"Jon").hexdigest()[:12]
+        assert payload["existing_value_hash"] == expected_existing_hash
+        assert payload["new_value_hash"] == expected_new_hash
+        assert payload["existing_value_hash"] != payload["new_value_hash"]
+        assert "existing_value" not in payload
+        assert "new_value" not in payload
 
     def test_update_field_no_discrepancy_on_same_value(self, db_session: Session):
         """Updating field with same value from different source should not log discrepancy"""
@@ -365,7 +377,3 @@ def _create_test_patient(db_session: Session) -> uuid4:
     db_session.commit()
     db_session.refresh(patient)
     return patient.id
-
-
-
-
