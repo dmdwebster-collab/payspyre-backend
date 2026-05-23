@@ -4,7 +4,7 @@ services:
 - name: web
   source_dir: /
   github:
-    repo: michael-webster/payspyre-backend
+    repo: dmdwebster-collab/payspyre-backend
     branch: main
   dockerfile_path: Dockerfile
   instance_count: 1
