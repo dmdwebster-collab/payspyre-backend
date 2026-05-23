@@ -86,14 +86,17 @@ def db_session():
     # user email, etc.) when fixtures hardcode values like 'test@example.com'.
     #
     # IMPORTANT: never truncate tables that hold seed/reference data populated
-    # by migrations (roles, permissions, platform_credit_products, etc.) —
-    # tests like test_kyc_001_schema rely on those rows existing.
+    # by migrations (roles, permissions, etc.) — those rows are required by
+    # tests but never modified by them, so it's safe and correct to keep them.
+    #
+    # platform_credit_products is NOT in SEED_TABLES because tests both
+    # create and read credit products. We truncate it and then re-insert
+    # the dental_full_arch_v1 seed row (the only one required by tests).
     SEED_TABLES = {
         "alembic_version",
         "roles",
         "role_permissions",
         "permissions",
-        "platform_credit_products",
     }
     if has_migrations or is_supabase:
         from sqlalchemy import text
@@ -107,6 +110,34 @@ def db_session():
             if truncatable:
                 quoted = ", ".join(f'"{t}"' for t in truncatable)
                 conn.execute(text(f"TRUNCATE {quoted} RESTART IDENTITY CASCADE"))
+
+            # Re-seed the dental_full_arch_v1 credit product after TRUNCATE.
+            # Mirrors alembic migration 022_seed_dental_full_arch_v1. Tests in
+            # test_credit_products_service.py and test_flow_engine.py depend
+            # on this row. ON CONFLICT DO NOTHING keeps it idempotent.
+            conn.execute(text("""
+                INSERT INTO platform_credit_products
+                    (code, name, vertical, status, min_amount_cents, max_amount_cents,
+                     currency, verification_matrix, decision_ruleset, pricing_config,
+                     funding_source)
+                VALUES (
+                    'dental_full_arch_v1',
+                    'Dental Full Arch v1',
+                    'dental'::platform_vertical,
+                    'active'::platform_credit_product_status,
+                    1500000,
+                    8000000,
+                    'CAD',
+                    CAST(:vm AS jsonb),
+                    'dental_full_arch_v1.yaml',
+                    CAST(:pc AS jsonb),
+                    'payspyre_capital'::platform_funding_source
+                )
+                ON CONFLICT (code) DO NOTHING
+            """), {
+                "vm": '{"identity": {"required": true, "methods": ["email_otp", "id_doc_scan"], "min_confidence": 0.85}, "income": {"required": true, "methods": ["bank_link", "t4", "noa"], "require_bank_link": false, "min_stated_income_cents": 5000000}, "bureau": {"soft_pull_required": true, "hard_pull_required": true, "min_score": 660, "max_score_age_days": 90}, "affordability": {"max_dti": 0.43, "min_payment_to_income_ratio": 0.20, "max_loan_to_income_ratio": 3.0}}',
+                "pc": '{"term_options": [24, 36, 48, 60], "apr_range": [7.99, 28.99], "origination_fee_pct": 0.025}',
+            })
 
     session = TestingSessionLocal()
     try:
