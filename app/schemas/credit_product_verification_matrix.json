@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://payspyre.com/schemas/credit-product-verification-matrix/v1",
+  "title": "CreditProductVerificationMatrix",
+  "description": "Defines which verifications run for a credit product. All four blocks are required.",
+  "type": "object",
+  "required": ["identity", "income", "bureau", "affordability"],
+  "additionalProperties": false,
+  "properties": {
+    "identity": {
+      "description": "KYC / identity verification requirements",
+      "type": "object",
+      "required": ["required", "methods"],
+      "additionalProperties": false,
+      "properties": {
+        "required": {
+          "type": "boolean"
+        },
+        "methods": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["phone_otp", "email_otp", "id_doc_scan", "biometric_match"]
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "min_confidence": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0
+        }
+      }
+    },
+    "income": {
+      "description": "Income verification requirements — bank link, paystubs, T4, NOA",
+      "type": "object",
+      "required": ["required", "methods"],
+      "additionalProperties": false,
+      "properties": {
+        "required": {
+          "type": "boolean"
+        },
+        "methods": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["bank_link", "paystub", "t4", "noa"]
+          },
+          "uniqueItems": true
+        },
+        "require_bank_link": {
+          "type": "boolean"
+        },
+        "min_stated_income_cents": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "bureau": {
+      "description": "Credit bureau pull requirements and score thresholds",
+      "type": "object",
+      "required": ["soft_pull_required", "hard_pull_required"],
+      "additionalProperties": false,
+      "properties": {
+        "soft_pull_required": {
+          "type": "boolean"
+        },
+        "hard_pull_required": {
+          "type": "boolean"
+        },
+        "min_score": {
+          "type": "integer",
+          "minimum": 300,
+          "maximum": 900
+        },
+        "max_score_age_days": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 365
+        }
+      }
+    },
+    "affordability": {
+      "description": "Debt-to-income and payment ratio rules",
+      "type": "object",
+      "required": ["max_dti"],
+      "additionalProperties": false,
+      "properties": {
+        "max_dti": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0
+        },
+        "min_payment_to_income_ratio": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0
+        },
+        "max_loan_to_income_ratio": {
+          "type": "number",
+          "minimum": 0.0
+        }
+      }
+    }
+  }
+}

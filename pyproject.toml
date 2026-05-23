@@ -29,6 +29,7 @@ dependencies = [
     "structlog>=24.1.0",
     "python-json-logger>=2.0.7",
     "sentry-sdk[fastapi]>=1.44.0",
+    "jsonschema>=4.20.0",
 ]
 
 [tool.pytest.ini_options]
