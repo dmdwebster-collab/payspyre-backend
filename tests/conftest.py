@@ -78,6 +78,36 @@ def db_session():
 
     if is_local and not is_supabase and not has_migrations:
         Base.metadata.create_all(bind=test_engine)
+
+    # Truncate test-data tables before each test to guarantee isolation.
+    # When tests run against a migrated DB (CI / Supabase), drop_all is not
+    # safe because migrations are the source of truth — so we TRUNCATE instead.
+    # This prevents cross-test collisions on UNIQUE constraints (vendor email,
+    # user email, etc.) when fixtures hardcode values like 'test@example.com'.
+    #
+    # IMPORTANT: never truncate tables that hold seed/reference data populated
+    # by migrations (roles, permissions, platform_credit_products, etc.) —
+    # tests like test_kyc_001_schema rely on those rows existing.
+    SEED_TABLES = {
+        "alembic_version",
+        "roles",
+        "role_permissions",
+        "permissions",
+        "platform_credit_products",
+    }
+    if has_migrations or is_supabase:
+        from sqlalchemy import text
+        with test_engine.begin() as conn:
+            all_tables = [
+                row[0] for row in conn.execute(text(
+                    "SELECT tablename FROM pg_tables WHERE schemaname = 'public'"
+                ))
+            ]
+            truncatable = [t for t in all_tables if t not in SEED_TABLES]
+            if truncatable:
+                quoted = ", ".join(f'"{t}"' for t in truncatable)
+                conn.execute(text(f"TRUNCATE {quoted} RESTART IDENTITY CASCADE"))
+
     session = TestingSessionLocal()
     try:
         yield session
