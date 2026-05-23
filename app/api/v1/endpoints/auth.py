@@ -48,7 +48,7 @@ async def register(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    await await rate_limit(auth_rate_limiter)(request)
+    await rate_limit(auth_rate_limiter)(request)
 
     auth_service = AuthService(db)
     try:
