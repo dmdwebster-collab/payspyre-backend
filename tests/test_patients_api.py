@@ -43,7 +43,7 @@ def _quickstart_payload(suffix: str | None = None) -> dict:
     return {
         "legal_first_name": "Test",
         "legal_last_name": f"Patient_{s}",
-        "email": f"e2e_{s}@payspyre.test",
+        "email": f"e2e_{s}@example.com",
         "phone_e164": "+14165551234",
         "dob": "1990-04-12",
     }
@@ -57,7 +57,7 @@ def _quickstart_payload(suffix: str | None = None) -> dict:
 @pytest.fixture
 def client(db_session: Session):
     """TestClient with auth and db overridden."""
-    fake_user = type("U", (), {"id": uuid.uuid4(), "email": "user@payspyre.test", "role": "patient"})()
+    fake_user = type("U", (), {"id": uuid.uuid4(), "email": "user@example.com", "role": "patient"})()
 
     app.dependency_overrides[get_db] = lambda: db_session
     app.dependency_overrides[get_current_user] = lambda: fake_user
