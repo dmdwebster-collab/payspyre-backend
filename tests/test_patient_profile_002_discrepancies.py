@@ -1,7 +1,7 @@
 ﻿"""Integration tests for Patient Profile Service - Discrepancy Detection (PR P2)
 
 Tests discrepancy detection between self_reported and practice_prefill values.
-Validates per-spec Â§8.4: discrepancies detected when same field has different
+Validates per-spec §8.4: discrepancies detected when same field has different
 values from different sources.
 
 Critical validations:
@@ -323,8 +323,13 @@ class TestDiscrepancyEventLogging:
         assert result is not None
         payload = result[1]
         assert payload["field_key"] == "legal_last_name"
-        assert "existing_value" in payload
-        assert "new_value" in payload
+        # Hard Rule #6: raw values are NOT stored in WORM event log — only
+        # deterministic short hashes. Raw values live in platform_patient_fields.
+        assert "existing_value_hash" in payload
+        assert "new_value_hash" in payload
+        assert payload["existing_value_hash"] != payload["new_value_hash"]
+        assert "existing_value" not in payload
+        assert "new_value" not in payload
 
 
 class TestGetPatientProfileWithDiscrepancies:
@@ -372,7 +377,3 @@ def _create_test_patient(db_session: Session) -> uuid4:
     db_session.commit()
     db_session.refresh(patient)
     return patient.id
-
-
-
-
