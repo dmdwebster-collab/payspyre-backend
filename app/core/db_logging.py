@@ -48,10 +48,15 @@ def setup_db_logging(engine: Engine) -> None:
             logger.debug("query", **log_data)
 
     @event.listens_for(engine, "handle_error")
-    def handle_error(**kwargs):
-        """Log database errors."""
-        exception = kwargs.get('exception')
-        statement = kwargs.get('statement', '')
+    def handle_error(context):
+        """Log database errors.
+
+        SQLAlchemy's handle_error event passes a single positional
+        ExceptionContext object — not kwargs. See:
+        https://docs.sqlalchemy.org/en/20/core/events.html#sqlalchemy.events.ConnectionEvents.handle_error
+        """
+        exception = context.original_exception
+        statement = context.statement or ""
         clean_statement = statement.strip()[:200] if statement else ""
         logger.error(
             "db_error",

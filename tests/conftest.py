@@ -78,6 +78,28 @@ def db_session():
 
     if is_local and not is_supabase and not has_migrations:
         Base.metadata.create_all(bind=test_engine)
+
+    # Truncate all data tables before each test to guarantee isolation.
+    # When tests run against a migrated DB (CI / Supabase), drop_all is not
+    # safe because migrations are the source of truth — so we TRUNCATE instead.
+    # This prevents cross-test collisions on UNIQUE constraints (vendor email,
+    # user email, etc.) when fixtures hardcode values like 'test@example.com'.
+    if has_migrations or is_supabase:
+        from sqlalchemy import text
+        with test_engine.begin() as conn:
+            # Collect all tables except alembic_version, then truncate them in
+            # one statement with CASCADE so FK ordering doesn't matter.
+            table_names = [
+                row[0] for row in conn.execute(text(
+                    "SELECT tablename FROM pg_tables "
+                    "WHERE schemaname = 'public' "
+                    "AND tablename != 'alembic_version'"
+                ))
+            ]
+            if table_names:
+                quoted = ", ".join(f'"{t}"' for t in table_names)
+                conn.execute(text(f"TRUNCATE {quoted} RESTART IDENTITY CASCADE"))
+
     session = TestingSessionLocal()
     try:
         yield session
