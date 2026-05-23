@@ -51,3 +51,6 @@ logs/
 
 # Alembic
 alembic/versions/*.pyc
+# Local AI tooling
+.claude/
+recover_p3.ps1
