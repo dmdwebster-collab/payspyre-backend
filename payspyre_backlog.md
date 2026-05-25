@@ -14,6 +14,13 @@
 
 - **2026-05-25 (logged from CI cleanup)** — **V1 app-code un-mount refactor (Category C, deferred).** `app/services/stripe.py`, `app/services/underwriting_state_machine.py`, `app/models/document.py` (+ their schemas and the `documents`/`stripe`/`underwriting`/`auth`/`analytics`/`notifications` routers in `app/api/v1/api.py`) are V1 dead code paths — no V2 references remain; only the now-deleted V1 tests exercised them. They are still mounted via `app/main.py`, so they were NOT deleted in the CI-cleanup PR (out of scope). **Un-mount and delete in a separate refactor PR.** Risk: the `client` test fixture imports `app.main`, so each router removal must be re-verified against the V2 API tests (`test_patients_api.py`, `test_credit_products_api.py`) to confirm `app.main` still imports cleanly.
 
+- **2026-05-25** — **`deploy.yml` test job fails with SSL/connection error.**
+  - `.github/workflows/deploy.yml` "test" job runs `pytest --cov=app` against a postgres service, but every DB-backed test errors with `"server does not support SSL, but SSL was required"` connecting to `localhost:5432`.
+  - Affects `consent_service`, `credit_products_api`, `migrations`, and most other DB-backed tests in that job.
+  - Pre-existing: red on `main` across `07c70da`, `c99c06e`, `c522e7b`, `8b72bcd`, `47b6832` (5+ commits before PR #15).
+  - Likely fix (decide in its own kickoff): set `DATABASE_URL`/`TEST_DATABASE_URL` with `sslmode=disable` for the `deploy.yml` test job, OR drop the redundant test step entirely since `tests.yml` already runs the full suite on every PR.
+  - NOT in scope for PR #15. Workflow file changes require their own kickoff + stop-and-ask.
+
 ---
 
 ## P4+ scope (logged from P3 — do not implement in P3)
