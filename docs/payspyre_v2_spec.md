@@ -205,7 +205,7 @@ CREATE TABLE platform_credit_applications (
     credit_product_id UUID NOT NULL REFERENCES platform_credit_products(id),
     credit_product_version INTEGER NOT NULL,  -- snapshot of which product version they applied under
 
-    -- Co-applicant linkage (see §2.11 and §4.5)
+    -- Co-applicant linkage (see §2.11 and §4.6)
     -- If non-null, this row is a co-applicant attached to the primary application.
     -- The primary application's id has this column = NULL.
     co_applicant_of_application_id UUID REFERENCES platform_credit_applications(id),
@@ -250,7 +250,7 @@ CREATE INDEX platform_credit_applications_status ON platform_credit_applications
 CREATE INDEX platform_credit_applications_coapp ON platform_credit_applications (co_applicant_of_application_id) WHERE co_applicant_of_application_id IS NOT NULL;
 ```
 
-**Rule:** a primary application can have at most one co-applicant row referencing it (enforced by partial unique index in PR P3.5). The co-applicant is its own full application row — it runs through the same flow engine with its own verifications. Scoring and decisioning happen at the **application group** level (see §4.5).
+**Rule:** a primary application can have at most one co-applicant row referencing it (enforced by partial unique index in PR P3.5). The co-applicant is its own full application row — it runs through the same flow engine with its own verifications. Scoring and decisioning happen at the **application group** level (see §4.6).
 
 #### 2.4.1 `requested_amount` — how it's set
 
@@ -425,7 +425,7 @@ Co-applicants do **not** get a separate table. Both applicants are full `platfor
 2. Primary clicks "Invite co-applicant" → enters co-applicant email **or** generates a share code (random 8-char token, single use, 24h expiry).
 3. Co-applicant follows the link/code → if no PaySpyre patient profile exists, they create one (same quick-start as primary: name + email + optionally phone), then their own `platform_credit_applications` row is created with `co_applicant_of_application_id = <primary.id>` and `applicant_role = 'co_applicant'`.
 4. Co-applicant runs through the **same flow** the credit product mandates for primaries — there is no separate "co-applicant flow." Same verifications, same consents, same risk rules.
-5. Decisioning waits for both applications to reach a terminal verification state before evaluating the group (§4.5).
+5. Decisioning waits for both applications to reach a terminal verification state before evaluating the group (§4.6).
 
 **Invite storage:** new table `platform_coapplicant_invites` (PR P3.5):
 
@@ -566,58 +566,92 @@ Patient can list on the marketplace with no verifications — lead just gets tag
 
 ## 4. The flow engine
 
-The flow engine is the orchestrator that reads a credit product's verification matrix and runs the steps. **It must be pure — given the same product config + patient state, it produces the same next step.**
+**Status as of 2026-05-25:** Revised after the P4 build to reflect the actual shipped architecture. The flow engine is split into **two layers**: a **pure functional core (P4, shipped)** and a **stateful orchestration layer (P6, not yet built)**. Earlier drafts of this section described a single stateful module; that was rejected during P4 design because it conflated decision logic with side-effects and made unit testing impossible. The current architecture is what's actually in the codebase.
 
-### 4.1 Module location
+### 4.1 Architecture overview
 
-```
-app/services/flow_engine/
-├── __init__.py
-├── engine.py           # main orchestrator
-├── step_runner.py      # dispatches a single verification step
-├── decision_gate.py    # evaluates whether to proceed/decline after each step
-├── state.py            # FlowState class — immutable snapshot of where we are
-└── tests/
-```
+Two modules, hard boundary between them:
 
-### 4.2 Core API
+| Layer | Purity | Location | PR | Responsibility |
+|---|---|---|---|---|
+| **Functional core** | Pure (no DB, no network, no I/O) | `app/services/flow_engine.py` | P4 (#7), merged | Given `(product_config, application_state)` return `NextStep` and decisioned outcomes |
+| **Orchestration layer** | Side-effecting (DB writes, event emission, vendor calls) | `app/services/flow_orchestrator.py` (planned) | P6 (open) | Wraps the pure core in transactions, persists state changes, emits `platform_events`, manages webhook idempotency |
+
+The orchestrator **calls** the pure core to compute what should happen, then **performs** the writes. The pure core never imports anything from `app/db/` or `app/services/verifications/`.
+
+### 4.2 Pure functional core (shipped P4)
+
+**Location:** `app/services/flow_engine.py` (single file, ~700 LOC, 18 tests, no DB fixtures).
+
+**Inputs:** `ProductConfig` (parsed from `platform_credit_products.verification_matrix`) and `ApplicationState` (parsed from `platform_credit_applications` columns + verification results passed by the orchestrator).
+
+**Outputs:** A `NextStep` discriminated union:
 
 ```python
-from app.services.flow_engine import FlowEngine, FlowState, NextStep
+NextStep = (
+    | RunVerification(type, vendor, params)
+    | AwaitDecisionGate(after_step)
+    | SubmitForDecision()
+    | Complete(outcome: Literal['approved', 'declined', 'manual_review'])
+)
+```
 
-engine = FlowEngine(db_session, config_loader, vendor_registry)
+**Hard rules for the pure core:**
+- No `import` of `sqlalchemy`, `requests`, `httpx`, `asyncpg`, `boto3`, anything I/O-shaped
+- No `datetime.now()` — caller passes `now` explicitly when needed (for deterministic tests)
+- No reading env vars, no reading files (config is passed in as a dataclass)
+- Idempotent: calling `next_step(same_state)` twice returns the same answer
 
-# Determine the next step for an application
-next_step: NextStep = engine.next_step(application_id=app.id)
-# Returns: {action: 'run_verification', type: 'kyc_id', vendor: 'didit', ...}
-#       or {action: 'await_decision_gate', ...}
-#       or {action: 'submit_for_decision', ...}
-#       or {action: 'complete', outcome: 'approved' | 'declined'}
+**Why this matters:** every decision branch can be unit-tested against synthesized state without touching Supabase. That's what made the P4 PR 18 tests at 100 ms total.
 
-# Record a step completion (called by webhook handlers, manual flows, etc.)
-engine.record_step_completion(
+### 4.3 Stateful orchestration layer (P6, open)
+
+**Location:** `app/services/flow_orchestrator.py` (planned, single file aiming ~500 LOC).
+
+**Responsibilities:**
+
+1. **Transaction boundaries.** One DB transaction per HTTP request or webhook handler. The orchestrator opens it, calls the pure core, writes the state delta + appends `platform_events`, commits.
+2. **Event emission.** Every state transition emits a row into `platform_events` (WORM, append-only, enforced by the migration-021 trigger). Event payloads include the input snapshot, the pure-core output, and the resulting writes — enough to replay any decision after the fact.
+3. **Webhook idempotency.** Vendor webhooks (Didit, Persona, Flinks, Equifax) arrive at-least-once. Orchestrator uses an idempotency key per `(vendor, vendor_event_id)` to drop duplicates without re-running the pure core.
+4. **Verification dispatch.** When the pure core returns `RunVerification(...)`, the orchestrator calls the adapter (see §5) and enqueues the result on the next webhook tick.
+5. **Consent gating.** Before any verification that requires a consent (`soft_bureau_pull`, `hard_bureau_pull`, `bank_verification`, `automated_decision_making`), the orchestrator verifies a non-revoked `platform_consents` row exists for the applicant + purpose. Uses `consent_service.get_active_consents_for_patient()` (shipped P5). Missing consent → 422, do not call the vendor.
+6. **Decision-gate evaluation.** When the pure core returns `AwaitDecisionGate(after_step)`, the orchestrator loads the decision-rule YAML for the active product version, evaluates it against the application's current scored state, and produces the next state.
+
+**Hard rules for the orchestrator:**
+- No business logic. If a branch reads like "if score < X then decline", it belongs in the pure core or in decision-rule YAML, not in the orchestrator.
+- **No direct status writes outside the orchestrator.** Add a CI grep test that fails if `platform_credit_applications.status =` appears outside `flow_orchestrator.py` (or its tests).
+- **Snapshot the credit product version on application creation.** If the product changes mid-application, the applicant continues under the version they started. The orchestrator copies `product.version` into `application.product_version_snapshot` at creation.
+- **One event per state change.** Never batch unrelated state changes into one event; never split one state change across multiple events.
+
+### 4.4 Public API (orchestrator)
+
+```python
+from app.services.flow_orchestrator import FlowOrchestrator
+
+orch = FlowOrchestrator(db_session, config_loader, vendor_registry, consent_service)
+
+# Determine and act on the next step (P6 endpoint handler will call this)
+result: StepResult = orch.advance(application_id=app.id)
+# Internally: loads state → calls flow_engine.next_step(state) → writes deltas
+#             → calls vendor if RunVerification → emits events → commits
+# Returns: {next_step: <NextStep>, events_emitted: [<event_id>...], vendor_calls: [...]}
+
+# Webhook callback (Didit, Flinks, Equifax, etc.)
+orch.handle_verification_result(
     application_id=app.id,
     verification_id=verif.id,
+    vendor_event_id='didit_evt_abc123',  # idempotency key
     result='passed',
     payload={...}
 )
-# Engine internally:
-# 1. Appends to platform_events
-# 2. Updates application.flow_state
-# 3. Updates patient verification_depth if applicable
-# 4. Evaluates decision gates (e.g., soft pull says decline → application.status = 'declined')
-# 5. Updates patient.lead_state if applicable
+# Internally: dedupe on (vendor, vendor_event_id) → update verification row
+#             → emit verification_completed event → if this completes a decision gate,
+#             → call flow_engine to re-evaluate → emit decision events
 ```
 
-### 4.3 Hard rules
+### 4.5 Decision gates
 
-- **No direct status writes outside the engine.** Same rule as KYC state machine. Add a CI grep test that fails if `platform_credit_applications.status =` appears outside `flow_engine/`.
-- **Engine reads, never mutates, the credit product config.** Config changes happen through the credit-product admin UI which goes through a separate migration-style versioning path.
-- **Snapshot the credit product version on application creation.** If the product changes mid-application, the applicant continues under the version they started.
-
-### 4.4 Decision gates
-
-A verification with `"decision_gate": true` blocks further steps until evaluated. The decision-rule YAML for that bracket determines the outcome:
+A verification with `"decision_gate": true` in the credit product's `verification_matrix` blocks further steps until the orchestrator evaluates the rule YAML for that bracket. The pure core returns `AwaitDecisionGate(after_step)` once all pre-gate verifications are terminal; the orchestrator loads the rule YAML and produces the next state.
 
 ```yaml
 # config/decision_rules/dental_full_arch_v1.yaml
@@ -636,17 +670,21 @@ gates:
       - else: continue
 ```
 
-Same YAML conventions as the existing risk engine. Reuse the rule parser.
+Same YAML conventions as the original risk engine. The decision-rule parser is **part of the pure core** — it reads YAML, returns a structured rule set, and the pure core evaluates it given application state. The orchestrator only handles the I/O of loading the YAML file and persisting the result.
+
+> **Note on `decision_ruleset` field.** `PlatformCreditProduct.decision_ruleset` is currently a filename string with no loader behind it (backlog 2026-05-23). Score-band override path was relocated to `verification_matrix.bureau.manual_review_band` in P4. Either delete the field post-MVP or build the YAML loader in P6. **P6 decision: keep the field, build the loader.** Loader path: `app/services/decision_rules.py` (pure, filesystem read like `consent_service` loader).
 
 ---
 
-### 4.5 Co-applicant scoring (per Dave)
+### 4.6 Co-applicant scoring (per Dave)
 
-When `co_applicant_of_application_id` is set, the flow engine treats the **application group** (primary + co-app) as the decisioning unit.
+When `co_applicant_of_application_id` is set, the orchestrator treats the **application group** (primary + co-app) as the decisioning unit. The pure core receives both applications' state as a single `ApplicationGroupState` input.
+
+**Status:** Deferred build per backlog ("Co-applicant flow — spec already in v2 §2.11, §4.6. Defer build until MVP works for single applicant"). Spec retained for completeness.
 
 **Rules:**
 1. **Same flow runs for both.** No separate "co-applicant" flow config.
-2. **Wait for both.** The decision gate (§4.4) does not fire until both applications have all required verifications terminal (pass, fail, or skipped).
+2. **Wait for both.** The decision gate (§4.5) does not fire until both applications have all required verifications terminal (pass, fail, or skipped).
 3. **Default combined score = average** of the two applicants' computed scores. Both pulled into the same `decision` record on the **primary** application's row. The co-applicant row mirrors the decision with `decision.role = 'co_applicant'`.
 4. **"Strongest applicant" override available.** The decision ruleset YAML can opt into evaluating each applicant standalone and choosing the better outcome — e.g. `combination_strategy: average | strongest_standalone | both_required_pass`. Default is `average`. Per Dave: this mirrors old finance-industry systems that let ops count or not count one applicant.
 5. **Hard declines pass through.** If either applicant hits a hard-decline rule (bankruptcy, fraud match, sanctions hit), the application group is declined regardless of strategy.
@@ -1040,9 +1078,9 @@ Each follows the same pattern as the existing Didit webhook handler:
 - **PR P2** — Patient profile service (CRUD with source-tagged field writes). No UI yet.
 - **PR P3** — Credit product service (admin CRUD + verification_matrix JSON Schema validation). Seed two products: `dental_small_v1`, `dental_full_arch_v1`.
 - **PR P3.5** — Co-applicant linkage: migration for `co_applicant_of_application_id`, `applicant_role`, `platform_coapplicant_invites` table (§2.11) + invite/accept service. No flow-engine work yet; just the linkage primitives + email/share-code invite endpoint.
-- **PR P4** — Flow engine (§4) including co-applicant group decisioning (§4.5). Pure functional core, well-tested with synthetic flows. No vendor integrations yet — uses a `MockVerificationAdapter` that just records pass/fail. Combination strategies (`average | strongest_standalone | both_required_pass`) tested with synthetic two-applicant groups.
-- **PR P5** — Consent service (§8.1, §8.2) + consent text loader from filesystem.
-- **PR P6** — Applicant API endpoints (§9.2) wired to flow engine + mock adapter. Full applicant journey works end-to-end with mock verifications. Quick-start endpoint enforces patient-self-attested name + email per §8.4. Discrepancy detection runs at quick-start submit.
+- **PR P4** — Flow engine pure functional core (§4.2). **Shipped 2026-05-23 (PR #7).** 18 tests, no DB fixtures. Co-applicant group decisioning (§4.6) deferred to post-MVP per backlog.
+- **PR P5** — Consent service (§2.6, §8.2). **Shipped 2026-05-25 (PR #14).** Filesystem-loaded immutable text + DB write path. 21 tests.
+- **PR P6** — Applicant API + flow orchestrator (§4.3, §4.4) — wraps the pure P4 core in DB transactions, event emission, webhook idempotency, consent gating against the P5 service. Builds the `decision_ruleset` YAML loader (`app/services/decision_rules.py`). Applicant API endpoints (§9.2) wired to the orchestrator. Mock adapters only (no real Didit/Flinks/Equifax). Quick-start endpoint enforces patient-self-attested name + email per §8.4. Discrepancy detection runs at quick-start submit.
 - **PR P6.5** — SIN collection & policy (§5.7): SIN endpoints, encryption + key rotation hooks, `sin_last3` display, common-name misidentification detection, decision-ruleset `sin_declined` handling. Default rulesets updated. Audit export confirms SIN never appears.
 - **PR P7** — Adverse-action notice job + email template (covers SIN-decline-driven manual reviews that result in decline).
 
