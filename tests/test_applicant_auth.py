@@ -16,7 +16,7 @@ from app.services.auth.patient_auth_service import (
     InvalidMagicLinkToken,
     PatientAuthService,
 )
-from app.services.notifications.mock_notification_dispatcher import MockNotificationDispatcher
+from app.services.mock_notification_dispatcher import MockNotificationDispatcher
 
 
 def _make_patient(db: Session) -> PlatformPatient:
@@ -73,7 +73,7 @@ class TestRequestMagicLink:
         patient = _make_patient(db_session)
         app = _make_application(db_session, patient.id)
         service, dispatcher = _service(db_session)
-        service.request_magic_link(patient.id, app.id, "sms")
+        service.request_magic_link(app.id, "sms")
 
         payload = _issued_event(db_session, app.id)
         assert payload is not None
@@ -88,7 +88,7 @@ class TestRequestMagicLink:
         patient = _make_patient(db_session)
         app = _make_application(db_session, patient.id)
         service, _ = _service(db_session)
-        service.request_magic_link(patient.id, app.id, "email")
+        service.request_magic_link(app.id, "email")
         payload = _issued_event(db_session, app.id)
         assert payload["contact_method"] == "email"
 
@@ -98,7 +98,7 @@ class TestExchangeMagicLink:
         patient = _make_patient(db_session)
         app = _make_application(db_session, patient.id)
         service, dispatcher = _service(db_session)
-        service.request_magic_link(patient.id, app.id, "sms")
+        service.request_magic_link(app.id, "sms")
         raw_token = dispatcher._sent[-1]["token"]
 
         result = service.exchange_magic_link(app.id, raw_token)
@@ -121,7 +121,7 @@ class TestExchangeMagicLink:
         patient = _make_patient(db_session)
         app = _make_application(db_session, patient.id)
         service, dispatcher = _service(db_session)
-        service.request_magic_link(patient.id, app.id, "sms")
+        service.request_magic_link(app.id, "sms")
         raw_token = dispatcher._sent[-1]["token"]
 
         service.exchange_magic_link(app.id, raw_token)  # first use
@@ -132,7 +132,7 @@ class TestExchangeMagicLink:
         patient = _make_patient(db_session)
         app = _make_application(db_session, patient.id)
         service, _ = _service(db_session)
-        service.request_magic_link(patient.id, app.id, "sms")
+        service.request_magic_link(app.id, "sms")
         with pytest.raises(InvalidMagicLinkToken):
             service.exchange_magic_link(app.id, "WRONG9")
 
@@ -143,7 +143,7 @@ class TestJwtClaims:
         app1 = _make_application(db_session, patient.id)
         app2 = _make_application(db_session, patient.id)
         service, dispatcher = _service(db_session)
-        service.request_magic_link(patient.id, app1.id, "sms")
+        service.request_magic_link(app1.id, "sms")
         raw_token = dispatcher._sent[-1]["token"]
         result = service.exchange_magic_link(app1.id, raw_token)
         decoded = jwt.decode(result["jwt"], settings.PATIENT_JWT_SECRET, algorithms=[JWT_ALGORITHM])
@@ -153,7 +153,7 @@ class TestJwtClaims:
         patient = _make_patient(db_session)
         app = _make_application(db_session, patient.id)
         service, dispatcher = _service(db_session)
-        service.request_magic_link(patient.id, app.id, "sms")
+        service.request_magic_link(app.id, "sms")
         raw_token = dispatcher._sent[-1]["token"]
         result = service.exchange_magic_link(app.id, raw_token)
         expires_at = datetime.fromisoformat(result["expires_at"])
@@ -164,7 +164,7 @@ class TestJwtClaims:
         patient = _make_patient(db_session)
         app = _make_application(db_session, patient.id)
         service, dispatcher = _service(db_session)
-        service.request_magic_link(patient.id, app.id, "sms")
+        service.request_magic_link(app.id, "sms")
         raw_token = dispatcher._sent[-1]["token"]
         result = service.exchange_magic_link(app.id, raw_token)
         # correct secret decodes

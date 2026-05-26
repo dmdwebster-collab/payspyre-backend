@@ -8,6 +8,9 @@ SHA-256 hash in the event payload; the plaintext token is kept in the in-process
 The event row is added + flushed here; the caller (``PatientAuthService``) owns
 the commit, since the magic-link send is a side-effect separate from any
 orchestrator transaction (kickoff §3 decision #6).
+
+Flat module (not under a ``notifications/`` package) to avoid shadowing the
+existing ``app/services/notifications.py`` module.
 """
 from __future__ import annotations
 

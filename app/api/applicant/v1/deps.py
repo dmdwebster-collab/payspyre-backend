@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.db.base import get_db
 from app.services.auth.patient_auth_service import JWT_ALGORITHM, PatientAuthService
-from app.services.notifications.mock_notification_dispatcher import MockNotificationDispatcher
+from app.services.mock_notification_dispatcher import MockNotificationDispatcher
 
 
 @dataclass
@@ -71,3 +71,12 @@ def get_patient_auth_service(
     dispatcher: MockNotificationDispatcher = Depends(get_notification_dispatcher),
 ) -> PatientAuthService:
     return PatientAuthService(db, dispatcher)
+
+
+def get_orchestrator(db: Session = Depends(get_db)):
+    """Construct a FlowOrchestrator for the request (real consent service + mock dispatcher)."""
+    import app.services.consent_service as consent_service
+    from app.services.flow_orchestrator import FlowOrchestrator
+    from app.services.verifications.mock_dispatcher import MockVerificationDispatcher
+
+    return FlowOrchestrator(db, consent_service, MockVerificationDispatcher())

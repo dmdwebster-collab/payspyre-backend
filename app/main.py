@@ -171,3 +171,9 @@ async def shutdown_event():
 
 
 app.include_router(api_router, prefix="/api/v1")
+
+# Applicant-facing API (patient magic-link auth) — P6.5. Separate surface/prefix
+# from the internal /api/v1 routers.
+from app.api.applicant.v1.router import applicant_router  # noqa: E402
+
+app.include_router(applicant_router, prefix="/api/applicant/v1")

@@ -28,7 +28,7 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.models.platform.credit_application import PlatformCreditApplication
 from app.models.platform.event import PlatformEvent
-from app.services.notifications.mock_notification_dispatcher import MockNotificationDispatcher
+from app.services.mock_notification_dispatcher import MockNotificationDispatcher
 
 logger = get_logger(__name__)
 
@@ -46,6 +46,10 @@ class InvalidMagicLinkToken(MagicLinkError):
     """Token not found, expired, or already consumed (→ 401)."""
 
 
+class ApplicationNotFound(MagicLinkError):
+    """No application for the given id (→ 404)."""
+
+
 def _generate_token() -> str:
     return "".join(secrets.choice(_TOKEN_ALPHABET) for _ in range(6))
 
@@ -61,17 +65,27 @@ class PatientAuthService:
 
     def request_magic_link(
         self,
-        patient_id: UUID,
         application_id: UUID,
         contact_method: Literal["sms", "email"],
     ) -> dict:
-        """Generate a token, dispatch it (mock), persist the issuance event."""
+        """Generate a token, dispatch it (mock), persist the issuance event.
+
+        Resolves the patient from the application so callers only pass the
+        application id.
+        """
+        app = (
+            self.db.query(PlatformCreditApplication)
+            .filter(PlatformCreditApplication.id == application_id)
+            .first()
+        )
+        if app is None:
+            raise ApplicationNotFound(f"Application {application_id} not found")
         token = _generate_token()
-        self.dispatcher.send_magic_link(patient_id, application_id, contact_method, token)
+        self.dispatcher.send_magic_link(app.patient_id, application_id, contact_method, token)
         self.db.commit()
         logger.info(
             "magic_link_requested",
-            patient_id=str(patient_id),
+            patient_id=str(app.patient_id),
             application_id=str(application_id),
             contact_method=contact_method,
         )
