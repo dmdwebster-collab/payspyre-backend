@@ -177,3 +177,8 @@ app.include_router(api_router, prefix="/api/v1")
 from app.api.applicant.v1.router import applicant_router  # noqa: E402
 
 app.include_router(applicant_router, prefix="/api/applicant/v1")
+
+# Vendor webhook API (HMAC-authenticated) — P6.6. Separate surface/prefix.
+from app.api.webhooks.v1.router import webhook_router  # noqa: E402
+
+app.include_router(webhook_router, prefix="/api/webhooks/v1")

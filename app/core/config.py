@@ -1,9 +1,13 @@
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Insecure dev default for the patient magic-link JWT secret. Production must
-# override PATIENT_JWT_SECRET (enforced by Settings._require_patient_jwt_secret_in_production).
+# Insecure dev defaults. Production must override these (enforced by
+# Settings._require_secrets_in_production). DIDIT reuses the pre-existing
+# DIDIT_WEBHOOK_SECRET field (shared with the V1 KYC webhook path) and is not
+# guarded here — its prod lifecycle is owned by the existing deploy config.
 PATIENT_JWT_DEV_DEFAULT = "dev_patient_jwt_secret_change_me"
+FLINKS_WEBHOOK_DEV_DEFAULT = "dev_flinks_webhook_secret_change_me"
+EQUIFAX_WEBHOOK_DEV_DEFAULT = "dev_equifax_webhook_secret_change_me"
 
 
 class Settings(BaseSettings):
@@ -32,6 +36,11 @@ class Settings(BaseSettings):
     # Dev default mirrors JWT_SECRET_KEY so local/CI runs work without extra env;
     # the model validator below makes production fail loud if it isn't overridden.
     PATIENT_JWT_SECRET: str = PATIENT_JWT_DEV_DEFAULT
+
+    # Vendor webhook HMAC secrets — P6.6. (DIDIT reuses the existing
+    # DIDIT_WEBHOOK_SECRET field below.) Dev defaults; prod must override.
+    FLINKS_WEBHOOK_SECRET: str = FLINKS_WEBHOOK_DEV_DEFAULT
+    EQUIFAX_WEBHOOK_SECRET: str = EQUIFAX_WEBHOOK_DEV_DEFAULT
 
     # KYC Vendors
     DIDIT_API_KEY: str = ""
@@ -88,15 +97,29 @@ class Settings(BaseSettings):
     STRIPE_WEBHOOK_SECRET: str = ""
 
     @model_validator(mode="after")
-    def _require_patient_jwt_secret_in_production(self):
-        """Fail loud in production if PATIENT_JWT_SECRET was never overridden."""
-        if (
-            self.ENVIRONMENT == "production"
-            and self.PATIENT_JWT_SECRET == PATIENT_JWT_DEV_DEFAULT
-        ):
+    def _require_secrets_in_production(self):
+        """Fail loud in production if any managed secret is still its dev default.
+
+        Covers the secrets introduced with their own dev defaults (PATIENT_JWT —
+        P6.5; FLINKS / EQUIFAX webhook — P6.6). DIDIT_WEBHOOK_SECRET is excluded:
+        it predates P6.6 (default ""), is shared with the V1 KYC path, and its
+        prod lifecycle is owned by the existing deploy config (Option A).
+        """
+        if self.ENVIRONMENT != "production":
+            return self
+        still_default = [
+            name
+            for name, value, dev_default in (
+                ("PATIENT_JWT_SECRET", self.PATIENT_JWT_SECRET, PATIENT_JWT_DEV_DEFAULT),
+                ("FLINKS_WEBHOOK_SECRET", self.FLINKS_WEBHOOK_SECRET, FLINKS_WEBHOOK_DEV_DEFAULT),
+                ("EQUIFAX_WEBHOOK_SECRET", self.EQUIFAX_WEBHOOK_SECRET, EQUIFAX_WEBHOOK_DEV_DEFAULT),
+            )
+            if value == dev_default
+        ]
+        if still_default:
             raise ValueError(
-                "PATIENT_JWT_SECRET must be set in production "
-                "(it is still the insecure dev default)."
+                "These secrets must be set in production (still the insecure dev "
+                f"default): {', '.join(still_default)}."
             )
         return self
 

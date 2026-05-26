@@ -2,7 +2,10 @@
 
 ## Phase / feature backlog
 
-- **2026-05-26 (logged from P6.5)** — **P7 — Vendor webhook endpoints + HMAC verification.** Replace the MVP applicant-callable `POST /api/applicant/v1/applications/{id}/verifications/{type}/callback` with real vendor webhook endpoints at `/api/vendor/v1/webhooks/{type}` that verify HMAC signatures. Also covers real Twilio/SendGrid wiring for magic-link sends (currently `MockNotificationDispatcher`).
+- **2026-05-26 (P6.5 → updated P6.6)** — **HMAC vendor webhook infrastructure: SHIPPED in P6.6** at `POST /api/webhooks/v1/{vendor}/verification` (didit/flinks/equifax; HMAC-SHA256 + timestamp window + nonce replay via `platform_events`). **Remaining for P7:**
+  - **Remove the applicant-callable callback** `POST /api/applicant/v1/applications/{id}/verifications/{type}/callback` once vendor webhooks are the canonical path — it is now **deprecated** (emits a WARNING log + `Deprecation: true` / `Sunset: 2026-08-01` response headers) but kept functional for continuity.
+  - Real vendor-specific payload parsing (beyond the common MVP envelope) for Didit/Flinks/Equifax.
+  - Real Twilio/SendGrid wiring for magic-link sends (currently `MockNotificationDispatcher`).
 
 ## Infrastructure / process debt
 

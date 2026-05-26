@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from typing import Iterator
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
 
 from app.api.applicant.v1.deps import (
@@ -234,13 +234,22 @@ def verification_callback(
     application_id: UUID,
     verification_type: str,
     body: VerificationCallbackBody,
+    response: Response,
     claims: ApplicantClaims = Depends(get_current_applicant),
     db: Session = Depends(get_db),
     orchestrator: FlowOrchestrator = Depends(get_orchestrator),
 ):
-    # MVP ONLY — applicant-callable callback for the mock dispatcher.
-    # TODO(P7): move to /api/vendor/v1/webhooks/{type} with HMAC verification.
-    # Backlog: "P7 — Vendor webhook endpoints + HMAC verification"
+    # DEPRECATED (P6.6) — applicant-callable callback for the mock dispatcher.
+    # Superseded by the HMAC-verified vendor webhook: POST /api/webhooks/v1/{vendor}/verification.
+    # Removal tracked for P7 (see payspyre_backlog.md). Kept functional for continuity.
+    logger.warning(
+        "applicant_callback_deprecated",
+        message="MVP-only applicant callback invoked; use the vendor webhook (P6.6); removal in P7",
+        application_id=str(application_id),
+        verification_type=verification_type,
+    )
+    response.headers["Deprecation"] = "true"
+    response.headers["Sunset"] = "2026-08-01"
     require_app_scope(application_id, claims)
     mapped = CONSENT_TO_VERIFICATION_TYPE.get(verification_type)
     if mapped is None:
