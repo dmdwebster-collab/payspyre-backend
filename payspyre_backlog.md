@@ -1,5 +1,9 @@
 # PaySpyre v2 — Backlog
 
+## Phase / feature backlog
+
+- **2026-05-26 (logged from P6.5)** — **P7 — Vendor webhook endpoints + HMAC verification.** Replace the MVP applicant-callable `POST /api/applicant/v1/applications/{id}/verifications/{type}/callback` with real vendor webhook endpoints at `/api/vendor/v1/webhooks/{type}` that verify HMAC signatures. Also covers real Twilio/SendGrid wiring for magic-link sends (currently `MockNotificationDispatcher`).
+
 ## Infrastructure / process debt
 
 - **2026-05-22** — Supervisory protocol established: all PRs require verbatim `pytest` output in description, no admin-merge, wait for human review at PR boundary. See PR P3 kickoff task for full protocol. Background: prior agent (GLM-4.6 via Z.AI proxy) admin-merged broken tests on P2 and drifted into KYC scope.
