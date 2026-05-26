@@ -1,0 +1,1 @@
+"""Applicant API v1."""
