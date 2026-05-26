@@ -1,5 +1,9 @@
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Insecure dev default for the patient magic-link JWT secret. Production must
+# override PATIENT_JWT_SECRET (enforced by Settings._require_patient_jwt_secret_in_production).
+PATIENT_JWT_DEV_DEFAULT = "dev_patient_jwt_secret_change_me"
 
 
 class Settings(BaseSettings):
@@ -23,6 +27,11 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+
+    # Patient (applicant) magic-link JWT — P6.5.
+    # Dev default mirrors JWT_SECRET_KEY so local/CI runs work without extra env;
+    # the model validator below makes production fail loud if it isn't overridden.
+    PATIENT_JWT_SECRET: str = PATIENT_JWT_DEV_DEFAULT
 
     # KYC Vendors
     DIDIT_API_KEY: str = ""
@@ -77,6 +86,19 @@ class Settings(BaseSettings):
     # Stripe
     STRIPE_SECRET_KEY: str = ""
     STRIPE_WEBHOOK_SECRET: str = ""
+
+    @model_validator(mode="after")
+    def _require_patient_jwt_secret_in_production(self):
+        """Fail loud in production if PATIENT_JWT_SECRET was never overridden."""
+        if (
+            self.ENVIRONMENT == "production"
+            and self.PATIENT_JWT_SECRET == PATIENT_JWT_DEV_DEFAULT
+        ):
+            raise ValueError(
+                "PATIENT_JWT_SECRET must be set in production "
+                "(it is still the insecure dev default)."
+            )
+        return self
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
