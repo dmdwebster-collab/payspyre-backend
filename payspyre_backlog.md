@@ -11,11 +11,10 @@
 
 - **2026-05-22** — Supervisory protocol established: all PRs require verbatim `pytest` output in description, no admin-merge, wait for human review at PR boundary. See PR P3 kickoff task for full protocol. Background: prior agent (GLM-4.6 via Z.AI proxy) admin-merged broken tests on P2 and drifted into KYC scope.
 
-- **2026-05-25 (logged from CI cleanup)** — **`test_patients_api.py` has 3 real V2 behavior failures** (kept red after the CI-cleanup PR removed legacy V1 test noise):
-  - `GET /api/v1/patients/{unknown_id}/discrepancies` returns **200 instead of 404** (`TestDiscrepanciesOverHTTP::test_discrepancies_unknown_patient_returns_404`).
-  - `GET /api/v1/patients/{unknown_id}/history` returns **200 instead of 404** (`TestFieldHistoryOverHTTP::test_history_unknown_patient_returns_404`).
-  - `PATCH` with a conflicting source value does not log a discrepancy event to `platform_events` (`TestFieldUpdateOverHTTP::test_patch_with_conflicting_source_logs_discrepancy_event`).
-  These are genuine V2 bugs, not V1 rot. **Fix in a focused follow-up PR before P6 starts**, or explicitly acknowledge in the P6 kickoff that these tests are still red on `main`.
+- **2026-05-25 → RESOLVED in P6.7 (PR #20, branch `feature/p6.7-patients-api-cleanup`)** — ~~`test_patients_api.py` has 3 real V2 behavior failures~~:
+  - `GET /api/v1/patients/{unknown_id}/discrepancies` returned 200 instead of 404 → fixed: existence check in `PatientProfileService.detect_discrepancies`.
+  - `GET /api/v1/patients/{unknown_id}/history` returned 200 instead of 404 → fixed: existence check in `get_field_history` (both via new `_get_patient_or_404` helper).
+  - `PATCH` discrepancy-event test failed on `column "created_at" does not exist` → fixed: test SQL used `created_at`; `platform_events` timestamp column is `occurred_at` (the discrepancy logging itself was already correct).
 
 - **2026-05-25 (logged from CI cleanup)** — **`tests/migrations/test_migrations.py` downgrade/upgrade tests time out** (`test_downgrade_then_upgrade`, `test_step_by_step_upgrade`) under the 15s `--timeout` when run against the **remote Supabase Session Pooler** (per-DDL network latency over the full 001→022 chain). Likely **passes on CI's local `postgres:16` container** (no per-statement latency). If CI is still red on these after the A+D cleanup, investigate **migration 018** (`018_create_platform_credit_applications.py` downgrade) specifically — it's where the local run stalled.
 
