@@ -74,7 +74,9 @@ jobs:
         if: always()
         run: |
           pytest --tb=no -q 2>&1 | tee pytest_summary.log
-          if grep -E "error" pytest_summary.log | grep -v "0 errors"; then
+          # Match the pytest summary error COUNT ("N error(s)"), not substrings like
+          # the "errors.pydantic.dev" URL in deprecation warnings (false positive).
+          if grep -E "[0-9]+ error(s)?\b" pytest_summary.log | grep -v "0 errors"; then
             echo "❌ Tests have errors — blocking merge."
             cat pytest_summary.log
             exit 1
