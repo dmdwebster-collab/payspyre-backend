@@ -20,12 +20,13 @@
 
 - **2026-05-25 (logged from CI cleanup)** — **V1 app-code un-mount refactor (Category C, deferred).** `app/services/stripe.py`, `app/services/underwriting_state_machine.py`, `app/models/document.py` (+ their schemas and the `documents`/`stripe`/`underwriting`/`auth`/`analytics`/`notifications` routers in `app/api/v1/api.py`) are V1 dead code paths — no V2 references remain; only the now-deleted V1 tests exercised them. They are still mounted via `app/main.py`, so they were NOT deleted in the CI-cleanup PR (out of scope). **Un-mount and delete in a separate refactor PR.** Risk: the `client` test fixture imports `app.main`, so each router removal must be re-verified against the V2 API tests (`test_patients_api.py`, `test_credit_products_api.py`) to confirm `app.main` still imports cleanly.
 
-- **2026-05-25** — **`deploy.yml` test job fails with SSL/connection error.**
-  - `.github/workflows/deploy.yml` "test" job runs `pytest --cov=app` against a postgres service, but every DB-backed test errors with `"server does not support SSL, but SSL was required"` connecting to `localhost:5432`.
-  - Affects `consent_service`, `credit_products_api`, `migrations`, and most other DB-backed tests in that job.
-  - Pre-existing: red on `main` across `07c70da`, `c99c06e`, `c522e7b`, `8b72bcd`, `47b6832` (5+ commits before PR #15).
-  - Likely fix (decide in its own kickoff): set `DATABASE_URL`/`TEST_DATABASE_URL` with `sslmode=disable` for the `deploy.yml` test job, OR drop the redundant test step entirely since `tests.yml` already runs the full suite on every PR.
-  - NOT in scope for PR #15. Workflow file changes require their own kickoff + stop-and-ask.
+- **2026-05-25 → RESOLVED 2026-05-27** — ~~`deploy.yml` test job fails (no DB / connection error)~~. Root cause: the `test` job ran `pytest --cov=app` with **no Postgres service and no DB env**, so every DB-backed test errored on connection (pre-existing, red on `main` since well before PR #15).
+  - **Fixed in PR #22:** added a `postgres:16` service + `DATABASE_URL`/`TEST_DATABASE_URL` (+ JWT/Stripe test env) + an alembic upgrade-to-head step to the `test` job, mirroring `tests.yml`. The job now passes.
+  - **Followed by PR #23:** fixing the `test` gate unblocked `build-and-push`, which failed at DO registry login (`DO_ACCESS_TOKEN` not set) and would have auto-deployed to production on every `main` merge. So `build-and-push` + `deploy-*` were gated to a manual `workflow_dispatch` — a normal push runs only the `test` gate.
+  - As of `6b58ec2`, all three workflows (`Tests`, `Migrations`, `Build and Deploy`) are **green on `main`**; no auto-deploy occurs.
+  - **Remaining (separate item below):** DO continuous deployment is not wired — deploys are manual-only until `DO_ACCESS_TOKEN` (+ `DO_APP_ID`) secrets are set.
+
+- **2026-05-27** — **Wire DO continuous deployment (when ready).** `deploy.yml` build/deploy jobs are gated to manual `workflow_dispatch`. To enable CD: set `DO_ACCESS_TOKEN` and confirm `DO_APP_ID` repo secrets, then either deploy on demand via Actions → "Run workflow", or change `build-and-push`'s `if:` back to auto-on-push (`github.event_name == 'push' && ...`).
 
 ---
 
