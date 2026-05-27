@@ -26,7 +26,9 @@
   - As of `6b58ec2`, all three workflows (`Tests`, `Migrations`, `Build and Deploy`) are **green on `main`**; no auto-deploy occurs.
   - **Remaining (separate item below):** DO continuous deployment is not wired — deploys are manual-only until `DO_ACCESS_TOKEN` (+ `DO_APP_ID`) secrets are set.
 
-- **2026-05-27** — **Wire DO continuous deployment (when ready).** `deploy.yml` build/deploy jobs are gated to manual `workflow_dispatch`. To enable CD: set `DO_ACCESS_TOKEN` and confirm `DO_APP_ID` repo secrets, then either deploy on demand via Actions → "Run workflow", or change `build-and-push`'s `if:` back to auto-on-push (`github.event_name == 'push' && ...`).
+- **2026-05-27 → wired in PR #25 (P7.0)** — **DO continuous deployment.** `deploy-production` now uses `digitalocean/app_action/deploy@cc55bc9b` (v2.0.11) — deploys the `.do/app.yaml` spec (`app_spec_location`, app "payspyre-api"; not `app_name`, which expects the app name not the `DO_APP_ID` UUID), polls until live, and runs a `GET /health` smoke test (fails the job on non-200). Manual `workflow_dispatch` gate preserved; `deploy-staging` left as the doctl stub.
+  - **Action still required from Mike before a deploy will work:** populate the repo secrets `DO_ACCESS_TOKEN` and `DO_APP_ID` (production app UUID). Until then a manual run will fail at the DO auth/lookup step.
+  - **Deferred:** `deploy-staging` CD wiring; auto-deploy on push (gate stays manual).
 
 ---
 

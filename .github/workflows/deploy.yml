@@ -14,6 +14,17 @@ env:
   REGISTRY: registry.digitalocean.com
   IMAGE_NAME: payspyre/backend
 
+# ── Required secrets (GitHub → Settings → Secrets and variables → Actions) ───
+# DO_ACCESS_TOKEN    DigitalOcean API token — App Platform + Container Registry
+#                    write. https://cloud.digitalocean.com/account/api/tokens
+# DO_APP_ID          Production App Platform app UUID. Used by `doctl apps get`
+#                    to derive the live URL for the /health smoke test.
+#                    doctl apps list --format ID,Spec.Name --no-header
+# DO_APP_ID_STAGING  Staging app UUID (deploy-staging job; unchanged in P7.0).
+# Note: the deploy itself reads the app spec from .do/app.yaml (app
+# "payspyre-api"), so no app name/URL secret is required.
+# ─────────────────────────────────────────────────────────────────────────────
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -122,20 +133,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install doctl
+      - name: Install doctl  # used below to derive the live URL for the smoke test
         uses: digitalocean/action-doctl@v2
         with:
           token: ${{ secrets.DO_ACCESS_TOKEN }}
 
       - name: Deploy to DigitalOcean App Platform
-        run: |
-          doctl apps create-deployment ${{ secrets.DO_APP_ID }} \
-            --force-rebuild \
-            --spec .do/app.yaml
+        # Polls until the deployment is live and fails the job on error (unlike the
+        # old fire-and-forget `doctl apps create-deployment`). Deploys the app spec
+        # at .do/app.yaml (app "payspyre-api") — app_spec_location, NOT app_name
+        # (app_name expects the app's name, not the DO_APP_ID UUID).
+        uses: digitalocean/app_action/deploy@cc55bc9b848d25f9c1c9f831cf843fbab3fbfb15  # v2.0.11
+        with:
+          token: ${{ secrets.DO_ACCESS_TOKEN }}
+          app_spec_location: .do/app.yaml
 
-      - name: Run database migrations
+      - name: Smoke test — GET /health
         run: |
-          echo "Migrations should run via App Platform pre-deploy hook or separate job"
+          URL=$(doctl apps get ${{ secrets.DO_APP_ID }} --format LiveURL --no-header)
+          echo "Live URL: $URL"
+          STATUS=$(curl -o /dev/null -s -w "%{http_code}" --max-time 15 "$URL/health")
+          if [ "$STATUS" != "200" ]; then
+            echo "Health check failed — HTTP $STATUS"
+            exit 1
+          fi
+          echo "Health check passed — HTTP $STATUS"
 
   deploy-staging:
     needs: build-and-push
