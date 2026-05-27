@@ -182,7 +182,7 @@ class TestFieldUpdateOverHTTP:
             text(
                 "SELECT event_type FROM platform_events "
                 "WHERE patient_id = :pid "
-                "ORDER BY created_at ASC"
+                "ORDER BY occurred_at ASC"
             ),
             {"pid": created["id"]},
         ).fetchall()

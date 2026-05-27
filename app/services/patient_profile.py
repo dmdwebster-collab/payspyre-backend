@@ -177,11 +177,19 @@ class PatientProfileService:
             "fields": [PatientFieldValue.model_validate(f) for f in current_fields],
         }
 
+    def _get_patient_or_404(self, patient_id: UUID) -> PlatformPatient:
+        """Return the patient or raise ValueError (routers map ValueError -> 404)."""
+        patient = self.db.query(PlatformPatient).filter(PlatformPatient.id == patient_id).first()
+        if not patient:
+            raise ValueError(f"Patient {patient_id} not found")
+        return patient
+
     def detect_discrepancies(self, patient_id: UUID) -> list[FieldDiscrepancy]:
         """
         Find fields with conflicting values from different sources.
         Returns list of discrepancies with detected_at timestamp.
         """
+        self._get_patient_or_404(patient_id)
         discrepancies = []
 
         # Group all current fields by field_key
@@ -228,6 +236,7 @@ class PatientProfileService:
         Get full history of a field including superseded values.
         Ordered by verified_at DESC (newest first).
         """
+        self._get_patient_or_404(patient_id)
         fields = (
             self.db.query(PlatformPatientField)
             .filter(
