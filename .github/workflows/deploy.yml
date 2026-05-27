@@ -5,6 +5,10 @@ on:
     branches: [ main, staging ]
   pull_request:
     branches: [ main ]
+  # Build + deploy are gated to a manual trigger (see build-and-push `if`), so a
+  # plain push to main/staging runs only the `test` gate — no auto-deploy until
+  # DO CD is wired (DO_ACCESS_TOKEN secret). Deploy via Actions → "Run workflow".
+  workflow_dispatch:
 
 env:
   REGISTRY: registry.digitalocean.com
@@ -72,7 +76,11 @@ jobs:
   build-and-push:
     needs: test
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/staging')
+    # Manual-only until DO CD is wired. On a normal push this job (and the deploy
+    # jobs that `needs` it) are skipped, so "Build and Deploy" is green on the
+    # test gate alone. deploy-production/-staging still branch on github.ref, so a
+    # workflow_dispatch from main -> production, from staging -> staging.
+    if: github.event_name == 'workflow_dispatch'
     outputs:
       image-tag: ${{ steps.meta.outputs.tags }}
     steps:
