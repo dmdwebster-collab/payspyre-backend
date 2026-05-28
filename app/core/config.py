@@ -53,6 +53,16 @@ class Settings(BaseSettings):
     EQUIFAX_API_KEY: str = ""
     TRANSUNION_API_KEY: str = ""
 
+    # Real vendor outbound APIs + feature flag — P7.2 (initiate path only).
+    # DIDIT_API_KEY already exists above. USE_REAL_ADAPTERS defaults False, so the
+    # mock adapters stay active until production deliberately flips it on.
+    DIDIT_API_BASE_URL: str = "https://verification.didit.me"
+    DIDIT_WORKFLOW_ID: str = ""        # UUID from the Didit console; required for the real path
+    FLINKS_API_KEY: str = ""           # flinks-auth-key header
+    FLINKS_API_BASE_URL: str = "https://toolbox-api.private.fin.ag"
+    FLINKS_CUSTOMER_ID: str = ""       # GUID scoping Flinks calls; required for the real path
+    USE_REAL_ADAPTERS: bool = False    # flip True in prod once Didit + Flinks creds are set
+
     # CORS
     CORS_ORIGINS: str = "http://localhost:3000,https://payspyre.com"
 
@@ -121,6 +131,23 @@ class Settings(BaseSettings):
                 "These secrets must be set in production (still the insecure dev "
                 f"default): {', '.join(still_default)}."
             )
+        # P7.2: if real adapters are enabled, their outbound credentials must be set.
+        if self.USE_REAL_ADAPTERS:
+            missing = [
+                name
+                for name, value in (
+                    ("DIDIT_API_KEY", self.DIDIT_API_KEY),
+                    ("DIDIT_WORKFLOW_ID", self.DIDIT_WORKFLOW_ID),
+                    ("FLINKS_API_KEY", self.FLINKS_API_KEY),
+                    ("FLINKS_CUSTOMER_ID", self.FLINKS_CUSTOMER_ID),
+                )
+                if not value
+            ]
+            if missing:
+                raise ValueError(
+                    "USE_REAL_ADAPTERS is True but these required fields are empty: "
+                    f"{', '.join(missing)}."
+                )
         return self
 
     @field_validator("CORS_ORIGINS", mode="before")
