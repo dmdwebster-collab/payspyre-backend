@@ -7,6 +7,28 @@
   - Real vendor-specific payload parsing (beyond the common MVP envelope) for Didit/Flinks/Equifax.
   - Real Twilio/SendGrid wiring for magic-link sends (currently `MockNotificationDispatcher`).
 
+- **2026-05-28 (P7.2 outbound shipped)** — **Real Didit + Flinks adapters — initiate path only.**
+  `DiditVerificationAdapter` (real `POST /v3/session/` with `x-api-key`), `FlinksBankAdapter`
+  (generates the Connect iframe URL; no HTTP at initiate), and `VerificationDispatcher`
+  (flag-based real-vs-mock selector returning a uniform `DispatchResult`). All gated behind
+  `USE_REAL_ADAPTERS=False`; the prod startup validator fails loud if the flag is True but
+  `DIDIT_API_KEY` / `DIDIT_WORKFLOW_ID` / `FLINKS_API_KEY` / `FLINKS_CUSTOMER_ID` are empty.
+  Equifax bureau stays mocked. **Open follow-ups:**
+  - **P7.2b — real-webhook RESULT path.** Per-vendor `DiditWebhookPayload` / `FlinksWebhookPayload`
+    schemas, a normalizer (real → `rich_payload`), reworking `app/api/webhooks/v1/endpoints/verification.py`
+    to select the per-vendor schema + resolve `verification_id`/`application_id` from the vendor
+    session ref, and per-vendor signature verification (Didit's own header + Flinks's
+    `flinks-authenticity-key`). Out of P7.2 because it requires modifying the shipped P6.6
+    endpoint + HMAC verifier.
+  - **`USE_REAL_ADAPTERS` prod flip + dispatcher wiring.** P7.2 builds and tests
+    `VerificationDispatcher` but does NOT rewire the live `get_orchestrator` deps (applicant
+    + webhooks) to use it — those still construct `MockVerificationDispatcher` directly. When
+    flipping the flag in production, also swap that construction to `VerificationDispatcher()`.
+  - **Flinks income extraction via Enrich API.** Real income / NSF extraction needs Flinks's
+    Enrich endpoint (`/GetAccountsSummary` / Attributes); P7.2b will use it for normalization.
+  - **Equifax bureau adapter (real).** Still pending the subscriber agreement; `MockBureauAdapter`
+    remains the active bureau adapter even when `USE_REAL_ADAPTERS=True`.
+
 ## Infrastructure / process debt
 
 - **2026-05-22** — Supervisory protocol established: all PRs require verbatim `pytest` output in description, no admin-merge, wait for human review at PR boundary. See PR P3 kickoff task for full protocol. Background: prior agent (GLM-4.6 via Z.AI proxy) admin-merged broken tests on P2 and drifted into KYC scope.
