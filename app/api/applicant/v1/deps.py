@@ -74,9 +74,14 @@ def get_patient_auth_service(
 
 
 def get_orchestrator(db: Session = Depends(get_db)):
-    """Construct a FlowOrchestrator for the request (real consent service + mock dispatcher)."""
+    """Construct a FlowOrchestrator for the request.
+
+    P7.2b: uses ``VerificationDispatcher`` instead of ``MockVerificationDispatcher``
+    directly. The dispatcher reads ``settings.USE_REAL_ADAPTERS`` and routes
+    per verification type. Default (flag off) preserves mock behavior.
+    """
     import app.services.consent_service as consent_service
     from app.services.flow_orchestrator import FlowOrchestrator
-    from app.services.verifications.mock_dispatcher import MockVerificationDispatcher
+    from app.services.verifications.dispatcher import VerificationDispatcher
 
-    return FlowOrchestrator(db, consent_service, MockVerificationDispatcher())
+    return FlowOrchestrator(db, consent_service, VerificationDispatcher())

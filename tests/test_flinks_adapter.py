@@ -58,6 +58,15 @@ class TestInitiateConnectUrl:
         redirect_qs = parse_qs(urlparse(redirect).query)
         assert redirect_qs["application_id"] == [app_id]
 
+    def test_connect_url_carries_tag_for_webhook_correlation(self):
+        # P7.2b: Flinks Tag is the webhook-correlation bridge — Flinks echoes the
+        # tag back in the webhook body, letting us look up PlatformVerification by
+        # application_id when the webhook arrives.
+        app_id = str(uuid.uuid4())
+        result = _adapter().initiate(application_id=app_id, patient=_patient())
+        qs = parse_qs(urlparse(result.connect_url).query)
+        assert qs["tag"] == [app_id]
+
 
 class TestLinkAccountNotImplemented:
     def test_async_method_raises_not_implemented(self):
