@@ -3,8 +3,8 @@
 ## Phase / feature backlog
 
 - **2026-05-26 (P6.5 → updated P6.6)** — **HMAC vendor webhook infrastructure: SHIPPED in P6.6** at `POST /api/webhooks/v1/{vendor}/verification` (didit/flinks/equifax; HMAC-SHA256 + timestamp window + nonce replay via `platform_events`). **Remaining for P7:**
-  - **Remove the applicant-callable callback** `POST /api/applicant/v1/applications/{id}/verifications/{type}/callback` once vendor webhooks are the canonical path — it is now **deprecated** (emits a WARNING log + `Deprecation: true` / `Sunset: 2026-08-01` response headers) but kept functional for continuity.
-  - Real vendor-specific payload parsing (beyond the common MVP envelope) for Didit/Flinks/Equifax.
+  - ~~**Remove the applicant-callable callback** `POST /api/applicant/v1/applications/{id}/verifications/{type}/callback` once vendor webhooks are the canonical path — it is now **deprecated** (emits a WARNING log + `Deprecation: true` / `Sunset: 2026-08-01` response headers) but kept functional for continuity.~~ **RESOLVED in P7.3 (2026-05-30):** route + handler removed; `VerificationCallbackBody` / `VerificationCallbackResponse` schemas dropped; `tests/test_applicant_callback_deprecation.py` deleted; `tests/test_applicant_journey.py` `_drive()` + steps 12-13 rewired to call `FlowOrchestrator.handle_verification_result(...)` directly (Option C — vendor wire transport is exhaustively covered in the `test_vendor_webhooks_*.py` suite, so the journey test stays focused on the state-machine contract).
+  - ~~Real vendor-specific payload parsing (beyond the common MVP envelope) for Didit/Flinks/Equifax.~~ **RESOLVED in P7.2b (2026-05-30)** — see the P7.2b entry below; Equifax stays MVP-envelope until subscriber agreement closes.
   - Real Twilio/SendGrid wiring for magic-link sends (currently `MockNotificationDispatcher`).
 
 - **2026-05-28 (P7.2 outbound shipped)** — **Real Didit + Flinks adapters — initiate path only.**

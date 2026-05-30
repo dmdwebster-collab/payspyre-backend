@@ -3,9 +3,15 @@
 Each protected endpoint validates the patient JWT (``get_current_applicant``)
 then checks per-application scope (``require_app_scope`` → 403). Each delegates
 to exactly one orchestrator method (plus minimal plumbing: patient
-find-or-create on POST /applications per kickoff §3 #6, and verification lookup
-on the callback). Orchestrator exceptions are mapped to HTTP codes by the
-``_http_errors`` context manager — the only logic in these routers.
+find-or-create on POST /applications per kickoff §3 #6). Orchestrator
+exceptions are mapped to HTTP codes by the ``_http_errors`` context manager —
+the only logic in these routers.
+
+P7.3 (2026-05-30): the deprecated applicant-callable callback
+``POST /{id}/verifications/{type}/callback`` has been removed. The canonical
+vendor-result path is now the HMAC-verified webhook receiver at
+``POST /api/webhooks/v1/{vendor}/verification`` (P6.6 + P7.2b real vendor
+shapes). The applicant API never accepts verification results directly.
 """
 from __future__ import annotations
 
@@ -14,7 +20,7 @@ from contextlib import contextmanager
 from typing import Iterator
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.api.applicant.v1.deps import (
@@ -33,17 +39,13 @@ from app.api.applicant.v1.schemas import (
     InitiateVerificationResponse,
     RequiredConsentsResponse,
     SubmitResponse,
-    VerificationCallbackBody,
-    VerificationCallbackResponse,
 )
 from app.core.logging import get_logger
 from app.db.base import get_db
 from app.models.platform.credit_application import PlatformCreditApplication
 from app.models.platform.patient import PlatformPatient
-from app.models.platform.verification import PlatformVerification
 from app.services.auth.patient_auth_service import PatientAuthService
 from app.services.flow_orchestrator import (
-    CONSENT_TO_VERIFICATION_TYPE,
     ApplicationNotFoundError,
     ConsentMissingError,
     DuplicateVerificationError,
@@ -56,8 +58,6 @@ from app.services.verifications.replay_adapters import ReplayMissingResultError
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/applications", tags=["applicant-applications"])
-
-_PENDING_STATUSES = ("pending", "in_progress")
 
 
 @contextmanager
@@ -223,68 +223,6 @@ def initiate_verification(
         verification_type=verification.verification_type,
         status=verification.status,
         vendor_session_ref=verification.vendor_session_ref,
-    )
-
-
-@router.post(
-    "/{application_id}/verifications/{verification_type}/callback",
-    response_model=VerificationCallbackResponse,
-)
-def verification_callback(
-    application_id: UUID,
-    verification_type: str,
-    body: VerificationCallbackBody,
-    response: Response,
-    claims: ApplicantClaims = Depends(get_current_applicant),
-    db: Session = Depends(get_db),
-    orchestrator: FlowOrchestrator = Depends(get_orchestrator),
-):
-    # DEPRECATED (P6.6) — applicant-callable callback for the mock dispatcher.
-    # Superseded by the HMAC-verified vendor webhook: POST /api/webhooks/v1/{vendor}/verification.
-    # Removal tracked for P7 (see payspyre_backlog.md). Kept functional for continuity.
-    logger.warning(
-        "applicant_callback_deprecated",
-        message="MVP-only applicant callback invoked; use the vendor webhook (P6.6); removal in P7",
-        application_id=str(application_id),
-        verification_type=verification_type,
-    )
-    response.headers["Deprecation"] = "true"
-    response.headers["Sunset"] = "2026-08-01"
-    require_app_scope(application_id, claims)
-    mapped = CONSENT_TO_VERIFICATION_TYPE.get(verification_type)
-    if mapped is None:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Unknown verification type '{verification_type}'",
-        )
-    verification = (
-        db.query(PlatformVerification)
-        .filter(
-            PlatformVerification.application_id == application_id,
-            PlatformVerification.verification_type == mapped,
-            PlatformVerification.status.in_(_PENDING_STATUSES),
-        )
-        .order_by(PlatformVerification.started_at.desc())
-        .first()
-    )
-    if verification is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"No pending {mapped} verification for this application",
-        )
-    with _http_errors():
-        result = orchestrator.handle_verification_result(
-            application_id,
-            verification.id,
-            vendor_event_id=body.vendor_event_id,
-            result=body.result,
-            rich_payload=body.rich_payload,
-        )
-    return VerificationCallbackResponse(
-        verification_id=result.verification_id,
-        application_status=result.application_status,
-        decided=result.decided,
-        decision=result.decision,
     )
 
 
