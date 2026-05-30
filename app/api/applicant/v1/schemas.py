@@ -95,17 +95,9 @@ class InitiateVerificationResponse(BaseModel):
     vendor_session_ref: Optional[str] = None
 
 
-class VerificationCallbackBody(BaseModel):
-    vendor_event_id: str = Field(..., min_length=1)
-    result: Literal["passed", "failed"]
-    rich_payload: dict[str, Any] = Field(default_factory=dict)
-
-
-class VerificationCallbackResponse(BaseModel):
-    verification_id: UUID
-    application_status: str
-    decided: bool
-    decision: Optional[dict[str, Any]] = None
+# VerificationCallbackBody / VerificationCallbackResponse removed in P7.3 —
+# the deprecated applicant callback endpoint was excised. Vendor results now
+# arrive exclusively via the HMAC-verified webhook at /api/webhooks/v1/{vendor}/verification.
 
 
 class SubmitResponse(BaseModel):

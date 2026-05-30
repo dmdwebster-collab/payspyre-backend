@@ -4,6 +4,13 @@ The conftest ``db_session`` fixture truncates per-function, so a single test
 method walks the full journey (create → auth → consents → verify → decide)
 rather than 14 separate state-sharing methods. Decline / manual-review paths are
 separate methods that re-run the flow with different bureau scores.
+
+P7.3 (2026-05-30): the verification-result step used to POST to the now-deleted
+applicant callback ``POST /{id}/verifications/{type}/callback``. This file
+now calls ``FlowOrchestrator.handle_verification_result(...)`` directly — see
+the journey-test contract note in the helper. Vendor wire transport for real
+Didit / Flinks / Equifax callbacks is exhaustively covered in
+``test_vendor_webhooks_didit.py`` / ``..._flinks.py`` / ``test_vendor_webhooks.py``.
 """
 import uuid
 
@@ -12,15 +19,18 @@ from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+import app.services.consent_service as consent_service
 from app.api.applicant.v1.deps import get_notification_dispatcher
 from app.main import app
 from app.models.platform.credit_product import PlatformCreditProduct
-from app.services.flow_orchestrator import CONSENT_TO_VERIFICATION_TYPE
+from app.models.platform.verification import PlatformVerification
+from app.services.flow_orchestrator import CONSENT_TO_VERIFICATION_TYPE, FlowOrchestrator
 from app.services.mock_notification_dispatcher import MockNotificationDispatcher
 from app.services.verifications.mock_dispatcher import MockVerificationDispatcher
 
 _BASE = "/api/applicant/v1"
 _PURPOSES = ["id_verification", "soft_bureau_pull", "bank_verification", "hard_bureau_pull"]
+_PENDING_STATUSES = ("pending", "in_progress")
 
 
 @pytest.fixture
@@ -65,6 +75,38 @@ def _auth(client, db, dispatcher) -> tuple[str, dict]:
     return app_id, {"Authorization": f"Bearer {ex.json()['jwt']}"}
 
 
+def _handle_result(db: Session, app_id: str, purpose: str, score: int):
+    """Apply a verification result directly via the orchestrator (Option C).
+
+    Mirrors what the deleted applicant callback used to do: look up the pending
+    PlatformVerification row for ``(application_id, mapped_vtype)`` and call
+    ``orchestrator.handle_verification_result(...)``. Vendor wire transport
+    (HMAC, real Didit/Flinks payload shapes) is covered exhaustively in the
+    test_vendor_webhooks_* suite; this test exercises the journey state
+    machine, not the wire.
+    """
+    mapped = CONSENT_TO_VERIFICATION_TYPE[purpose]
+    verification = (
+        db.query(PlatformVerification)
+        .filter(
+            PlatformVerification.application_id == app_id,
+            PlatformVerification.verification_type == mapped,
+            PlatformVerification.status.in_(_PENDING_STATUSES),
+        )
+        .order_by(PlatformVerification.started_at.desc())
+        .first()
+    )
+    assert verification is not None, f"No pending {mapped} verification to apply"
+    orch = FlowOrchestrator(db, consent_service, MockVerificationDispatcher())
+    return orch.handle_verification_result(
+        app_id,
+        verification.id,
+        vendor_event_id=f"evt-{purpose}-{uuid.uuid4().hex[:8]}",
+        result="passed",
+        rich_payload=_rich(purpose, score),
+    )
+
+
 def _drive(client, db, dispatcher, score: int) -> tuple[str, dict]:
     app_id, headers = _auth(client, db, dispatcher)
     for p in _PURPOSES:
@@ -74,13 +116,7 @@ def _drive(client, db, dispatcher, score: int) -> tuple[str, dict]:
             f"{_BASE}/applications/{app_id}/verifications/{p}/initiate", headers=headers
         ).status_code == 200
     for p in _PURPOSES:
-        r = client.post(
-            f"{_BASE}/applications/{app_id}/verifications/{p}/callback",
-            headers=headers,
-            json={"vendor_event_id": f"evt-{p}-{uuid.uuid4().hex[:8]}", "result": "passed",
-                  "rich_payload": _rich(p, score)},
-        )
-        assert r.status_code == 200, r.text
+        _handle_result(db, app_id, p, score)
     return app_id, headers
 
 
@@ -132,16 +168,13 @@ class TestApplicantJourney:
             rv = client.post(f"{_BASE}/applications/{app_id}/verifications/{p}/initiate", headers=headers)
             assert rv.status_code == 200 and rv.json()["status"] == "pending"
 
-        # 12-13. callbacks; the last one (all terminal) triggers the decision
+        # 12-13. results applied directly via the orchestrator (P7.3 — see _handle_result
+        # docstring + the file header note for why this is not an HTTP call).
+        # The last terminal result triggers the decision.
         decided = False
         for p in _PURPOSES:
-            rc = client.post(
-                f"{_BASE}/applications/{app_id}/verifications/{p}/callback",
-                headers=headers,
-                json={"vendor_event_id": f"evt-{p}", "result": "passed", "rich_payload": _rich(p, 720)},
-            )
-            assert rc.status_code == 200, rc.text
-            decided = decided or rc.json()["decided"]
+            result = _handle_result(db_session, app_id, p, 720)
+            decided = decided or result.decided
         assert decided is True
 
         # status approved (seed product, score 720 ≥ 680, clean identity/bank)
