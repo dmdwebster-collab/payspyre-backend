@@ -1,4 +1,13 @@
-"""Unit tests for the webhook SignatureVerifier (P6.6). Mostly pure; nonce tests use DB."""
+"""Unit tests for the webhook SignatureVerifier.
+
+P6.6 shipped this file as ``SignatureChecks`` directly probing the internal
+``_check_signature`` helper. P7.2b split ``verify()`` per vendor, so the MVP
+scheme now lives on ``_verify_mvp`` (used by the ``equifax`` route until a
+real Equifax adapter ships); the per-vendor Didit / Flinks signature schemes
+are covered in dedicated files (``test_signature_verifier_didit.py`` and
+``test_signature_verifier_flinks.py``). This file keeps the MVP / timestamp /
+vendor-secret / nonce coverage that has always lived here.
+"""
 import hashlib
 import hmac
 import inspect
@@ -10,7 +19,6 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.platform.event import PlatformEvent
-from app.services.webhooks import signature_verifier as sv_module
 from app.services.webhooks.signature_verifier import (
     NonceReplayed,
     SignatureInvalid,
@@ -18,7 +26,7 @@ from app.services.webhooks.signature_verifier import (
     TimestampExpired,
 )
 
-_SECRET = "test_didit_secret"
+_SECRET = "test_equifax_secret"  # MVP scheme is equifax-only post-P7.2b
 
 
 def _sign(secret: str, timestamp: str, body: bytes) -> str:
@@ -28,31 +36,51 @@ def _sign(secret: str, timestamp: str, body: bytes) -> str:
 # --- pure checks (no DB) ---------------------------------------------------
 
 
-class TestSignatureChecks:
-    def test_valid_signature_passes(self):
-        v = SignatureVerifier()
+class TestMVPSignatureChecks:
+    """Cover the MVP (equifax) X-Signature / X-Timestamp scheme via the public
+    ``verify_signature`` API. The Didit and Flinks schemes are covered in their
+    own files."""
+
+    def _patch_equifax_secret(self, monkeypatch):
+        monkeypatch.setattr(settings, "EQUIFAX_WEBHOOK_SECRET", _SECRET)
+
+    def test_valid_signature_passes(self, monkeypatch):
+        self._patch_equifax_secret(monkeypatch)
         body = b'{"x": 1}'
         ts = str(int(time.time()))
-        v._check_signature(_SECRET, body, ts, _sign(_SECRET, ts, body))  # no raise
+        sig = _sign(_SECRET, ts, body)
+        SignatureVerifier().verify_signature(
+            "equifax", body,
+            {"X-Signature": sig, "X-Timestamp": ts, "X-Nonce": "n"},
+        )  # no raise
 
-    def test_wrong_signature_raises(self):
-        v = SignatureVerifier()
+    def test_wrong_signature_raises(self, monkeypatch):
+        self._patch_equifax_secret(monkeypatch)
         body = b'{"x": 1}'
         ts = str(int(time.time()))
         with pytest.raises(SignatureInvalid):
-            v._check_signature(_SECRET, body, ts, "deadbeef")
+            SignatureVerifier().verify_signature(
+                "equifax", body,
+                {"X-Signature": "deadbeef", "X-Timestamp": ts, "X-Nonce": "n"},
+            )
 
-    def test_missing_signature_raises(self):
-        v = SignatureVerifier()
+    def test_missing_signature_raises(self, monkeypatch):
+        self._patch_equifax_secret(monkeypatch)
         with pytest.raises(SignatureInvalid):
-            v._check_signature(_SECRET, b"{}", str(int(time.time())), "")
+            SignatureVerifier().verify_signature(
+                "equifax", b"{}",
+                {"X-Timestamp": str(int(time.time())), "X-Nonce": "n"},
+            )
 
-    def test_tampered_body_raises(self):
-        v = SignatureVerifier()
+    def test_tampered_body_raises(self, monkeypatch):
+        self._patch_equifax_secret(monkeypatch)
         ts = str(int(time.time()))
         sig = _sign(_SECRET, ts, b'{"amount": 100}')
         with pytest.raises(SignatureInvalid):
-            v._check_signature(_SECRET, b'{"amount": 999}', ts, sig)  # body changed after signing
+            SignatureVerifier().verify_signature(
+                "equifax", b'{"amount": 999}',  # body changed after signing
+                {"X-Signature": sig, "X-Timestamp": ts, "X-Nonce": "n"},
+            )
 
 
 class TestTimestampChecks:
@@ -81,9 +109,17 @@ class TestVendorSecret:
         monkeypatch.setattr(settings, "FLINKS_WEBHOOK_SECRET", "test_flinks_secret")
         assert SignatureVerifier()._get_vendor_secret("flinks") == "test_flinks_secret"
 
-    def test_uses_constant_time_compare(self):
-        src = inspect.getsource(SignatureVerifier._check_signature)
+    def test_mvp_uses_constant_time_compare(self):
+        src = inspect.getsource(SignatureVerifier._verify_mvp)
         assert "hmac.compare_digest" in src  # constant-time, not ==
+
+    def test_didit_uses_constant_time_compare(self):
+        src = inspect.getsource(SignatureVerifier._verify_didit)
+        assert "hmac.compare_digest" in src
+
+    def test_flinks_uses_constant_time_compare(self):
+        src = inspect.getsource(SignatureVerifier._verify_flinks)
+        assert "hmac.compare_digest" in src
 
 
 # --- nonce replay (DB) -----------------------------------------------------

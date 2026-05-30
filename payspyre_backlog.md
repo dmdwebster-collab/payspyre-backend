@@ -13,21 +13,34 @@
   (flag-based real-vs-mock selector returning a uniform `DispatchResult`). All gated behind
   `USE_REAL_ADAPTERS=False`; the prod startup validator fails loud if the flag is True but
   `DIDIT_API_KEY` / `DIDIT_WORKFLOW_ID` / `FLINKS_API_KEY` / `FLINKS_CUSTOMER_ID` are empty.
-  Equifax bureau stays mocked. **Open follow-ups:**
-  - **P7.2b — real-webhook RESULT path.** Per-vendor `DiditWebhookPayload` / `FlinksWebhookPayload`
-    schemas, a normalizer (real → `rich_payload`), reworking `app/api/webhooks/v1/endpoints/verification.py`
-    to select the per-vendor schema + resolve `verification_id`/`application_id` from the vendor
-    session ref, and per-vendor signature verification (Didit's own header + Flinks's
-    `flinks-authenticity-key`). Out of P7.2 because it requires modifying the shipped P6.6
-    endpoint + HMAC verifier.
-  - **`USE_REAL_ADAPTERS` prod flip + dispatcher wiring.** P7.2 builds and tests
-    `VerificationDispatcher` but does NOT rewire the live `get_orchestrator` deps (applicant
-    + webhooks) to use it — those still construct `MockVerificationDispatcher` directly. When
-    flipping the flag in production, also swap that construction to `VerificationDispatcher()`.
-  - **Flinks income extraction via Enrich API.** Real income / NSF extraction needs Flinks's
-    Enrich endpoint (`/GetAccountsSummary` / Attributes); P7.2b will use it for normalization.
+  Equifax bureau stays mocked.
+
+- **2026-05-30 (P7.2b inbound shipped)** — **Real Didit + Flinks webhook RESULT path.**
+  Per-vendor schemas (`DiditWebhookPayload`, `FlinksWebhookPayload`) + translators
+  (`app/services/webhooks/translators.py`) mapping real vendor JSON → `rich_payload` the
+  shipped replay adapters consume. `SignatureVerifier` extended to dispatch per vendor:
+  Didit `X-Signature-V2` (canonical-JSON HMAC-SHA256-hex) + `X-Timestamp`; Flinks
+  `flinks-authenticity-key` (base64 HMAC-SHA256 of raw body); Equifax keeps the original
+  MVP envelope until a real adapter ships. Flinks Tag feature carries `application_id`
+  through Connect; `vendor_session_ref` is upgraded from the placeholder Connect URL to
+  `Login.Id` on first webhook. `get_orchestrator` (applicant + webhooks deps) now uses
+  `VerificationDispatcher()` so flipping `USE_REAL_ADAPTERS=True` enables real outbound
+  + real inbound in one switch.
+  **Open follow-ups:**
+  - **Flinks Enrich/Attributes API for precision income/NSF.** P7.2b derives
+    `monthly_income_cents` / `nsf_count_90d` / `account_age_months` by walking
+    `Accounts[].Transactions[]` arithmetically in `translators._derive_bank_metrics`.
+    Replace with a follow-up Flinks Enrich call once subscription is confirmed
+    (TODO logged in-translator).
+  - **`USE_REAL_ADAPTERS` prod flip.** Flag still defaults False; flip in prod once
+    Didit + Flinks creds are configured.
+  - **`platform_verification_status` "manual_review" enum value.** Didit's "In Review"
+    status currently 202-skips (verification stays `pending`) because the enum has no
+    manual-review state. Add via a future migration if Didit's manual-review path needs
+    explicit ops handling.
   - **Equifax bureau adapter (real).** Still pending the subscriber agreement; `MockBureauAdapter`
-    remains the active bureau adapter even when `USE_REAL_ADAPTERS=True`.
+    remains the active bureau adapter even when `USE_REAL_ADAPTERS=True`. The
+    `/equifax/verification` route keeps the MVP envelope until then.
 
 ## Infrastructure / process debt
 

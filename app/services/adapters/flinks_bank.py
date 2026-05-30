@@ -60,10 +60,18 @@ class FlinksBankAdapter(BankAdapter):
         cost_cents: int = 0,
     ) -> FlinksInitiationResult:
         """Build the Flinks Connect URL the patient is redirected to. No HTTP at this step."""
-        # Encode application_id in the redirect so P7.2b's post-redirect handler can
-        # correlate the resulting LoginId back to the right application.
+        # Encode application_id in both the redirect (for the browser callback) and
+        # the Flinks ``tag`` parameter (P7.2b correlation bridge). Per Flinks docs,
+        # the Tag is echoed back verbatim in the webhook body, letting us look up
+        # PlatformVerification by application_id when the webhook arrives — the
+        # equivalent of Didit's ``vendor_data`` echo.
+        # Ref: https://help.flinks.com/.../43000436150-using-tag-and-webhooks-with-flinks-connect
         redirect = f"{_REDIRECT_URL_BASE}?{urlencode({'application_id': application_id})}"
-        query = urlencode({"customerId": self._customer_id, "redirectUrl": redirect})
+        query = urlencode({
+            "customerId": self._customer_id,
+            "redirectUrl": redirect,
+            "tag": application_id,
+        })
         connect_url = f"{_IFRAME_BASE}/v2/?{query}"
         return FlinksInitiationResult(
             login_id=None,           # populated only after Connect completes
