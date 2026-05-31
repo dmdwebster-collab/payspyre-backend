@@ -16,8 +16,12 @@ from uuid import UUID
 
 # Terminal outcome of a single verification. "unknown" is reserved for the
 # timeout/indeterminate case and is treated by the engine as manual_review,
-# never as a failure (per kickoff "adapter timeout policy").
-VerificationOutcome = Literal["passed", "failed", "unknown"]
+# never as a failure (per kickoff "adapter timeout policy"). "manual_review"
+# is a vendor-asserted human-review signal (P7.5/P7.6) — distinct from
+# "unknown" (timeout/indeterminate) — and is currently produced by the
+# Didit "In Review" path through the replay verification adapter; bureau
+# and bank adapters do not construct results with this value in practice.
+VerificationOutcome = Literal["passed", "failed", "unknown", "manual_review"]
 
 
 @dataclass(frozen=True)
