@@ -125,9 +125,7 @@ async def get_csrf_token():
 
 @app.on_event("startup")
 async def startup_event():
-    from app.services.notifications import NotificationQueue
-    from app.db.base import SessionLocal, engine
-    import asyncio
+    from app.db.base import engine
 
     logger.info("application_startup", environment=settings.ENVIRONMENT)
 
@@ -143,26 +141,11 @@ async def startup_event():
     except Exception as e:
         logger.error("database_connection_error", error=str(e))
 
-    async def process_notification_queue():
-        while True:
-            try:
-                db = SessionLocal()
-                queue = NotificationQueue(db)
-                await queue.process_queue()
-                await queue.retry_pending_webhooks()
-                db.close()
-                await asyncio.sleep(settings.NOTIFICATION_QUEUE_PROCESSING_INTERVAL)
-            except Exception as e:
-                logger.error("notification_queue_error", error=str(e))
-                await asyncio.sleep(settings.NOTIFICATION_QUEUE_PROCESSING_INTERVAL)
-
-    import threading
-    queue_thread = threading.Thread(
-        target=lambda: asyncio.run(process_notification_queue()),
-        daemon=True,
-    )
-    queue_thread.start()
-    logger.info("notification_queue_started")
+    # The V1 NotificationQueue polling thread was removed in P7.4c (its
+    # `notifications` table never existed in V2 — the loop only produced
+    # `relation "notifications" does not exist` log spam). Magic-link sends
+    # travel through ``RealNotificationDispatcher`` (P7.4) directly from the
+    # applicant endpoints; no background poller is needed.
 
 
 @app.on_event("shutdown")
