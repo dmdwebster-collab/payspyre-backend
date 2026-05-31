@@ -16,20 +16,34 @@
   `recipient_redacted = sha256(canonical)`. On vendor failure, raise → auth-service
   rolls back the session → no orphan `magic_link_issued`. `get_notification_dispatcher`
   selects mock vs real per the flag.
+
+- **2026-05-31 (P7.4b inbound shipped)** — **Inbound notification webhooks + suppression.**
+  `POST /api/webhooks/v1/notifications/twilio` (Messaging StatusCallback;
+  `X-Twilio-Signature` via `twilio.request_validator.RequestValidator`) and
+  `POST /api/webhooks/v1/notifications/resend` (Svix events; stdlib HMAC-SHA256 over
+  `{svix-id}.{svix-timestamp}.{body}` against a base64-decoded `whsec_*` secret).
+  New `notification_suppression` table (migration 023, sub-ms `is_suppressed` lookup
+  via index on `recipient_redacted`); `RealNotificationDispatcher` consults it
+  pre-send (gated `USE_SUPPRESSION_CHECK=True` default). Canonical status alphabet
+  in payload (`delivered` / `sent` / `failed_transient` / `failed_permanent` /
+  `complained`) — no DB enum. Twilio carrier-level Advanced Opt-Out (error 21610)
+  → automatic `opt_out` suppression. Resend `email.bounced` permanence carried in
+  `data.bounce.type` ("Permanent" → hard_bounce; "Transient" → no suppression).
+  Orchestrator unchanged (observability-only — kickoff §6.8). Orphans (unknown
+  `vendor_message_id`) → `webhook_orphaned` event + 202.
   **Open follow-ups:**
-  - **P7.4b — inbound vendor webhooks.** Twilio `StatusCallback` (HMAC-SHA1 base64,
-    `X-Twilio-Signature`) + Resend Svix events (HMAC-SHA256 base64 of
-    `{svix-id}.{svix-timestamp}.{body}`). Extends `app/services/webhooks/signature_verifier.py`
-    with `twilio` + `resend` vendor branches and adds `notification_status_updated`
-    events upgrading the P7.4 `status: queued|sent` to `delivered` / `bounced` /
-    `complained` / `failed`. Includes Twilio opt-out (STOP-reply) handling →
-    mark patient phone as suppressed.
   - **P7.4c — V1 NotificationQueue un-mount.** Mirrors P7.1 pattern: delete
     `app/services/notifications.py`, `app/api/v1/endpoints/notifications.py`,
     `app/models/notification.py`, and the `app/main.py:150` background-loop
     instantiation. Closes the `relation "notifications" does not exist` runtime
-    spam that has been present in every test run since pre-P0. P7.4 deliberately
-    does NOT touch this — it's a separate clean diff with its own bisection value.
+    spam that has been present in every test run since pre-P0. P7.4 and P7.4b
+    deliberately do NOT touch this — it's a separate clean diff with its own
+    bisection value.
+  - **Inbound-SMS receiver (Twilio /messages/twilio).** Skipped in P7.4b —
+    carrier-level Advanced Opt-Out handles STOP keywords and surfaces error
+    21610 in StatusCallback (which P7.4b records as `opt_out`). If we ever
+    need richer keyword handling (HELP, START, custom) we'll add the
+    incoming-SMS receiver as a separate phase.
   - **Resend typed exceptions (track SDK upstream).** The `resend>=0.8.0` SDK
     raises bare `Exception`; we heuristically classify via
     `_classify_resend_error` (HTTP-status attrs first, then message-string hints

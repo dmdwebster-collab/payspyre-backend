@@ -6,6 +6,9 @@ from app.db.base import get_db
 from app.services.webhooks.signature_verifier import SignatureVerifier
 
 # Vendors with a configured webhook secret (path-param allowlist; unknown → 404).
+# P7.4b adds twilio + resend but they route through their own /notifications/{vendor}
+# endpoints (different body shape + signature scheme), not the
+# /{vendor}/verification path-param route.
 SUPPORTED_VENDORS = ("didit", "flinks", "equifax")
 
 

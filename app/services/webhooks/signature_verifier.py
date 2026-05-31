@@ -1,4 +1,4 @@
-"""Vendor webhook HMAC signature verification (P6.6 + P7.2b).
+"""Vendor webhook HMAC signature verification (P6.6 + P7.2b + P7.4b).
 
 This module dispatches per-vendor signature schemes; each vendor uses its own
 header(s) and canonicalization (no shared "X-Signature" envelope outside of the
@@ -26,12 +26,32 @@ Schemes:
   ``X-Timestamp`` / ``X-Nonce`` envelope: HMAC-SHA256 of
   ``X-Timestamp + "." + raw_body``. Stays until a real Equifax adapter ships.
 
-Stdlib only (``hmac`` + ``hashlib`` + ``base64`` + ``json``).
+- ``twilio`` (P7.4b) — ``X-Twilio-Signature``: base64(HMAC-SHA1(auth_token,
+  full_url + ''.join(sorted(form_key + form_value)))). Form-encoded body, so
+  signature must be computed over the parsed form dict, not the raw body —
+  verification therefore happens *after* form parsing (the only inversion of
+  the verify-before-parse rule, narrowly scoped to this scheme; documented
+  per Twilio's RequestValidator contract). We delegate to
+  ``twilio.request_validator.RequestValidator`` (already in deps from P7.4).
+  No timestamp header. Composite nonce ``"twilio:<MessageSid>:<MessageStatus>"``.
+
+- ``resend`` (P7.4b) — Svix signature scheme over JSON bodies. Three headers:
+  ``svix-id``, ``svix-timestamp``, ``svix-signature`` (``"v1,<b64> v1,<b64>"`` —
+  may carry multiple sigs for key rotation). HMAC-SHA256 of
+  ``"{svix-id}.{svix-timestamp}.{raw_body}"`` against the endpoint secret's
+  base64-decoded HMAC key (``RESEND_WEBHOOK_SECRET`` format ``whsec_<b64>``).
+  Timestamp window 5 minutes. Nonce is ``svix-id``.
+  Ref: https://docs.svix.com/receiving/verifying-payloads/how-manual
+
+Stdlib only for didit/flinks/equifax/resend (``hmac`` + ``hashlib`` + ``base64``
++ ``json``). Twilio uses the official SDK's ``RequestValidator`` since the
+algorithm includes URL parameter sort + concat that is finicky to reimplement.
 Secrets are read from ``settings`` at call time so tests can monkeypatch them.
 """
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import hmac
 import json
@@ -62,10 +82,14 @@ class NonceReplayed(SignatureVerificationError):
 
 # Read secrets from `settings` at call time (so monkeypatch works in tests).
 # DIDIT reuses the pre-existing DIDIT_WEBHOOK_SECRET (shared with V1 KYC).
+# Twilio reuses TWILIO_AUTH_TOKEN (per Twilio convention; same token signs
+# webhooks and authenticates the REST API).
 _VENDOR_SECRET_GETTERS: dict[str, Callable[[], str]] = {
     "didit": lambda: settings.DIDIT_WEBHOOK_SECRET,
     "flinks": lambda: settings.FLINKS_WEBHOOK_SECRET,
     "equifax": lambda: settings.EQUIFAX_WEBHOOK_SECRET,
+    "twilio": lambda: settings.TWILIO_AUTH_TOKEN,
+    "resend": lambda: settings.RESEND_WEBHOOK_SECRET,
 }
 
 
@@ -121,6 +145,10 @@ class SignatureVerifier:
         is untrusted and should never be parsed/persisted. The nonce check is
         separate (``check_nonce``) because real vendors carry their nonce in
         the body, which can only be safely read after the signature verifies.
+
+        Note: the ``twilio`` scheme requires the parsed form dict (not the raw
+        body) for signature computation, so its caller uses ``verify_twilio_form``
+        directly rather than this entry point.
         """
         secret = self._get_vendor_secret(vendor)
         if vendor == "didit":
@@ -129,8 +157,38 @@ class SignatureVerifier:
             self._verify_flinks(secret, raw_body, headers)
         elif vendor == "equifax":
             self._verify_mvp(secret, raw_body, headers)
+        elif vendor == "resend":
+            self._verify_resend(secret, raw_body, headers)
+        elif vendor == "twilio":  # pragma: no cover — see verify_twilio_form
+            raise SignatureInvalid(
+                "Twilio sig verification needs the form dict + URL — call verify_twilio_form"
+            )
         else:  # pragma: no cover — guarded by SUPPORTED_VENDORS in deps.py
             raise SignatureInvalid(f"Unknown vendor '{vendor}'")
+
+    def verify_twilio_form(
+        self,
+        url: str,
+        form_params: dict[str, str],
+        headers: dict[str, str],
+    ) -> None:
+        """Twilio's StatusCallback verification entry point.
+
+        Twilio signs ``base64(HMAC-SHA1(auth_token, url + sorted_form_pairs_concat))``;
+        the sorted-pair-concat step makes this annoying to reimplement, so we
+        delegate to the official ``RequestValidator``. The ``url`` arg must be
+        the public URL Twilio sent the request to (scheme + host + path + query) —
+        the endpoint resolves any reverse-proxy mismatch and a configurable
+        ``WEBHOOK_PUBLIC_BASE_URL`` override before calling us.
+        """
+        from twilio.request_validator import RequestValidator
+        secret = self._get_vendor_secret("twilio")
+        x_twilio_signature = _header(headers, "X-Twilio-Signature")
+        if not x_twilio_signature:
+            raise SignatureInvalid("Missing X-Twilio-Signature")
+        validator = RequestValidator(secret)
+        if not validator.validate(url, form_params, x_twilio_signature):
+            raise SignatureInvalid("Signature mismatch")
 
     def check_nonce(self, vendor_event_id: str) -> None:
         """Replay check against the ``platform_events`` log. Call AFTER signature
@@ -187,6 +245,43 @@ class SignatureVerifier:
         expected = hmac.new(secret.encode(), sig_input, hashlib.sha256).hexdigest()
         if not hmac.compare_digest(expected, x_signature):
             raise SignatureInvalid("Signature mismatch")
+
+    def _verify_resend(self, secret: str, raw_body: bytes, headers: dict[str, str]) -> None:
+        """Svix scheme — HMAC-SHA256 of ``"{svix-id}.{svix-timestamp}.{body}"``.
+
+        Ref: https://docs.svix.com/receiving/verifying-payloads/how-manual
+        """
+        svix_id = _header(headers, "svix-id")
+        svix_timestamp = _header(headers, "svix-timestamp")
+        svix_signature = _header(headers, "svix-signature")
+        if not svix_id:
+            raise SignatureInvalid("Missing svix-id")
+        if not svix_signature:
+            raise SignatureInvalid("Missing svix-signature")
+        self._check_timestamp(svix_timestamp)
+        # Endpoint secret format: "whsec_<base64-of-hmac-key>". Strip the prefix
+        # + base64-decode to get the raw HMAC key bytes.
+        if not secret.startswith("whsec_"):
+            raise SignatureInvalid("RESEND_WEBHOOK_SECRET must start with 'whsec_'")
+        try:
+            key = base64.b64decode(secret[len("whsec_"):])
+        except (ValueError, binascii.Error):
+            raise SignatureInvalid("RESEND_WEBHOOK_SECRET is not valid base64")
+        signed_content = f"{svix_id}.{svix_timestamp}.{raw_body.decode('utf-8')}".encode("utf-8")
+        expected_digest = base64.b64encode(
+            hmac.new(key, signed_content, hashlib.sha256).digest()
+        ).decode("ascii")
+        # svix-signature is space-delimited; each entry is ``"v<ver>,<base64>"``.
+        # Match v1 entries against our expected digest (constant-time).
+        for entry in svix_signature.split(" "):
+            if not entry or "," not in entry:
+                continue
+            version, sig = entry.split(",", 1)
+            if version != "v1":
+                continue
+            if hmac.compare_digest(expected_digest, sig):
+                return
+        raise SignatureInvalid("Signature mismatch")
 
     # -- shared guards ------------------------------------------------------
 
