@@ -438,6 +438,9 @@ class RealNotificationDispatcher:
         )
         self.db.add(event)
         self.db.flush()  # assign event.id BEFORE the vendor call
+        # P8.0 — fan-out (magic_link_issued is on the default allowlist).
+        from app.services.observability.posthog_bridge import capture_event
+        capture_event(event)
         return event
 
     def _build_sender(self, contact_method: str):
@@ -504,6 +507,9 @@ class RealNotificationDispatcher:
         )
         self.db.add(event)
         self.db.flush()
+        # P8.0 — fan-out (notification_sent is on the default allowlist).
+        from app.services.observability.posthog_bridge import capture_event
+        capture_event(event)
 
     # -- mock parity: tests that assert dispatcher._sent introspection patterns
     # remain on MockNotificationDispatcher. The real dispatcher has no
