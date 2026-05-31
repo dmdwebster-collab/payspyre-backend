@@ -60,6 +60,15 @@ class MockNotificationDispatcher:
         )
         self.db.add(event)
         self.db.flush()  # assign event.id
+        # P8.0 — fan-out (magic_link_issued is on the default allowlist). The
+        # mock dispatcher is only reachable in tests/dev (the prod selector in
+        # ``get_notification_dispatcher`` returns RealNotificationDispatcher
+        # when USE_REAL_NOTIFICATIONS=True); with OBSERVABILITY_ENABLED=False
+        # this is a no-op, and the hook lives here for symmetry with the real
+        # path so any future test that turns observability on inside the mock
+        # captures cleanly.
+        from app.services.observability.posthog_bridge import capture_event
+        capture_event(event)
         self._sent.append(
             {
                 "contact_method": contact_method,

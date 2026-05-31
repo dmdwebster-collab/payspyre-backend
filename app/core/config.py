@@ -84,6 +84,25 @@ class Settings(BaseSettings):
     # before the vendor call. Disable only for tests that need to bypass it.
     USE_SUPPRESSION_CHECK: bool = True
 
+    # Observability — P8.0 PostHog bridge. Default disabled; flip per-env via
+    # OBSERVABILITY_ENABLED=true once POSTHOG_API_KEY is set. The allowlist is
+    # a CSV of platform_events event_type values; everything else is dropped
+    # at the fan-out hook (no log noise). Hard Rule #6 (no PII) is enforced
+    # inside posthog_bridge._safe_properties — never widen the allowlist
+    # without re-reading that helper.
+    POSTHOG_API_KEY: str = ""
+    POSTHOG_HOST: str = "https://us.i.posthog.com"
+    OBSERVABILITY_ENABLED: bool = False
+    OBSERVABILITY_POSTHOG_ALLOWLIST: str = (
+        "verification_completed,"
+        "webhook_rejected,"
+        "webhook_orphaned,"
+        "notification_sent,"
+        "notification_status_updated,"
+        "decision_made,"
+        "magic_link_issued"
+    )
+
     # CORS
     CORS_ORIGINS: str = "http://localhost:3000,https://payspyre.com"
 
