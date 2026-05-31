@@ -336,6 +336,56 @@ class TestDecisionPaths:
         db_session.refresh(app)
         assert app.status == "approved"
 
+    def test_didit_in_review_end_to_end_decides_under_review(self, db_session: Session):
+        """P7.6 — Didit "In Review" landing as ``result="manual_review"`` on
+        the identity verification pulls the application to ``under_review``
+        even with an otherwise-clean bureau score, and surfaces
+        ``identity_manual_review`` in the decision reasons.
+
+        Walks the full pipeline: create app + grants + initiate all four
+        verifications, then complete kyc_id with ``result="manual_review"``
+        (the P7.5 vendor-webhook landing shape) and the other three with
+        the existing clean-720 path. The orchestrator's ``_decide`` runs
+        once everything is terminal; the engine's identity manual_review
+        branch (added in P7.6) routes through ``_resolve_decision`` to
+        ``decision = "manual_review"`` → ``next_state = "under_review"``.
+        """
+        orch = _orch(db_session)
+        patient = _make_patient(db_session)
+        app = _create_app(orch, patient.id, _seed_product_id(db_session))
+        for p in _REQUIRED_PURPOSES:
+            _grant(orch, app.id, p)
+        verifs = {p: orch.initiate_verification(app.id, p) for p in _REQUIRED_PURPOSES}
+        for p, verif in verifs.items():
+            if verif.verification_type == "kyc_id":
+                # P7.5 webhook landing shape: result="manual_review" with the
+                # rich_payload Didit's translator produces.
+                orch.handle_verification_result(
+                    app.id, verif.id,
+                    vendor_event_id=f"evt-{verif.id}",
+                    result="manual_review",
+                    rich_payload={
+                        "method": "document",
+                        "result": "manual_review",
+                        "confidence": 0.95,
+                        "vendor": "didit",
+                        "vendor_session_ref": f"didit-sess-{verif.id}",
+                        "didit_status": "In Review",
+                    },
+                )
+            else:
+                orch.handle_verification_result(
+                    app.id, verif.id,
+                    vendor_event_id=f"evt-{verif.id}",
+                    result="passed",
+                    rich_payload=_rich(orch.dispatcher, verif.verification_type, score=720),
+                )
+        db_session.refresh(app)
+        assert app.status == "under_review"
+        assert app.decision is not None
+        assert app.decision["decision"] == "manual_review"
+        assert "identity_manual_review" in app.decision["decision_reasons"]
+
 
 # ---------------------------------------------------------------------------
 # submit_for_decision

@@ -63,6 +63,7 @@ REASON_MANUAL_REVIEW_BAND = "manual_review_band"
 REASON_BUREAU_BELOW_MINIMUM = "bureau_below_minimum"
 REASON_ACTIVE_BANKRUPTCY = "active_bankruptcy"
 REASON_FRAUD_SIGNAL_REVIEW = "fraud_signal_review"
+REASON_IDENTITY_MANUAL_REVIEW = "identity_manual_review"  # P7.6 — Didit "In Review"
 
 
 def _reason_failed(verification_type: str) -> str:
@@ -180,22 +181,34 @@ def _effective_identity_outcome(result: Optional[VerificationResult], min_confid
         return "unknown"
     if result.result == "failed":
         return "failed"
+    if result.result == "manual_review":
+        # P7.6 — vendor-asserted human review (Didit "In Review"). Distinct
+        # from "unknown" (timeout/indeterminate); the confidence floor does
+        # NOT apply because manual_review is not a graded outcome.
+        return "manual_review"
     # result == "passed": enforce the product's confidence floor.
     if result.confidence >= min_confidence:
         return "passed"
     return "failed"
 
 
-def _resolve_decision(outcome: _ApplicantOutcome, *, bankruptcy: bool, fraud_review: bool,
-                      has_unknown: bool, has_failed_required: bool) -> str:
+def _resolve_decision(
+    outcome: _ApplicantOutcome,
+    *,
+    bankruptcy: bool,
+    fraud_review: bool,
+    has_unknown: bool,
+    has_failed_required: bool,
+    identity_manual_review: bool,
+) -> str:
     """Resolve a single applicant's decision.
 
     Precedence: a *confirmed* hard disqualifier (bankruptcy, or a confirmed
     below-floor score) is final and declines — an unrelated timeout does not
     rescue it to manual_review. Otherwise any indeterminate/soft-review condition
-    (unknown verification, failed required verification, fraud signal, or a score
-    in the manual-review band) yields manual_review. A clean above-band score
-    approves."""
+    (unknown verification, failed required verification, fraud signal, identity
+    manual-review — P7.6 — or a score in the manual-review band) yields
+    manual_review. A clean above-band score approves."""
     score = outcome.effective_score
     band = outcome.band
 
@@ -206,7 +219,7 @@ def _resolve_decision(outcome: _ApplicantOutcome, *, bankruptcy: bool, fraud_rev
             outcome.reasons.append(REASON_BUREAU_BELOW_MINIMUM)
         return "declined"
 
-    review = has_unknown or has_failed_required or fraud_review
+    review = has_unknown or has_failed_required or fraud_review or identity_manual_review
     if score is not None and band["min"] <= score <= band["max"]:
         if REASON_MANUAL_REVIEW_BAND not in outcome.reasons:
             outcome.reasons.append(REASON_MANUAL_REVIEW_BAND)
@@ -240,6 +253,7 @@ async def _run_single_applicant(
 
     has_unknown = False
     has_failed_required = False
+    has_identity_manual_review = False  # P7.6 — vendor-asserted human review
 
     # --- Identity (KYC) ---------------------------------------------------
     identity_cfg = matrix.get("identity", {}) if isinstance(matrix.get("identity"), dict) else {}
@@ -259,6 +273,10 @@ async def _run_single_applicant(
             elif effective == "failed":
                 has_failed_required = True
                 reasons.append(_reason_failed("identity"))
+            elif effective == "manual_review":
+                has_identity_manual_review = True
+                if REASON_IDENTITY_MANUAL_REVIEW not in reasons:
+                    reasons.append(REASON_IDENTITY_MANUAL_REVIEW)
 
     # --- Income (bank link) ----------------------------------------------
     income_cfg = matrix.get("income", {}) if isinstance(matrix.get("income"), dict) else {}
@@ -338,6 +356,7 @@ async def _run_single_applicant(
     outcome.decision = _resolve_decision(
         outcome, bankruptcy=bankruptcy, fraud_review=fraud_review,
         has_unknown=has_unknown, has_failed_required=has_failed_required,
+        identity_manual_review=has_identity_manual_review,
     )
     return outcome
 
