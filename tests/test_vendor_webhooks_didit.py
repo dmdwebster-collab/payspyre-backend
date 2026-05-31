@@ -147,7 +147,9 @@ class TestDiditHappyPath:
 
 
 class TestDiditNonTerminal:
-    @pytest.mark.parametrize("status", ["In Progress", "In Review", "Resubmitted"])
+    # P7.5: "In Review" used to live here but is now terminal — covered by
+    # tests/test_didit_in_review_terminal.py.
+    @pytest.mark.parametrize("status", ["In Progress", "Resubmitted"])
     def test_non_terminal_returns_202_and_leaves_pending(self, client, db_session, secret, status):
         app_id, verif_id = _setup_pending_kyc(db_session)
         body = _didit_body(app_id, status=status)

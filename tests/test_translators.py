@@ -65,15 +65,37 @@ class TestDiditTerminal:
 
 class TestDiditNonTerminal:
     @pytest.mark.parametrize(
-        "status", ["In Progress", "Not Started", "Resubmitted", "In Review"]
+        "status", ["In Progress", "Not Started", "Resubmitted"]
     )
     def test_non_terminal_skips(self, status):
+        # P7.5: "In Review" used to be in this set but is now terminal
+        # (result="manual_review") — see TestDiditManualReview.
         r = translate_didit_payload(_didit_payload(status=status))
         assert r.skip is True
         assert r.result is None
         assert r.rich_payload is None
         # vendor_event_id still set so the endpoint can record receipt.
         assert r.vendor_event_id == "ev-1"
+
+
+class TestDiditManualReview:
+    """P7.5 — Didit "In Review" → result="manual_review" terminal."""
+
+    def test_in_review_maps_to_manual_review_result(self):
+        r = translate_didit_payload(_didit_payload(status="In Review"))
+        assert r.skip is False
+        assert r.result == "manual_review"
+        assert r.verification_type == "kyc_id"
+        assert r.vendor_event_id == "ev-1"
+
+    def test_in_review_carries_rich_payload(self):
+        # Same rich_payload extraction as the passed/failed paths so replay
+        # adapters and ops dashboards see consistent fields.
+        r = translate_didit_payload(_didit_payload(status="In Review"))
+        assert r.rich_payload is not None
+        assert r.rich_payload["result"] == "manual_review"
+        assert r.rich_payload["vendor"] == "didit"
+        assert r.rich_payload["didit_status"] == "In Review"
 
 
 class TestDiditRichPayload:
