@@ -7,7 +7,7 @@ from alembic import context
 
 from app.core.config import settings
 from app.db.base import Base
-from app.models import kyc, notification, user
+from app.models import kyc, user  # P7.4c: notification model deleted (V1 NotificationQueue un-mount)
 
 config = context.config
 
