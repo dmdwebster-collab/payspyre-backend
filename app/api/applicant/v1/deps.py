@@ -62,7 +62,24 @@ def require_app_scope(application_id: UUID, claims: ApplicantClaims) -> None:
 # --- injectable collaborators (overridable in tests) -----------------------
 
 
-def get_notification_dispatcher(db: Session = Depends(get_db)) -> MockNotificationDispatcher:
+def get_notification_dispatcher(db: Session = Depends(get_db)):
+    """Select between mock and real notification dispatcher per the flag.
+
+    P7.4: flips to ``RealNotificationDispatcher`` when
+    ``settings.USE_REAL_NOTIFICATIONS=True`` (prod startup validator in
+    ``app/core/config.py`` fails loud if the flag is True without the Resend
+    + Twilio credentials). Default False preserves the P6.5 mock behavior;
+    tests that override the dep with their own mock are unaffected.
+
+    Return type is duck-typed: both dispatchers expose
+    ``send_magic_link(patient_id, application_id, contact_method, token,
+    ttl_seconds=900) -> int``.
+    """
+    from app.core.config import settings
+
+    if settings.USE_REAL_NOTIFICATIONS:
+        from app.services.real_notification_dispatcher import RealNotificationDispatcher
+        return RealNotificationDispatcher(db)
     return MockNotificationDispatcher(db)
 
 

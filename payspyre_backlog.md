@@ -5,7 +5,41 @@
 - **2026-05-26 (P6.5 → updated P6.6)** — **HMAC vendor webhook infrastructure: SHIPPED in P6.6** at `POST /api/webhooks/v1/{vendor}/verification` (didit/flinks/equifax; HMAC-SHA256 + timestamp window + nonce replay via `platform_events`). **Remaining for P7:**
   - ~~**Remove the applicant-callable callback** `POST /api/applicant/v1/applications/{id}/verifications/{type}/callback` once vendor webhooks are the canonical path — it is now **deprecated** (emits a WARNING log + `Deprecation: true` / `Sunset: 2026-08-01` response headers) but kept functional for continuity.~~ **RESOLVED in P7.3 (2026-05-30):** route + handler removed; `VerificationCallbackBody` / `VerificationCallbackResponse` schemas dropped; `tests/test_applicant_callback_deprecation.py` deleted; `tests/test_applicant_journey.py` `_drive()` + steps 12-13 rewired to call `FlowOrchestrator.handle_verification_result(...)` directly (Option C — vendor wire transport is exhaustively covered in the `test_vendor_webhooks_*.py` suite, so the journey test stays focused on the state-machine contract).
   - ~~Real vendor-specific payload parsing (beyond the common MVP envelope) for Didit/Flinks/Equifax.~~ **RESOLVED in P7.2b (2026-05-30)** — see the P7.2b entry below; Equifax stays MVP-envelope until subscriber agreement closes.
-  - Real Twilio/SendGrid wiring for magic-link sends (currently `MockNotificationDispatcher`).
+  - ~~Real Twilio/SendGrid wiring for magic-link sends (currently `MockNotificationDispatcher`).~~ **RESOLVED in P7.4 (2026-05-31)** — note the kickoff used "SendGrid" as loose shorthand; the implementation uses **Resend** (matching the pre-existing `RESEND_API_KEY` / `RESEND_FROM_EMAIL` config slots) + Twilio for SMS. See the P7.4 entry below.
+
+- **2026-05-31 (P7.4 outbound shipped)** — **Real notification adapters — send_magic_link only.**
+  `RealNotificationDispatcher` (Resend for email, Twilio for SMS), flag-gated by
+  `USE_REAL_NOTIFICATIONS=False`; prod startup validator fails loud when the flag is True
+  but `RESEND_API_KEY` / `RESEND_FROM_EMAIL` / `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` /
+  `TWILIO_FROM_NUMBER` are empty. Two-step write: `magic_link_issued` event flushed for
+  bigint id → vendor call (no internal retries) → `notification_sent` event with
+  `recipient_redacted = sha256(canonical)`. On vendor failure, raise → auth-service
+  rolls back the session → no orphan `magic_link_issued`. `get_notification_dispatcher`
+  selects mock vs real per the flag.
+  **Open follow-ups:**
+  - **P7.4b — inbound vendor webhooks.** Twilio `StatusCallback` (HMAC-SHA1 base64,
+    `X-Twilio-Signature`) + Resend Svix events (HMAC-SHA256 base64 of
+    `{svix-id}.{svix-timestamp}.{body}`). Extends `app/services/webhooks/signature_verifier.py`
+    with `twilio` + `resend` vendor branches and adds `notification_status_updated`
+    events upgrading the P7.4 `status: queued|sent` to `delivered` / `bounced` /
+    `complained` / `failed`. Includes Twilio opt-out (STOP-reply) handling →
+    mark patient phone as suppressed.
+  - **P7.4c — V1 NotificationQueue un-mount.** Mirrors P7.1 pattern: delete
+    `app/services/notifications.py`, `app/api/v1/endpoints/notifications.py`,
+    `app/models/notification.py`, and the `app/main.py:150` background-loop
+    instantiation. Closes the `relation "notifications" does not exist` runtime
+    spam that has been present in every test run since pre-P0. P7.4 deliberately
+    does NOT touch this — it's a separate clean diff with its own bisection value.
+  - **Resend typed exceptions (track SDK upstream).** The `resend>=0.8.0` SDK
+    raises bare `Exception`; we heuristically classify via
+    `_classify_resend_error` (HTTP-status attrs first, then message-string hints
+    against `_RESEND_PERMANENT_HINTS`). Swap to typed exception handling once
+    `resend.exceptions.*` ships.
+  - **Resend `Idempotency-Key` plumbing.** Resend supports the header
+    (24-hour TTL, ≤256 chars) but the Python SDK does not surface it. Either
+    bypass the SDK (call the API via `httpx` directly) or contribute upstream.
+    Combined with P7.4's no-internal-retries rule this is bounded today; revisit
+    if internal retries ever land.
 
 - **2026-05-28 (P7.2 outbound shipped)** — **Real Didit + Flinks adapters — initiate path only.**
   `DiditVerificationAdapter` (real `POST /v3/session/` with `x-api-key`), `FlinksBankAdapter`

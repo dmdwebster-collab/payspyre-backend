@@ -63,6 +63,13 @@ class Settings(BaseSettings):
     FLINKS_CUSTOMER_ID: str = ""       # GUID scoping Flinks calls; required for the real path
     USE_REAL_ADAPTERS: bool = False    # flip True in prod once Didit + Flinks creds are set
 
+    # Real notification adapters + feature flag — P7.4 (outbound only; inbound
+    # status callbacks deferred to P7.4b). When False (the default), the
+    # applicant API binds MockNotificationDispatcher and no SMS / email is sent.
+    # The Twilio + Resend slots above already exist; this flag flips the
+    # selector in app/api/applicant/v1/deps.py:get_notification_dispatcher.
+    USE_REAL_NOTIFICATIONS: bool = False
+
     # CORS
     CORS_ORIGINS: str = "http://localhost:3000,https://payspyre.com"
 
@@ -147,6 +154,24 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "USE_REAL_ADAPTERS is True but these required fields are empty: "
                     f"{', '.join(missing)}."
+                )
+        # P7.4: same shape — real notification outbound creds must be present.
+        if self.USE_REAL_NOTIFICATIONS:
+            missing_notif = [
+                name
+                for name, value in (
+                    ("RESEND_API_KEY", self.RESEND_API_KEY),
+                    ("RESEND_FROM_EMAIL", self.RESEND_FROM_EMAIL),
+                    ("TWILIO_ACCOUNT_SID", self.TWILIO_ACCOUNT_SID),
+                    ("TWILIO_AUTH_TOKEN", self.TWILIO_AUTH_TOKEN),
+                    ("TWILIO_FROM_NUMBER", self.TWILIO_FROM_NUMBER),
+                )
+                if not value
+            ]
+            if missing_notif:
+                raise ValueError(
+                    "USE_REAL_NOTIFICATIONS is True but these required fields are empty: "
+                    f"{', '.join(missing_notif)}."
                 )
         return self
 
