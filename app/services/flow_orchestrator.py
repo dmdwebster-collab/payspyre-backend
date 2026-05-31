@@ -156,7 +156,16 @@ CONSENT_TO_VERIFICATION_TYPE: dict[str, str] = {
 _CONSENT_ORDER = ["id_verification", "soft_bureau_pull", "bank_verification", "hard_bureau_pull"]
 
 _PENDING_STATUSES = ("pending", "in_progress")
-_TERMINAL_RESULT_TO_STATUS = {"passed": "passed", "failed": "failed"}
+# P7.5: ``manual_review`` is terminal — a Didit "In Review" payload lands
+# verification.status = "manual_review" and stops the per-verification flow.
+# The orchestrator's ``_ready_to_decide`` treats it as terminal (not in
+# ``_PENDING_STATUSES``); whether ``_decide()`` then runs depends on whether
+# every required vtype has a row outside ``_PENDING_STATUSES``.
+_TERMINAL_RESULT_TO_STATUS = {
+    "passed": "passed",
+    "failed": "failed",
+    "manual_review": "manual_review",
+}
 _PRE_DECISION_STATUSES = ("started", "verifying")
 _DECISION_STATUSES = ("approved", "declined", "under_review")
 
@@ -444,7 +453,7 @@ class FlowOrchestrator:
         application_id: UUID,
         verification_id: UUID,
         vendor_event_id: str,
-        result: str,  # 'passed' | 'failed'
+        result: str,  # 'passed' | 'failed' | 'manual_review' (P7.5)
         rich_payload: dict,
         _in_external_txn: bool = False,
     ) -> HandleResult:

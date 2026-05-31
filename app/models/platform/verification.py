@@ -23,7 +23,7 @@ class PlatformVerification(Base):
     )
 
     status = Column(
-        ENUM("pending", "in_progress", "passed", "failed", "expired",
+        ENUM("pending", "in_progress", "passed", "failed", "expired", "manual_review",
              name="platform_verification_status", create_type=False),
         nullable=False,
         default="pending"

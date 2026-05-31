@@ -7,7 +7,10 @@ Each translator turns a parsed vendor payload into the four things the
   (Didit's ``vendor_data``, Flinks's ``Tag``)
 - the **vendor_event_id** (str) — the idempotency nonce written into
   ``platform_events.payload.vendor_event_id``
-- the **result** (``"passed"`` / ``"failed"``) — derived from vendor status
+- the **result** (``"passed"`` / ``"failed"`` / ``"manual_review"``) — derived
+  from vendor status. ``"manual_review"`` (added in P7.5) carries Didit's
+  "In Review" verdict; the orchestrator persists it as
+  ``verification.status = "manual_review"``.
 - the **rich_payload** (dict) — the exact keys the replay adapters consume,
   documented in ``app/services/verifications/replay_adapters.py``
 
@@ -17,8 +20,8 @@ the only place that knows what real Didit/Flinks payloads look like.
 Special "no-op" return (``TranslateResult.skip == True``) signals the endpoint
 to acknowledge the delivery with 202 ``status=ignored`` without calling the
 orchestrator — used for non-terminal Didit statuses ("In Progress", "Not
-Started", "In Review", "Resubmitted") where Didit fires the webhook for
-status transitions we don't care about.
+Started", "Resubmitted") where Didit fires the webhook for status transitions
+we don't care about.
 """
 from __future__ import annotations
 
@@ -46,7 +49,7 @@ class TranslateResult:
     application_id: Optional[UUID]
     verification_type: Optional[str]               # platform_verification_type enum value
     vendor_event_id: Optional[str]
-    result: Optional[Literal["passed", "failed"]]
+    result: Optional[Literal["passed", "failed", "manual_review"]]
     rich_payload: Optional[dict[str, Any]]
     vendor_session_ref: Optional[str] = None       # used by Flinks to upgrade the placeholder
     skip: bool = False
@@ -56,14 +59,16 @@ class TranslateResult:
 # Didit (kyc_id)
 # ---------------------------------------------------------------------------
 
-# Status → terminal result. Anything not in either set is "skip" (non-terminal).
+# Status → terminal result. Anything not in any of these three sets is "skip"
+# (non-terminal — Didit fires the webhook for non-terminal transitions too).
 _DIDIT_PASSED_STATUSES = {"Approved"}
 _DIDIT_FAILED_STATUSES = {"Declined", "Expired", "KYC Expired", "Abandoned"}
-# Non-terminal (acknowledge + wait for a later transition):
-#   "In Progress" / "Not Started" / "Resubmitted" / "In Review"
-# Note: "In Review" stays non-terminal because the platform_verification_status
-# enum has no "manual_review" value (see P7.2b scope §7.4). The verification
-# remains ``pending`` until Didit delivers a final Approved / Declined.
+_DIDIT_MANUAL_REVIEW_STATUSES = {"In Review"}
+# Non-terminal (acknowledge + skip orchestrator call):
+#   "In Progress" / "Not Started" / "Resubmitted"
+# P7.5: "In Review" is now terminal — routes to result="manual_review", which
+# the orchestrator persists as verification.status = "manual_review" via the
+# platform_verification_status enum value added in migration 024.
 
 
 def translate_didit_payload(payload: DiditWebhookPayload) -> TranslateResult:
@@ -79,10 +84,13 @@ def translate_didit_payload(payload: DiditWebhookPayload) -> TranslateResult:
             f"Didit vendor_data is not a UUID: {payload.vendor_data!r}"
         ) from exc
 
+    result: Optional[Literal["passed", "failed", "manual_review"]]
     if payload.status in _DIDIT_PASSED_STATUSES:
-        result: Optional[Literal["passed", "failed"]] = "passed"
+        result = "passed"
     elif payload.status in _DIDIT_FAILED_STATUSES:
         result = "failed"
+    elif payload.status in _DIDIT_MANUAL_REVIEW_STATUSES:
+        result = "manual_review"
     else:
         # Non-terminal — acknowledge + skip orchestrator call.
         return TranslateResult(
