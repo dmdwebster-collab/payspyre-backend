@@ -98,3 +98,54 @@ class FlinksWebhookPayload(BaseModel):
     Tag: Optional[str] = None  # echoed application_id — the correlation bridge
     Accounts: Optional[list[dict[str, Any]]] = None
     RequestId: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Twilio Messaging StatusCallback (P7.4b)
+# Reference: https://www.twilio.com/docs/messaging/api/message-resource
+# Form-encoded body (application/x-www-form-urlencoded).
+# ---------------------------------------------------------------------------
+
+
+class TwilioStatusCallbackBody(BaseModel):
+    """The Twilio Messaging StatusCallback form body.
+
+    Only ``MessageSid`` + ``MessageStatus`` are required to correlate + classify
+    the delivery; ``ErrorCode`` is required for hard-bounce + opt-out detection
+    on the ``failed`` / ``undelivered`` statuses but is absent on ``delivered``.
+    Other fields are passed through for audit but unused by the translator.
+    """
+    model_config = ConfigDict(extra="allow")
+
+    MessageSid: str
+    MessageStatus: Literal[
+        "queued", "sending", "sent", "delivered", "undelivered", "failed",
+        "accepted", "scheduled",
+    ]
+    AccountSid: Optional[str] = None
+    From: Optional[str] = None
+    To: Optional[str] = None
+    ErrorCode: Optional[str] = None
+    SmsSid: Optional[str] = None
+    SmsStatus: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Resend webhook envelope (P7.4b)
+# Reference: https://resend.com/docs/dashboard/webhooks/introduction
+# JSON, Svix-signed.
+# ---------------------------------------------------------------------------
+
+
+class ResendWebhookEnvelope(BaseModel):
+    """The outer envelope Resend (via Svix) delivers for every email event.
+
+    The ``data`` shape is event-type-specific (e.g. ``email.bounced`` adds a
+    ``bounce: {type, subType, message}`` object); the translator destructures
+    it conditionally and the full body lands in the event payload for audit.
+    """
+    model_config = ConfigDict(extra="allow")
+
+    type: str                         # "email.delivered" | "email.bounced" | "email.complained" | ...
+    created_at: str                   # ISO-8601 string
+    data: dict[str, Any]              # event-specific; we read .email_id at minimum

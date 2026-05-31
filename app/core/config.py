@@ -70,6 +70,20 @@ class Settings(BaseSettings):
     # selector in app/api/applicant/v1/deps.py:get_notification_dispatcher.
     USE_REAL_NOTIFICATIONS: bool = False
 
+    # Inbound notification webhooks — P7.4b. Twilio reuses TWILIO_AUTH_TOKEN
+    # for StatusCallback signature validation (Twilio convention). Resend ships
+    # a per-endpoint Svix secret in "whsec_<base64>" form.
+    # WEBHOOK_PUBLIC_BASE_URL is an optional override used by the Twilio
+    # endpoint to reconstruct the URL Twilio actually signed (defeats
+    # reverse-proxy scheme/host mismatch). When empty the endpoint falls back
+    # to request.url (after honoring X-Forwarded-Proto).
+    RESEND_WEBHOOK_SECRET: str = ""
+    WEBHOOK_PUBLIC_BASE_URL: str = ""
+    # Pre-send suppression gate — when True (default), the real notification
+    # dispatcher rejects sends to recipients already on the suppression list
+    # before the vendor call. Disable only for tests that need to bypass it.
+    USE_SUPPRESSION_CHECK: bool = True
+
     # CORS
     CORS_ORIGINS: str = "http://localhost:3000,https://payspyre.com"
 

@@ -336,6 +336,7 @@ class RealNotificationDispatcher:
     ) -> int:
         """Persist the magic-link event, send via vendor, persist the audit, return event id."""
         recipient = self._resolve_recipient(patient_id, contact_method)
+        self._check_suppression(contact_method, recipient)
         issued_event = self._record_issued_event(
             patient_id, application_id, contact_method, token, ttl_seconds
         )
@@ -359,6 +360,23 @@ class RealNotificationDispatcher:
         return issued_event.id
 
     # -- internals ----------------------------------------------------------
+
+    def _check_suppression(self, contact_method: str, recipient: str) -> None:
+        """P7.4b — block sends to recipients on the suppression list before any
+        vendor HTTP call. Gated by ``settings.USE_SUPPRESSION_CHECK`` so tests
+        can disable it; defaults True so prod is safe by default.
+
+        Lazy import avoids a circular dependency: the repo imports
+        ``_hash_recipient`` from this module, so this module can't import the
+        repo at module load time.
+        """
+        if not settings.USE_SUPPRESSION_CHECK:
+            return
+        from app.repositories.notification_suppression import NotificationSuppressionRepo
+        if NotificationSuppressionRepo(self.db).is_suppressed(contact_method, recipient):
+            raise PermanentNotificationError(
+                f"recipient suppressed ({contact_method})"
+            )
 
     def _resolve_recipient(self, patient_id: UUID, contact_method: str) -> str:
         """Look up the patient's phone / email for the requested channel."""
