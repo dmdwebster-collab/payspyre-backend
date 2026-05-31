@@ -15,7 +15,8 @@ from sqlalchemy import create_engine, inspect, text
 # Import all models to populate Base.metadata
 # Note: funding models are excluded (not yet migrated)
 # Note: document + stripe models removed in P7.1 (dead V1 code un-mounted/deleted)
-from app.models import credit, kyc, loan, user, notification
+# Note: notification model removed in P7.4c (V1 NotificationQueue un-mount; deleted)
+from app.models import credit, kyc, loan, user
 from app.db.base import Base
 
 

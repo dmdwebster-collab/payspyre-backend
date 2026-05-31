@@ -32,13 +32,19 @@
   Orchestrator unchanged (observability-only — kickoff §6.8). Orphans (unknown
   `vendor_message_id`) → `webhook_orphaned` event + 202.
   **Open follow-ups:**
-  - **P7.4c — V1 NotificationQueue un-mount.** Mirrors P7.1 pattern: delete
+  - ~~**P7.4c — V1 NotificationQueue un-mount.** Mirrors P7.1 pattern: delete
     `app/services/notifications.py`, `app/api/v1/endpoints/notifications.py`,
     `app/models/notification.py`, and the `app/main.py:150` background-loop
     instantiation. Closes the `relation "notifications" does not exist` runtime
     spam that has been present in every test run since pre-P0. P7.4 and P7.4b
     deliberately do NOT touch this — it's a separate clean diff with its own
-    bisection value.
+    bisection value.~~ **RESOLVED in P7.4c (2026-05-31)** — un-mounted (commit A)
+    + 1,400 lines of V1 notification surface deleted across four files (commit B);
+    `app/schemas/notification.py` swept too (was only imported by the deleted V1
+    endpoint). Pre-flight confirmed V1 tables (`notifications`,
+    `notification_preferences`, `notification_templates`, `deliveries`,
+    `webhook_deliveries`) never existed on Supabase — no DB cleanup needed,
+    unlike the P7.1 V1 table cleanup follow-up. Runtime log spam is gone.
   - **Inbound-SMS receiver (Twilio /messages/twilio).** Skipped in P7.4b —
     carrier-level Advanced Opt-Out handles STOP keywords and surfaces error
     21610 in StatusCallback (which P7.4b records as `opt_out`). If we ever
