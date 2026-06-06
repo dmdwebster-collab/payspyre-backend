@@ -306,18 +306,24 @@ class SignatureVerifier:
             raise SignatureInvalid("Missing vendor_event_id (nonce)")
         if self.db is None:
             raise RuntimeError("SignatureVerifier needs a db session for the nonce check")
-        row = self.db.execute(
+        # Atomic claim (security finding #3 / review C1). The previous SELECT
+        # against platform_events was a check-then-act race with no unique
+        # constraint — two concurrent deliveries of the same signed webhook both
+        # passed and both processed. The processed_webhooks PRIMARY KEY serializes
+        # the claim: exactly one concurrent INSERT wins; the rest conflict
+        # (rowcount 0) and are rejected as replays. The claim lives in the
+        # webhook's unit-of-work txn, so it persists iff processing commits.
+        result = self.db.execute(
             text(
                 """
-                SELECT id FROM platform_events
-                WHERE event_type = 'webhook_received'
-                  AND payload @> :key
-                LIMIT 1
+                INSERT INTO processed_webhooks (vendor_event_id)
+                VALUES (:nonce)
+                ON CONFLICT (vendor_event_id) DO NOTHING
                 """
             ),
-            {"key": json.dumps({"vendor_event_id": nonce})},
-        ).first()
-        if row is not None:
+            {"nonce": nonce},
+        )
+        if result.rowcount == 0:
             raise NonceReplayed("Webhook nonce already processed")
 
 
