@@ -1,0 +1,22 @@
+# Active consent-text version per purpose (PaySpyre P5 — consent service).
+#
+# Spec §8.2: the active version per purpose is selected here. When the active
+# version changes, NEW consent records reference the new version; existing
+# platform_consents rows are immutable and preserve the exact text/version the
+# applicant saw (spec §2.6 hard rule — non-negotiable for class-action defense).
+#
+# The value for each purpose is the version stem of the file under
+# config/consent_text/<purpose>/<version>.md  (e.g. v1_2026-05 -> v1_2026-05.md).
+# The stored consent_text_version tag is "<purpose>/<version>" for traceability.
+
+schema_version: 1
+active:
+  id_verification: v1_2026-05
+  bank_verification: v1_2026-05
+  soft_bureau_pull: v1_2026-05
+  hard_bureau_pull: v1_2026-05
+  automated_decision_making: v1_2026-05
+  marketing_email: v1_2026-05
+  marketplace_listing: v1_2026-05
+  cross_sell_eligibility: v1_2026-05
+  aggregate_data_use: v1_2026-05
