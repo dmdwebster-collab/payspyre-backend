@@ -261,6 +261,10 @@ class FlowOrchestrator:
             payload=payload,
         )
         self.db.add(event)
+        # P8.0 — fire-and-forget mirror to PostHog. Local import keeps the
+        # dependency optional + avoids any circular at startup.
+        from app.services.observability.posthog_bridge import capture_event
+        capture_event(event)
         return event
 
     # -- public API ---------------------------------------------------------

@@ -92,7 +92,7 @@ def _find_notification_sent_event(
 
 
 def _emit_rejected(db: Session, vendor: str, reason: str) -> None:
-    db.add(PlatformEvent(
+    event = PlatformEvent(
         event_type="webhook_rejected",
         actor="vendor",
         payload={
@@ -101,8 +101,12 @@ def _emit_rejected(db: Session, vendor: str, reason: str) -> None:
             "vendor": vendor,
             "reason": reason,
         },
-    ))
+    )
+    db.add(event)
     db.commit()
+    # P8.0 — fan-out (webhook_rejected is on the default allowlist).
+    from app.services.observability.posthog_bridge import capture_event
+    capture_event(event)
 
 
 def _emit_received(db: Session, vendor: str, vendor_event_id: str) -> None:
@@ -110,7 +114,7 @@ def _emit_received(db: Session, vendor: str, vendor_event_id: str) -> None:
     looks for this row to detect replays. Mirrors the verification endpoint
     pattern at ``app/api/webhooks/v1/endpoints/verification.py``.
     """
-    db.add(PlatformEvent(
+    event = PlatformEvent(
         event_type="webhook_received",
         actor="vendor",
         payload={
@@ -119,15 +123,20 @@ def _emit_received(db: Session, vendor: str, vendor_event_id: str) -> None:
             "vendor": vendor,
             "vendor_event_id": vendor_event_id,
         },
-    ))
+    )
+    db.add(event)
     db.flush()  # the endpoint commits its full unit-of-work at the end
+    # P8.0 — fan-out (webhook_received is not on the default allowlist, so
+    # this is a no-op in default config; flagged on per env if desired).
+    from app.services.observability.posthog_bridge import capture_event
+    capture_event(event)
 
 
 def _emit_orphaned(
     db: Session, *, vendor: str, vendor_message_id: str,
     vendor_event_id: str, received_at: str,
 ) -> None:
-    db.add(PlatformEvent(
+    event = PlatformEvent(
         event_type="webhook_orphaned",
         actor="vendor",
         payload={
@@ -138,8 +147,12 @@ def _emit_orphaned(
             "vendor_event_id": vendor_event_id,
             "received_at": received_at,
         },
-    ))
+    )
+    db.add(event)
     db.commit()
+    # P8.0 — fan-out (webhook_orphaned is on the default allowlist).
+    from app.services.observability.posthog_bridge import capture_event
+    capture_event(event)
 
 
 def _emit_status_updated(
@@ -165,7 +178,7 @@ def _emit_status_updated(
         "magic_link_event_id": notification_sent_payload.get("magic_link_event_id"),
         "received_at": received_at,
     }
-    db.add(PlatformEvent(
+    event = PlatformEvent(
         event_type="notification_status_updated",
         actor="vendor",
         # The original notification_sent event carries patient + app ids; copy
@@ -173,7 +186,11 @@ def _emit_status_updated(
         patient_id=_uuid_or_none(notification_sent_payload.get("patient_id")),
         application_id=_uuid_or_none(notification_sent_payload.get("application_id")),
         payload=payload,
-    ))
+    )
+    db.add(event)
+    # P8.0 — fan-out (notification_status_updated is on the default allowlist).
+    from app.services.observability.posthog_bridge import capture_event
+    capture_event(event)
 
 
 def _uuid_or_none(s: Any) -> Any:

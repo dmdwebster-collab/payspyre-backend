@@ -80,37 +80,42 @@ def _emit_received(
     application_id: UUID,
     verification_type: str,
 ) -> None:
-    db.add(
-        PlatformEvent(
-            event_type="webhook_received",
-            actor="vendor",
-            payload={
-                "v": 1,
-                "actor": {"type": "vendor", "id": vendor},
-                "vendor": vendor,
-                "vendor_event_id": vendor_event_id,  # replay-protection anchor
-                "application_id": str(application_id),
-                "verification_type": verification_type,
-            },
-        )
+    event = PlatformEvent(
+        event_type="webhook_received",
+        actor="vendor",
+        payload={
+            "v": 1,
+            "actor": {"type": "vendor", "id": vendor},
+            "vendor": vendor,
+            "vendor_event_id": vendor_event_id,  # replay-protection anchor
+            "application_id": str(application_id),
+            "verification_type": verification_type,
+        },
     )
+    db.add(event)
     db.commit()
+    # P8.0 — fan-out (filtered by allowlist in posthog_bridge; webhook_received
+    # is not on the default allowlist, so this is a no-op in default config).
+    from app.services.observability.posthog_bridge import capture_event
+    capture_event(event)
 
 
 def _emit_rejected(db: Session, vendor: str, reason: str) -> None:
-    db.add(
-        PlatformEvent(
-            event_type="webhook_rejected",
-            actor="vendor",
-            payload={
-                "v": 1,
-                "actor": {"type": "vendor", "id": vendor},
-                "vendor": vendor,
-                "reason": reason,
-            },
-        )
+    event = PlatformEvent(
+        event_type="webhook_rejected",
+        actor="vendor",
+        payload={
+            "v": 1,
+            "actor": {"type": "vendor", "id": vendor},
+            "vendor": vendor,
+            "reason": reason,
+        },
     )
+    db.add(event)
     db.commit()
+    # P8.0 — fan-out (webhook_rejected is on the default allowlist).
+    from app.services.observability.posthog_bridge import capture_event
+    capture_event(event)
 
 
 def _build_translate_result_from_mvp(body: WebhookVerificationBody, x_nonce: str) -> TranslateResult:
