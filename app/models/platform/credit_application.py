@@ -16,6 +16,10 @@ class PlatformCreditApplication(Base):
     patient_id = Column(UUID(as_uuid=True), ForeignKey("platform_patients.id"), nullable=False)
     credit_product_id = Column(UUID(as_uuid=True), ForeignKey("platform_credit_products.id"), nullable=False)
     credit_product_version = Column(Integer, nullable=False)
+    # Immutable snapshot of the product verification_matrix at creation (migration
+    # 026, security finding #6 / Hard Rule #7-8). The decision is made against this,
+    # not the live product row. NULL only for rows created before migration 026.
+    product_config_snapshot = Column(JSONB, nullable=True)
 
     # Co-applicant linkage
     co_applicant_of_application_id = Column(UUID(as_uuid=True), ForeignKey("platform_credit_applications.id"), nullable=True)

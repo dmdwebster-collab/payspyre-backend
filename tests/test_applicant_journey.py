@@ -111,6 +111,10 @@ def _drive(client, db, dispatcher, score: int) -> tuple[str, dict]:
     app_id, headers = _auth(client, db, dispatcher)
     for p in _PURPOSES:
         assert client.post(f"{_BASE}/applications/{app_id}/consents/{p}", headers=headers).status_code == 200
+    # ADM consent is a decision-gate consent (finding #4) — required before submit.
+    assert client.post(
+        f"{_BASE}/applications/{app_id}/consents/automated_decision_making", headers=headers
+    ).status_code == 200
     for p in _PURPOSES:
         assert client.post(
             f"{_BASE}/applications/{app_id}/verifications/{p}/initiate", headers=headers
@@ -162,6 +166,10 @@ class TestApplicantJourney:
         # 7. grant all consents
         for p in _PURPOSES:
             assert client.post(f"{_BASE}/applications/{app_id}/consents/{p}", headers=headers).status_code == 200
+        # 7b. automated-decision-making consent — decision-gate, required before submit (finding #4)
+        assert client.post(
+            f"{_BASE}/applications/{app_id}/consents/automated_decision_making", headers=headers
+        ).status_code == 200
 
         # 8-11. initiate all four verifications (pending)
         for p in _PURPOSES:
