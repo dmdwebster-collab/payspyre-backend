@@ -129,13 +129,15 @@
 
 ## Schema / compliance debt
 
-- **2026-05-25 (logged from P5)** — **No DB-level WORM trigger on `platform_consents`.**
-  Only `platform_events` has an append-only / no-UPDATE-no-DELETE trigger (migration 021).
+- **2026-05-25 (logged from P5) → RESOLVED in migration 025 (2026-06-06, branch `feature/consent-text-worm-trigger`)** — ~~No DB-level WORM trigger on `platform_consents`.~~
   `consent_text_shown` / `consent_text_version` immutability (spec §2.6, §8.2, Hard Rule #1)
-  is currently enforced **only at the application layer** by `app/services/consent_service.py`
-  (`revoke_consent` never touches the text columns). A raw `UPDATE` to those columns is not
-  blocked by the database. **Fix later** with a new migration adding a WORM/forbid-UPDATE
-  trigger on `platform_consents` (mirror migration 021). P5 deliberately did **not** add a
-  migration (out of scope). Tripwire test:
-  `tests/test_consent_service.py::TestWormEnforcement::test_db_level_worm_trigger_absent_documents_backlog_gap`
-  fails when the trigger is added, signalling it's time to close this item.
+  is now enforced at the DB level by **migration `025_consent_text_worm_trigger`** — a
+  **column-specific** `BEFORE UPDATE` trigger (`platform_consents_text_immutable`) that blocks
+  any UPDATE changing the two text columns while leaving `revoked_at` updatable (so the
+  `revoke_consent` path still works). This is deliberately **not** a wholesale append-only
+  trigger like migration 021's on `platform_events`, because `platform_consents` legitimately
+  receives a `revoked_at` UPDATE. DELETE is left to ORM cascade (out of scope; rationale in the
+  migration docstring). The former tripwire test was flipped to assert the trigger fires:
+  `tests/test_consent_service.py::TestWormEnforcement::{test_db_trigger_blocks_text_column_update,
+  test_db_trigger_blocks_version_column_update, test_db_trigger_present_in_pg_catalog}`.
+  **Apply with `alembic upgrade head` (Mike — needs the Supabase gate run).**

@@ -11,10 +11,11 @@ Two layers, matching the service's two responsibilities:
 - **DB-backed tests** — run against the live Supabase Session Pooler via the
   ``db_session`` fixture (TEST_DATABASE_URL). No SQLite, no mocks.
 
-The WORM suite proves the *application-layer* immutability guarantee for
-``consent_text_shown`` / ``consent_text_version`` (Hard Rule #1). There is no
-DB-level WORM trigger on ``platform_consents`` yet — see
-``payspyre_backlog.md`` (2026-05-25).
+The WORM suite proves immutability of ``consent_text_shown`` /
+``consent_text_version`` (Hard Rule #1) at BOTH layers: the application layer
+(``revoke_consent`` only ever sets ``revoked_at``) and, as of migration 025, a
+column-specific DB-level trigger (``platform_consents_text_immutable``) that
+blocks any UPDATE changing those columns while still allowing ``revoked_at``.
 """
 import json
 import uuid
@@ -274,12 +275,11 @@ class TestGetActiveConsentsForPatient:
 class TestWormEnforcement:
     """``consent_text_shown`` / ``consent_text_version`` are never UPDATEd.
 
-    There is currently no DB-level WORM trigger on ``platform_consents`` (only
-    ``platform_events`` has one, migration 021). So the protection is enforced
-    at the application layer, and the missing trigger is logged in
-    ``payspyre_backlog.md`` (2026-05-25). The second test below is a tripwire:
-    it fails if a trigger is later added, prompting an update here + closing the
-    backlog item.
+    Enforced at two layers: the application layer (``revoke_consent`` only ever
+    sets ``revoked_at``) and a column-specific DB-level trigger
+    (``platform_consents_text_immutable``, migration 025) that blocks any UPDATE
+    changing the text columns while leaving ``revoked_at`` updatable. The backlog
+    item (payspyre_backlog.md, 2026-05-25) is closed by migration 025.
     """
 
     def test_revoke_never_modifies_text_columns(self, db_session: Session):
@@ -302,18 +302,17 @@ class TestWormEnforcement:
         assert fetched.consent_text_version == original_version
         assert fetched.revoked_at is not None  # revocation still recorded
 
-    def test_db_level_worm_trigger_absent_documents_backlog_gap(
-        self, db_session: Session
-    ):
-        # Sentinel: a raw UPDATE to consent_text_shown is currently NOT blocked
-        # at the DB level. If a WORM trigger is added (closing the backlog item),
-        # this raises and the test must be flipped to assert the trigger fires.
+    def test_db_trigger_blocks_text_column_update(self, db_session: Session):
+        """Migration 025: a raw UPDATE to consent_text_shown is blocked by the
+        DB-level trigger (not just the application layer)."""
         patient = _make_patient(db_session)
         consent = record_consent(
             db_session, patient.id, "automated_decision_making", granted=True
         )
 
-        try:
+        with pytest.raises(
+            (IntegrityError, InternalError, ProgrammingError, OperationalError)
+        ) as exc_info:
             db_session.execute(
                 text(
                     "UPDATE platform_consents SET consent_text_shown = :t WHERE id = :id"
@@ -321,21 +320,44 @@ class TestWormEnforcement:
                 {"t": "TAMPERED", "id": str(consent.id)},
             )
             db_session.commit()
-        except (IntegrityError, InternalError, ProgrammingError, OperationalError):
-            db_session.rollback()
-            pytest.fail(
-                "A DB-level WORM trigger now blocks UPDATE on platform_consents. "
-                "Flip this test to assert the trigger and close the backlog item "
-                "in payspyre_backlog.md."
-            )
+        db_session.rollback()
 
-        db_session.expire_all()
-        fetched = (
-            db_session.query(PlatformConsent)
-            .filter(PlatformConsent.id == consent.id)
-            .first()
+        msg = str(exc_info.value).lower()
+        assert "immutable consent" in msg or "worm" in msg, (
+            f"Expected the WORM trigger message, got: {exc_info.value}"
         )
-        assert fetched.consent_text_shown == "TAMPERED", (
-            "Raw UPDATE neither raised nor took effect — unexpected DB behavior; "
-            "investigate before trusting the application-layer guarantee alone."
+
+    def test_db_trigger_blocks_version_column_update(self, db_session: Session):
+        """The trigger also blocks tampering with consent_text_version."""
+        patient = _make_patient(db_session)
+        consent = record_consent(db_session, patient.id, "id_verification", granted=True)
+
+        with pytest.raises(
+            (IntegrityError, InternalError, ProgrammingError, OperationalError)
+        ):
+            db_session.execute(
+                text(
+                    "UPDATE platform_consents SET consent_text_version = :v WHERE id = :id"
+                ),
+                {"v": "tampered/v9_2099-99", "id": str(consent.id)},
+            )
+            db_session.commit()
+        db_session.rollback()
+
+    def test_db_trigger_present_in_pg_catalog(self, db_session: Session):
+        """Belt-and-suspenders: confirm the trigger is registered (migration 025
+        not silently dropped by a later migration)."""
+        result = db_session.execute(
+            text(
+                """
+                SELECT tgname
+                FROM pg_trigger
+                WHERE tgname = 'platform_consents_text_immutable'
+                  AND tgrelid = 'platform_consents'::regclass
+                  AND NOT tgisinternal
+                """
+            )
+        ).scalar()
+        assert result == "platform_consents_text_immutable", (
+            "WORM trigger missing from pg_catalog — migration 025 may have been altered"
         )
