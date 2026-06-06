@@ -18,7 +18,6 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models.platform.event import PlatformEvent
 from app.services.webhooks.signature_verifier import (
     NonceReplayed,
     SignatureInvalid,
@@ -158,17 +157,14 @@ class TestVendorSecret:
 
 class TestNonceCheck:
     def test_fresh_nonce_passes(self, db_session: Session):
-        SignatureVerifier(db_session)._check_nonce(str(uuid.uuid4()))  # no raise
+        SignatureVerifier(db_session)._check_nonce(str(uuid.uuid4()))  # claims; no raise
 
     def test_replayed_nonce_raises(self, db_session: Session):
+        # The claim is atomic (processed_webhooks PK, finding #3): the first claim
+        # wins; a second claim of the same nonce is rejected as a replay.
         nonce = str(uuid.uuid4())
-        db_session.add(
-            PlatformEvent(
-                event_type="webhook_received",
-                actor="vendor",
-                payload={"vendor_event_id": nonce, "vendor": "didit"},
-            )
-        )
+        verifier = SignatureVerifier(db_session)
+        verifier._check_nonce(nonce)        # claims the nonce
         db_session.commit()
         with pytest.raises(NonceReplayed):
-            SignatureVerifier(db_session)._check_nonce(nonce)
+            verifier._check_nonce(nonce)    # same nonce → replay
