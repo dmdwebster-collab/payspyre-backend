@@ -199,7 +199,15 @@ class SignatureVerifier:
         getter = _VENDOR_SECRET_GETTERS.get(vendor)
         if getter is None:
             raise SignatureInvalid(f"Unknown vendor '{vendor}'")
-        return getter()
+        secret = getter()
+        if not secret:
+            # Fail CLOSED. An empty/unset secret is a perfectly valid HMAC key, so
+            # without this guard the server would compute (and accept) a signature
+            # any attacker can also compute — i.e. forgeable webhooks. Several
+            # vendor secrets default to "" (e.g. DIDIT_WEBHOOK_SECRET,
+            # TWILIO_AUTH_TOKEN), so a missing secret must reject, never validate.
+            raise SignatureInvalid(f"No webhook secret configured for vendor '{vendor}'")
+        return secret
 
     # -- per-vendor schemes -------------------------------------------------
 

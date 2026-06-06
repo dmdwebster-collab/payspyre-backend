@@ -36,6 +36,37 @@ def _sign(secret: str, timestamp: str, body: bytes) -> str:
 # --- pure checks (no DB) ---------------------------------------------------
 
 
+class TestEmptySecretFailsClosed:
+    """Security: an empty/unset vendor secret must FAIL CLOSED — verification
+    must reject, never compute an HMAC with an empty key (which an attacker could
+    also compute → forgeable webhooks). Several secrets default to "" (e.g.
+    DIDIT_WEBHOOK_SECRET, TWILIO_AUTH_TOKEN)."""
+
+    @pytest.mark.parametrize("vendor", ["didit", "flinks", "equifax", "twilio", "resend"])
+    def test_empty_secret_rejected_at_choke_point(self, monkeypatch, vendor):
+        for attr in (
+            "DIDIT_WEBHOOK_SECRET",
+            "FLINKS_WEBHOOK_SECRET",
+            "EQUIFAX_WEBHOOK_SECRET",
+            "TWILIO_AUTH_TOKEN",
+            "RESEND_WEBHOOK_SECRET",
+        ):
+            monkeypatch.setattr(settings, attr, "")
+        with pytest.raises(SignatureInvalid, match="No webhook secret"):
+            SignatureVerifier()._get_vendor_secret(vendor)
+
+    def test_didit_empty_secret_fails_via_public_api(self, monkeypatch):
+        # End-to-end through verify_signature: empty secret rejects before any
+        # HMAC comparison, so a forged X-Signature-V2 can never validate.
+        monkeypatch.setattr(settings, "DIDIT_WEBHOOK_SECRET", "")
+        with pytest.raises(SignatureInvalid, match="No webhook secret"):
+            SignatureVerifier().verify_signature(
+                "didit",
+                b"{}",
+                {"X-Signature-V2": "forged", "X-Timestamp": str(int(time.time()))},
+            )
+
+
 class TestMVPSignatureChecks:
     """Cover the MVP (equifax) X-Signature / X-Timestamp scheme via the public
     ``verify_signature`` API. The Didit and Flinks schemes are covered in their
