@@ -21,11 +21,18 @@ class MultiKeyLimiter(Limiter):
             from jose import jwt
             from app.core.config import settings
 
-            try:
-                payload = jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
-                return str(payload.get("sub"))
-            except Exception:
-                pass
+            # Try the staff/admin secret first, then the patient/applicant secret.
+            # Patient tokens are signed with PATIENT_JWT_SECRET (patient_auth_service),
+            # so decoding them only with JWT_SECRET_KEY silently failed — all
+            # authenticated patient traffic fell back to per-IP limiting and the
+            # per-account throttle was dead (security review #5). Both token types
+            # use JWT_ALGORITHM and carry `sub`.
+            for secret in (settings.JWT_SECRET_KEY, settings.PATIENT_JWT_SECRET):
+                try:
+                    payload = jwt.decode(token, secret, algorithms=[settings.JWT_ALGORITHM])
+                    return str(payload.get("sub"))
+                except Exception:
+                    continue
         return None
 
     def check_user_rate_limit(self, user_id: str, limit: int, window: int) -> bool:
