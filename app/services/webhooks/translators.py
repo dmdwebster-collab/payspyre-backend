@@ -121,12 +121,16 @@ def translate_didit_payload(payload: DiditWebhookPayload) -> TranslateResult:
         "confidence": confidence,
         "vendor": "didit",
         "vendor_session_ref": payload.session_id,
-        # Audit-only fields, ignored by the replay adapter but preserved in the
-        # verification_completed event for ops / future analysis.
+        # Audit-only non-PII metadata, ignored by the replay adapter but kept in
+        # the verification_completed event for ops. The full Didit ``decision``
+        # (legal name / DOB / document number / face-image URLs) is deliberately
+        # NOT stored here: platform_events is WORM (migration 021), so any PII
+        # written into it can never be redacted — Hard Rule #6. A raw vendor blob,
+        # if ever needed, belongs in an encrypted at-rest store keyed by
+        # verification_id (spec §6), never in the event log.
         "document_type": document_type,
         "warnings": warnings,
         "didit_status": payload.status,
-        "raw_decision": decision,
     }
 
     return TranslateResult(
@@ -198,12 +202,16 @@ def translate_flinks_payload(payload: FlinksWebhookPayload) -> TranslateResult:
         "confidence": 1.0,
         "vendor": "flinks",
         "vendor_session_ref": login_id,
-        # Audit fields. TODO(p7.2c): replace in-translator arithmetic with a
-        # follow-up Flinks Enrich/Attributes API call for proper income / NSF
-        # derivation (logged in backlog).
+        # Audit-only non-PII metadata. The raw Flinks payload is deliberately NOT
+        # stored: it carries transaction descriptions (counterparty names) and the
+        # Login object, and platform_events is WORM (migration 021) so any PII
+        # written into it can never be redacted — Hard Rule #6. A raw vendor blob,
+        # if ever needed, belongs in an encrypted at-rest store keyed by
+        # verification_id (spec §6), not in the event log.
+        # TODO(p7.2c): replace in-translator arithmetic with a follow-up Flinks
+        # Enrich/Attributes API call for proper income / NSF derivation.
         "flinks_response_type": payload.ResponseType,
         "flinks_request_id": payload.RequestId,
-        "raw_payload": _strip_pii(payload.model_dump()),
     }
 
     return TranslateResult(
@@ -298,22 +306,3 @@ def _parse_flinks_date(value: Any) -> Optional[Any]:
         return datetime.strptime(value[:10], "%Y-%m-%d").date()
     except ValueError:
         return None
-
-
-def _strip_pii(payload: dict[str, Any]) -> dict[str, Any]:
-    """Drop Holder PII (name / address / email / phone) before persisting.
-
-    Hard Rule #6 (no-PII-in-logs/events): the ``rich_payload`` lands in the
-    ``verification_completed`` event row, which is queryable across ops; we
-    keep balance / transactions for replay but never the holder identity.
-    """
-    cleaned = dict(payload)
-    accounts_raw = cleaned.get("Accounts") or []
-    cleaned_accounts: list[dict[str, Any]] = []
-    for account in accounts_raw:
-        if isinstance(account, dict):
-            account_copy = {k: v for k, v in account.items() if k != "Holder"}
-            cleaned_accounts.append(account_copy)
-    if cleaned_accounts:
-        cleaned["Accounts"] = cleaned_accounts
-    return cleaned

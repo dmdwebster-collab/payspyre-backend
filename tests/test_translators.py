@@ -5,6 +5,7 @@ Pure function tests — no DB, no FastAPI. Synthetic vendor payloads in, a
 (``test_vendor_webhooks_didit.py`` / ``..._flinks.py``) cover end-to-end wiring;
 these tests cover the mapping logic in isolation.
 """
+import json
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -291,18 +292,63 @@ class TestFlinksValidation:
             translate_flinks_payload(_flinks_payload(Tag="not-a-uuid"))
 
 
-class TestFlinksPIIStripping:
-    def test_holder_section_stripped_from_raw_payload(self):
+class TestFlinksNoRawPayloadPersisted:
+    """Security review finding #1: the raw Flinks payload is NOT persisted into
+    rich_payload. It carries transaction descriptions (counterparty names),
+    Holder identity, and the Login object — and rich_payload lands in the WORM
+    ``verification_completed`` event (migration 021), which can never be redacted
+    (Hard Rule #6). Only derived non-PII metrics are kept for replay."""
+
+    def test_raw_payload_absent_and_no_pii_leaks(self):
         accounts = [
             {
                 "Id": "a",
                 "Balance": {"Current": 100.0},
                 "Holder": {"Name": "Jane Doe", "Email": "jane@example.com"},
-                "Transactions": [],
+                "Transactions": [
+                    _txn(
+                        _today() - timedelta(days=2),
+                        credit=1000.00,
+                        description="INTERAC E-TRANSFER FROM JOHN SMITH",
+                    ),
+                ],
             }
         ]
         r = translate_flinks_payload(_flinks_payload(Accounts=accounts))
-        raw_accounts = r.rich_payload["raw_payload"]["Accounts"]
-        assert "Holder" not in raw_accounts[0]
-        # but everything else still there for replay
-        assert raw_accounts[0]["Id"] == "a"
+        assert "raw_payload" not in r.rich_payload
+        blob = json.dumps(r.rich_payload)
+        assert "Jane Doe" not in blob
+        assert "jane@example.com" not in blob
+        assert "JOHN SMITH" not in blob
+        # Derived non-PII metrics still present for ReplayBankAdapter.
+        assert r.rich_payload["monthly_income_cents"] == 100000
+        assert r.rich_payload["vendor"] == "flinks"
+
+
+class TestDiditNoRawDecisionPersisted:
+    """Security review finding #1: the full Didit ``decision`` (legal name / DOB /
+    document number / face-image URLs) is NOT persisted into rich_payload — same
+    WORM / Hard Rule #6 rationale as the Flinks case above."""
+
+    def test_raw_decision_absent_and_no_pii_leaks(self):
+        decision = {
+            "face_matches": [{"score": 96.1}],
+            "id_verifications": [
+                {
+                    "document_type": "Passport",
+                    "full_name": "Jane Doe",
+                    "date_of_birth": "1990-01-01",
+                    "document_number": "X1234567",
+                }
+            ],
+            "warnings": [],
+        }
+        r = translate_didit_payload(_didit_payload(decision=decision))
+        assert "raw_decision" not in r.rich_payload
+        blob = json.dumps(r.rich_payload)
+        assert "Jane Doe" not in blob
+        assert "1990-01-01" not in blob
+        assert "X1234567" not in blob
+        # Non-PII metadata + replay fields still present.
+        assert r.rich_payload["document_type"] == "Passport"
+        assert r.rich_payload["confidence"] == pytest.approx(0.961)
