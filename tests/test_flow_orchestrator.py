@@ -81,6 +81,10 @@ def _drive_to_decision(db, orch, *, score, purposes=_REQUIRED_PURPOSES):
     app = _create_app(orch, patient.id, _seed_product_id(db))
     for p in purposes:
         _grant(orch, app.id, p)
+    # automated_decision_making consent is required before _decide (finding #4).
+    # It is a decision-gate consent, not tied to a verification, so it is granted
+    # here rather than in the verification-purposes loop above.
+    _grant(orch, app.id, "automated_decision_making")
     dispatcher = orch.dispatcher
     verifs = {p: orch.initiate_verification(app.id, p) for p in purposes}
     for p, verif in verifs.items():
@@ -92,6 +96,48 @@ def _drive_to_decision(db, orch, *, score, purposes=_REQUIRED_PURPOSES):
             rich_payload=_rich(dispatcher, verif.verification_type, score=score),
         )
     return app.id
+
+
+# ---------------------------------------------------------------------------
+# _decision_product_view — finding #6 (pure, no DB)
+# ---------------------------------------------------------------------------
+
+
+class TestDecisionProductView:
+    """Finding #6 / Hard Rule #7-8: the decision runs against the matrix
+    snapshotted onto the application at creation, NOT the live product row."""
+
+    def test_uses_snapshot_when_present(self):
+        from types import SimpleNamespace
+
+        live = SimpleNamespace(
+            id="prod-1", version=2, verification_matrix={"bureau": {"min_score": 999}}
+        )
+        app = SimpleNamespace(
+            id="app-1",
+            credit_product_id="prod-1",
+            credit_product_version=1,
+            product_config_snapshot={"bureau": {"min_score": 660}},
+        )
+        view = FlowOrchestrator._decision_product_view(app, live)
+        # The snapshot wins — a live edit to 999 must NOT reach the decision.
+        assert view.verification_matrix == {"bureau": {"min_score": 660}}
+        assert view.version == 1
+
+    def test_falls_back_to_live_when_snapshot_missing(self):
+        from types import SimpleNamespace
+
+        live = SimpleNamespace(
+            id="prod-1", version=2, verification_matrix={"bureau": {"min_score": 660}}
+        )
+        app = SimpleNamespace(
+            id="app-1",
+            credit_product_id="prod-1",
+            credit_product_version=1,
+            product_config_snapshot=None,  # legacy row, pre-migration-026
+        )
+        view = FlowOrchestrator._decision_product_view(app, live)
+        assert view is live
 
 
 # ---------------------------------------------------------------------------

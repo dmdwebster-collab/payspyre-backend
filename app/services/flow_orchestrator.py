@@ -34,6 +34,7 @@ import json
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any, Iterator, Literal, Optional, Protocol
 from uuid import UUID
 
@@ -219,6 +220,35 @@ class FlowOrchestrator:
             raise OrchestratorError(f"Credit product {product_id} not found")
         return product
 
+    @staticmethod
+    def _decision_product_view(
+        application: PlatformCreditApplication, live_product: PlatformCreditProduct
+    ) -> Any:
+        """The product config the decision must run against.
+
+        Security finding #6 / Hard Rule #7-8: the decision uses the
+        ``verification_matrix`` snapshotted onto the application at creation
+        (migration 026), NOT the live product row — products are edited in place
+        (``update_credit_product`` mutates + bumps ``version``), so the live row may
+        carry post-application thresholds. Returns a lightweight view exposing the
+        single attribute the pure engine reads (``verification_matrix``) plus id /
+        version. Falls back to the live product for legacy rows created before
+        migration 026 (snapshot is NULL), logging that it did so.
+        """
+        snapshot = getattr(application, "product_config_snapshot", None)
+        if snapshot is None:
+            logger.warning(
+                "decision_using_live_product_config_no_snapshot",
+                application_id=str(application.id),
+                credit_product_id=str(application.credit_product_id),
+            )
+            return live_product
+        return SimpleNamespace(
+            id=live_product.id,
+            version=application.credit_product_version,
+            verification_matrix=snapshot,
+        )
+
     # -- event emission -----------------------------------------------------
 
     def _emit_event(
@@ -288,6 +318,10 @@ class FlowOrchestrator:
                 patient_id=patient_id,
                 credit_product_id=credit_product_id,
                 credit_product_version=product.version,  # snapshot (Hard Rule)
+                # Snapshot the decisioning config too, not just the version int
+                # (security finding #6 / Hard Rule #7-8): the decision must use the
+                # matrix as of creation, because products are edited in place.
+                product_config_snapshot=product.verification_matrix,
                 requested_amount_cents=requested_amount_cents,
                 requested_amount_source=requested_amount_source,
                 clinic_proposed_amount_cents=clinic_proposed_amount_cents,
@@ -645,7 +679,17 @@ class FlowOrchestrator:
                 f"Cannot decide an application in status '{application.status}'"
             )
 
+        # Security finding #4: an automated credit decision must not run without the
+        # applicant's automated-decision-making consent (spec §4.3 / §8.1; PIPEDA
+        # automated-decisioning requirement). Verifications were already consent-
+        # gated, but the decision itself was not — this closes that gap.
+        if self._find_active_consent(application.patient_id, "automated_decision_making") is None:
+            raise ConsentMissingError(
+                "automated_decision_making consent is required before an automated decision"
+            )
+
         product = self._get_product(application.credit_product_id)
+        decision_product = self._decision_product_view(application, product)
         patient = (
             self.db.query(PlatformPatient)
             .filter(PlatformPatient.id == application.patient_id)
@@ -663,7 +707,7 @@ class FlowOrchestrator:
             bank=ReplayBankAdapter(stored),
         )
         flow_decision: FlowDecision = asyncio.run(
-            run_flow(application, product, profile, adapters)
+            run_flow(application, decision_product, profile, adapters)
         )
 
         before_status = application.status
