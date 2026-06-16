@@ -11,6 +11,7 @@ from app.api.applicant.v1.schemas import (
 from app.services.auth.patient_auth_service import (
     ApplicationNotFound,
     InvalidMagicLinkToken,
+    MagicLinkLocked,
     PatientAuthService,
 )
 
@@ -40,5 +41,7 @@ def exchange_magic_link(
 ):
     try:
         return service.exchange_magic_link(body.application_id, body.token)
+    except MagicLinkLocked as exc:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc))
     except InvalidMagicLinkToken as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))

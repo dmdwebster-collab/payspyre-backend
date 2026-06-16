@@ -14,7 +14,11 @@ from app.models.platform.patient import PlatformPatient
 from app.services.auth.patient_auth_service import (
     JWT_ALGORITHM,
     InvalidMagicLinkToken,
+    MagicLinkLocked,
     PatientAuthService,
+    _MAX_FAILED_ATTEMPTS,
+    _TOKEN_ALPHABET,
+    _generate_token,
 )
 from app.services.mock_notification_dispatcher import MockNotificationDispatcher
 
@@ -66,6 +70,51 @@ def _issued_event(db: Session, application_id) -> dict | None:
         {"aid": str(application_id)},
     ).first()
     return row[0] if row else None
+
+
+class TestTokenGeneration:
+    """Pure (no DB) — security #5b: token is 8 chars from the expected alphabet."""
+
+    def test_token_length_and_alphabet(self):
+        for _ in range(50):
+            token = _generate_token()
+            assert len(token) == 8
+            assert all(c in _TOKEN_ALPHABET for c in token)
+
+
+class TestAttemptLockout:
+    """DB-backed (Supabase) — security #5b per-application attempt lockout."""
+
+    def _request(self, db: Session):
+        patient = _make_patient(db)
+        app = _make_application(db, patient.id)
+        service, dispatcher = _service(db)
+        service.request_magic_link(app.id, "sms")
+        return service, app, dispatcher._sent[-1]["token"]
+
+    def test_locks_after_max_failed_attempts(self, db_session: Session):
+        service, app, _token = self._request(db_session)
+        for _ in range(_MAX_FAILED_ATTEMPTS):
+            with pytest.raises(InvalidMagicLinkToken):
+                service.exchange_magic_link(app.id, "WRONG999")
+        with pytest.raises(MagicLinkLocked):
+            service.exchange_magic_link(app.id, "WRONG999")
+
+    def test_lockout_blocks_even_the_correct_token(self, db_session: Session):
+        service, app, token = self._request(db_session)
+        for _ in range(_MAX_FAILED_ATTEMPTS):
+            with pytest.raises(InvalidMagicLinkToken):
+                service.exchange_magic_link(app.id, "WRONG999")
+        with pytest.raises(MagicLinkLocked):
+            service.exchange_magic_link(app.id, token)  # correct token, but locked
+
+    def test_under_threshold_valid_token_still_works(self, db_session: Session):
+        service, app, token = self._request(db_session)
+        for _ in range(_MAX_FAILED_ATTEMPTS - 1):
+            with pytest.raises(InvalidMagicLinkToken):
+                service.exchange_magic_link(app.id, "WRONG999")
+        result = service.exchange_magic_link(app.id, token)
+        assert "jwt" in result
 
 
 class TestRequestMagicLink:

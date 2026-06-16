@@ -16,7 +16,7 @@ import hashlib
 import json
 import secrets
 import string
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 from uuid import UUID
 
@@ -37,6 +37,20 @@ JWT_ALGORITHM = "HS256"
 _TERMINAL_STATUSES = ("withdrawn", "expired")
 _TOKEN_ALPHABET = string.ascii_uppercase + string.digits
 
+# Magic-link token length. 8 chars over a 36-symbol alphabet (~2.8e12 space) vs
+# the prior 6 (~2.2e9). Tunable; bump higher (or switch to an emailed
+# token_urlsafe link) if UX allows. Brute-force is bounded primarily by the
+# per-application attempt lockout below, not by length alone (security #5b).
+_TOKEN_LENGTH = 8
+
+# Per-application attempt lockout (security #5b): after this many failed exchange
+# attempts (wrong token) for one application within the window, further exchanges
+# are refused until a new code is requested. Bounds online brute-forcing of the
+# code even if an attacker rotates IPs (per-IP limiting is separate). Counted via
+# append-only magic_link_failed events — no new table/migration.
+_MAX_FAILED_ATTEMPTS = 5
+_LOCKOUT_WINDOW_SECONDS = 900  # 15 minutes
+
 
 class MagicLinkError(Exception):
     """Base class for magic-link errors."""
@@ -46,12 +60,16 @@ class InvalidMagicLinkToken(MagicLinkError):
     """Token not found, expired, or already consumed (→ 401)."""
 
 
+class MagicLinkLocked(MagicLinkError):
+    """Too many failed attempts for this application in the window (→ 429)."""
+
+
 class ApplicationNotFound(MagicLinkError):
     """No application for the given id (→ 404)."""
 
 
 def _generate_token() -> str:
-    return "".join(secrets.choice(_TOKEN_ALPHABET) for _ in range(6))
+    return "".join(secrets.choice(_TOKEN_ALPHABET) for _ in range(_TOKEN_LENGTH))
 
 
 def _hash_token(token: str) -> str:
@@ -93,6 +111,7 @@ class PatientAuthService:
 
     def exchange_magic_link(self, application_id: UUID, token: str) -> dict:
         """Validate a token, mark it consumed, and return a signed JWT session."""
+        self._enforce_attempt_lockout(application_id)
         token_hash = _hash_token(token)
         issued = self.db.execute(
             text(
@@ -107,6 +126,7 @@ class PatientAuthService:
             {"key": json.dumps({"token_hash": token_hash, "application_id": str(application_id)})},
         ).first()
         if issued is None:
+            self._record_failed_attempt(application_id)
             raise InvalidMagicLinkToken("Magic-link token not found")
 
         issued_id, payload = issued
@@ -149,6 +169,55 @@ class PatientAuthService:
         token_str, expires_at = self._issue_jwt(patient_id)
         logger.info("magic_link_exchanged", patient_id=str(patient_id), application_id=str(application_id))
         return {"jwt": token_str, "expires_at": expires_at.isoformat()}
+
+    def _enforce_attempt_lockout(self, application_id: UUID) -> None:
+        """Refuse exchange if too many failed attempts for this application are
+        within the window (security #5b). Counts append-only magic_link_failed
+        events — no new table. Locked applications must request a fresh code."""
+        since = datetime.now(timezone.utc) - timedelta(seconds=_LOCKOUT_WINDOW_SECONDS)
+        count = self.db.execute(
+            text(
+                """
+                SELECT count(*) FROM platform_events
+                WHERE event_type = 'magic_link_failed'
+                  AND application_id = :aid
+                  AND occurred_at >= :since
+                """
+            ),
+            {"aid": str(application_id), "since": since},
+        ).scalar()
+        if count is not None and count >= _MAX_FAILED_ATTEMPTS:
+            logger.warning(
+                "magic_link_locked", application_id=str(application_id), failed_attempts=count
+            )
+            raise MagicLinkLocked(
+                "Too many failed attempts. Request a new code and try again later."
+            )
+
+    def _record_failed_attempt(self, application_id: UUID) -> None:
+        """Append a magic_link_failed event for the lockout counter. No-op if the
+        application id is unknown (avoids a FK violation; nothing to protect)."""
+        app_exists = (
+            self.db.query(PlatformCreditApplication.id)
+            .filter(PlatformCreditApplication.id == application_id)
+            .first()
+            is not None
+        )
+        if not app_exists:
+            return
+        event = PlatformEvent(
+            event_type="magic_link_failed",
+            actor="patient",
+            application_id=application_id,
+            payload={
+                "v": 1,
+                "actor": {"type": "patient", "id": "unknown"},
+                "application_id": str(application_id),
+                "reason": "token_not_found",
+            },
+        )
+        self.db.add(event)
+        self.db.commit()
 
     def _issue_jwt(self, patient_id: UUID) -> tuple[str, datetime]:
         rows = (
