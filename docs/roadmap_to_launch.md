@@ -31,9 +31,9 @@ Grouped by priority. Items map to audit finding IDs.
 ### B.1 — Security & compliance hardening (must precede real-data testing)
 - [x] **Un-mount unauthenticated legacy V1 lending surface** (C-1, C-2) — **DONE 2026-06-19**, branch `feature/p8.1-security-hardening`.
 - [x] **Delete commit B** — **DONE 2026-06-19** (`81aecce`). Deleted the 6 dead endpoint files, 5 legacy schemas, and `risk_engine.py`. `credit_bureau.py` preserved for B.3 re-homing; legacy ORM models (`loan`, `credit`, `kyc`) retained to avoid model/table drift — model+table cleanup is a separate DB-affecting follow-up.
-- [ ] **Implement SIN encryption + fix `String`/`BYTEA` drift** (C-3) — only if SIN collection is in launch scope (Mike's scope call, B.5). Needs key-management decision (B.4).
-- [ ] **Fix broken API-key auth** (H-4) — deterministic hash lookup; never store plaintext.
-- [ ] **Implement RLS vendor/borrower context extractor** (H-3) — or remove RLS reliance if not used for tenant isolation.
+- [ ] **PARKED — SIN encryption + `String`/`BYTEA` drift** (C-3) — awaiting decision: is SIN collection in launch scope? + key-management approach (Q9). Nothing collects SIN today, so no live exposure; deferred until scope is set.
+- [x] **Remove broken API-key auth** (H-4) — **DONE 2026-06-19** (`652fff5`). Deleted the broken X-API-Key consumption path. (Admin-gated /api-keys management endpoints + ApiKey model left as inert orphan — optional follow-up.)
+- [ ] **PARKED — RLS vendor/borrower context extractor** (H-3) — awaiting auth-model decision (Q3: PaySpyre-local vs shared Supabase vs RLS-not-used). Also needs reconciliation against current `main` (which has diverged with auth changes).
 - [ ] **DB-level webhook idempotency** (H-5) — unique constraint on the nonce + GIN index; dedupe on `IntegrityError`.
 - [ ] **`platform_consents` WORM trigger** (H-6) + `platform_patient_fields` trigger (M-9).
 - [ ] **Adverse-action (ECOA/FCRA) notice job + template** (audit §7) — required before real lending.
