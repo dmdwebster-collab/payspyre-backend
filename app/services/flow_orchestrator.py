@@ -261,6 +261,11 @@ class FlowOrchestrator:
             payload=payload,
         )
         self.db.add(event)
+        # P8.1 (M-7) — flush so the append-only bigint id is assigned BEFORE we mirror
+        # to PostHog; otherwise event.id is None and every orchestrator-sourced analytics
+        # event ships platform_event_id=null, breaking the Postgres<->analytics linkage.
+        # The dispatcher/webhook capture paths already flush first; this aligns them.
+        self.db.flush()
         # P8.0 — fire-and-forget mirror to PostHog. Local import keeps the
         # dependency optional + avoids any circular at startup.
         from app.services.observability.posthog_bridge import capture_event
