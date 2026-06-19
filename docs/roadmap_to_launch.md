@@ -30,7 +30,7 @@ Grouped by priority. Items map to audit finding IDs.
 
 ### B.1 — Security & compliance hardening (must precede real-data testing)
 - [x] **Un-mount unauthenticated legacy V1 lending surface** (C-1, C-2) — **DONE 2026-06-19**, branch `feature/p8.1-security-hardening`.
-- [ ] **Delete commit B** — remove the un-mounted files/models/schemas/dead services; re-home the real Equifax/TransUnion client before deleting `credit_bureau.py`.
+- [x] **Delete commit B** — **DONE 2026-06-19** (`81aecce`). Deleted the 6 dead endpoint files, 5 legacy schemas, and `risk_engine.py`. `credit_bureau.py` preserved for B.3 re-homing; legacy ORM models (`loan`, `credit`, `kyc`) retained to avoid model/table drift — model+table cleanup is a separate DB-affecting follow-up.
 - [ ] **Implement SIN encryption + fix `String`/`BYTEA` drift** (C-3) — only if SIN collection is in launch scope (Mike's scope call, B.5). Needs key-management decision (B.4).
 - [ ] **Fix broken API-key auth** (H-4) — deterministic hash lookup; never store plaintext.
 - [ ] **Implement RLS vendor/borrower context extractor** (H-3) — or remove RLS reliance if not used for tenant isolation.
@@ -54,8 +54,9 @@ Grouped by priority. Items map to audit finding IDs.
 ### B.4 — Infra / decisions Mike owns (spec §13 open questions)
 - [ ] **Auth/identity model** (Q3 — PaySpyre-local vs shared Supabase). **SIN key management** (Q9). **Existing `applications` table** migrate/extend (Q1).
 - [ ] **DO deploy secrets** — populate `DO_ACCESS_TOKEN` + `DO_APP_ID` (CD is wired but fails without them).
-- [ ] **§11 KPI / Prometheus metrics** (H-8) + fix null `platform_event_id` on orchestrator PostHog events (M-7).
-- [ ] **CI grep-guard** for flow-engine-only status writes (L-1).
+- [x] Fix null `platform_event_id` on orchestrator PostHog events (M-7) — **DONE 2026-06-19** (`3d9f5a2`).
+- [ ] **§11 KPI / Prometheus metrics** (H-8) — no `platform_metrics.py` / `/metrics` endpoint yet.
+- [x] CI grep-guard for flow-engine-only status writes (L-1) — **already exists** (`tests/test_application_status_writes.py`); the audit finding was a false positive.
 
 ### B.5 — Product, scope & frontend (Mike builds/decides; Dave reviews)
 - [ ] **Build the patient-facing frontend** — in active build, on track for August testing.
