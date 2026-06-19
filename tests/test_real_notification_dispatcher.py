@@ -45,6 +45,7 @@ def real_creds(monkeypatch):
     monkeypatch.setattr(settings, "USE_REAL_NOTIFICATIONS", True)
     monkeypatch.setattr(settings, "RESEND_API_KEY", "re_test_xxxxxxxxxxxxxxx")
     monkeypatch.setattr(settings, "RESEND_FROM_EMAIL", "noreply@payspyre.test")
+    monkeypatch.setattr(settings, "EMAIL_PROVIDER", "resend")  # these tests exercise the Resend path
     monkeypatch.setattr(settings, "TWILIO_ACCOUNT_SID", "AC" + "f" * 32)
     monkeypatch.setattr(settings, "TWILIO_AUTH_TOKEN", "test_token")
     monkeypatch.setattr(settings, "TWILIO_FROM_NUMBER", "+15005550006")

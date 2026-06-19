@@ -153,25 +153,60 @@ class TestFlinksHappyPath:
         db_session.refresh(v)
         assert v.vendor_session_ref == login_id
 
-    def test_rich_payload_contains_arithmetic_derivations(
+    def test_rich_payload_contains_recurrence_derivations(
         self, client, db_session, secret
     ):
+        """Bank metrics flow through the webhook → transaction-analysis engine.
+
+        Income is now derived from RECURRING deposit streams (P8.x engine), not a
+        naive sum of credits — so a single one-off deposit is correctly NOT income,
+        while a recurring payroll stream is detected. (Engine internals are unit-tested
+        exhaustively in tests/test_transaction_analysis.py.)
+        """
+        def _rich(aid):
+            row = db_session.execute(
+                text(
+                    "SELECT payload FROM platform_events WHERE "
+                    "event_type='verification_completed' AND application_id=:a LIMIT 1"
+                ),
+                {"a": str(aid)},
+            ).first()
+            assert row is not None
+            return row[0].get("rich_payload", {})
+
+        # Single non-recurring deposit → not counted as income; balance still flows through.
         app_id, _ = _setup_pending_bank(db_session)
         _post(client, _flinks_body(app_id), secret)
-        row = db_session.execute(
-            text(
-                "SELECT payload FROM platform_events WHERE event_type='verification_completed' "
-                "AND application_id=:a LIMIT 1"
-            ),
-            {"a": str(app_id)},
-        ).first()
-        assert row is not None
-        rich = row[0].get("rich_payload", {})
+        rich = _rich(app_id)
         assert rich["vendor"] == "flinks"
-        # 2500.00 in trailing 30 days → 250000 cents
-        assert rich["monthly_income_cents"] == 250000
-        # Current balance 5234.56 → 523456 cents
-        assert rich["avg_balance_cents"] == 523456
+        assert rich["monthly_income_cents"] == 0  # one-off deposit is not recurring income
+        assert rich["avg_balance_cents"] == 523456  # Balance.Current 5234.56
+
+        # Recurring bi-weekly payroll → detected as income through the webhook → engine.
+        app_id2, _ = _setup_pending_bank(db_session)
+        today = datetime.now(timezone.utc).date()
+        payroll = [
+            {
+                "Id": "acc-r",
+                "Title": "Checking",
+                "AccountNumber": "002",
+                "Balance": {"Available": 3000.0, "Current": 3000.0, "Limit": 0},
+                "Transactions": [
+                    {
+                        "Id": f"p{i}",
+                        "Date": (today - timedelta(days=14 * i)).strftime("%Y-%m-%d"),
+                        "Description": "PAYROLL DEPOSIT",
+                        "Credit": 2000.00,
+                        "Debit": 0,
+                        "Balance": 3000.0,
+                    }
+                    for i in range(6)
+                ],
+                "Currency": "CAD",
+            }
+        ]
+        _post(client, _flinks_body(app_id2, accounts=payroll), secret)
+        assert _rich(app_id2)["monthly_income_cents"] > 0  # recurring payroll detected
 
 
 class TestFlinksKYCSkip:

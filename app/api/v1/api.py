@@ -1,12 +1,13 @@
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import auth, credit_products, patients, health
+from app.api.v1.endpoints import auth, credit_products, patients, health, integration_settings
 
 api_router = APIRouter()
 api_router.include_router(health.router, tags=["health"])
 api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
 api_router.include_router(credit_products.router, prefix="/credit-products", tags=["credit-products"])
 api_router.include_router(patients.router, prefix="/patients", tags=["patients"])
+api_router.include_router(integration_settings.router, prefix="/integration-settings", tags=["integration-settings"])
 # V1 notifications router removed in P7.4c (un-mounted; files deleted in commit B).
 # P8.1 (2026-06-19): un-mounted the unauthenticated legacy V1 lending surface —
 #   loan, credit, underwriting, funding, vendors, analytics. Every one of these

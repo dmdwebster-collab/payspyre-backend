@@ -205,7 +205,7 @@ def _redact_pii(text: str) -> str:
 @dataclass(frozen=True)
 class SendOutcome:
     """What a successful vendor send returns to the dispatcher."""
-    vendor: Literal["resend", "twilio"]
+    vendor: Literal["resend", "twilio", "sendgrid"]
     vendor_message_id: str
     # Vendor sync status. Resend always returns "sent" (the API only acks accepted).
     # Twilio returns "queued" / "accepted" / "sent" depending on routing latency.
@@ -445,6 +445,13 @@ class RealNotificationDispatcher:
 
     def _build_sender(self, contact_method: str):
         if contact_method == "email":
+            if settings.EMAIL_PROVIDER == "sendgrid":
+                from app.services.sendgrid_email import SendGridEmailSender
+
+                return SendGridEmailSender(
+                    api_key=settings.SENDGRID_API_KEY,
+                    from_email=settings.SENDGRID_FROM_EMAIL,
+                )
             return ResendEmailSender(
                 api_key=settings.RESEND_API_KEY,
                 from_email=settings.RESEND_FROM_EMAIL,

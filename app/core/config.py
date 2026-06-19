@@ -124,6 +124,12 @@ class Settings(BaseSettings):
     RESEND_API_KEY: str = ""
     RESEND_FROM_EMAIL: str = "noreply@payspyre.com"
 
+    SENDGRID_API_KEY: str = ""
+    SENDGRID_FROM_EMAIL: str = "noreply@payspyre.com"
+    # "sendgrid" | "resend" — which provider the real dispatcher uses for email.
+    # Business uses SendGrid (dedicated IP), so it's the default.
+    EMAIL_PROVIDER: str = "sendgrid"
+
     TWILIO_ACCOUNT_SID: str = ""
     TWILIO_AUTH_TOKEN: str = ""
     TWILIO_FROM_NUMBER: str = ""
@@ -190,14 +196,22 @@ class Settings(BaseSettings):
                 )
         # P7.4: same shape — real notification outbound creds must be present.
         if self.USE_REAL_NOTIFICATIONS:
+            email_required = (
+                [("SENDGRID_API_KEY", self.SENDGRID_API_KEY),
+                 ("SENDGRID_FROM_EMAIL", self.SENDGRID_FROM_EMAIL)]
+                if self.EMAIL_PROVIDER == "sendgrid"
+                else [("RESEND_API_KEY", self.RESEND_API_KEY),
+                      ("RESEND_FROM_EMAIL", self.RESEND_FROM_EMAIL)]
+            )
             missing_notif = [
                 name
                 for name, value in (
-                    ("RESEND_API_KEY", self.RESEND_API_KEY),
-                    ("RESEND_FROM_EMAIL", self.RESEND_FROM_EMAIL),
-                    ("TWILIO_ACCOUNT_SID", self.TWILIO_ACCOUNT_SID),
-                    ("TWILIO_AUTH_TOKEN", self.TWILIO_AUTH_TOKEN),
-                    ("TWILIO_FROM_NUMBER", self.TWILIO_FROM_NUMBER),
+                    email_required
+                    + [
+                        ("TWILIO_ACCOUNT_SID", self.TWILIO_ACCOUNT_SID),
+                        ("TWILIO_AUTH_TOKEN", self.TWILIO_AUTH_TOKEN),
+                        ("TWILIO_FROM_NUMBER", self.TWILIO_FROM_NUMBER),
+                    ]
                 )
                 if not value
             ]

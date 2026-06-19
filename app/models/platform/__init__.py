@@ -5,6 +5,7 @@ from app.models.platform.credit_application import PlatformCreditApplication
 from app.models.platform.verification import PlatformVerification
 from app.models.platform.consent import PlatformConsent
 from app.models.platform.event import PlatformEvent
+from app.models.platform.integration_settings import PlatformIntegrationSettings
 
 __all__ = [
     "PlatformPatient",
@@ -14,4 +15,5 @@ __all__ = [
     "PlatformVerification",
     "PlatformConsent",
     "PlatformEvent",
+    "PlatformIntegrationSettings",
 ]
