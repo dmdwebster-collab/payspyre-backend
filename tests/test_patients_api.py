@@ -59,13 +59,23 @@ def client(db_session: Session):
     """TestClient with auth and db overridden."""
     fake_user = type("U", (), {"id": uuid.uuid4(), "email": "user@example.com", "role": "patient"})()
 
+    # Defense in depth: snapshot existing overrides and restore exactly that
+    # snapshot on teardown, rather than a blanket clear(). A blanket clear()
+    # would (a) wipe overrides this fixture did not set and (b) leave this
+    # fixture's synthetic ``U`` user (which has ``.role`` but not ``.roles``)
+    # behind if teardown were ever interrupted — leaking it into later tests
+    # such as test_credit_products_api.py's require_roles path.
+    _prior_overrides = dict(app.dependency_overrides)
+
     app.dependency_overrides[get_db] = lambda: db_session
     app.dependency_overrides[get_current_user] = lambda: fake_user
 
-    with TestClient(app) as c:
-        yield c
-
-    app.dependency_overrides.clear()
+    try:
+        with TestClient(app) as c:
+            yield c
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(_prior_overrides)
 
 
 # ---------------------------------------------------------------------------

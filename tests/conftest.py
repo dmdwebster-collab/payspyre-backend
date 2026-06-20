@@ -27,6 +27,35 @@ from app.db.base import Base, get_db
 import app.models  # Import all models to register them with Base
 
 
+@pytest.fixture(autouse=True)
+def _isolate_dependency_overrides():
+    """Guarantee FastAPI dependency overrides never leak across tests.
+
+    Several test modules override dependencies on the *real* app
+    (``from app.main import app``) — e.g. ``get_current_user`` swapped for a
+    synthetic user, ``get_db`` swapped for the test session. If any of those
+    fixtures fails to clean up (an interrupted teardown, a fixture error, or a
+    parallel worker race), the override bleeds into later tests in CI's
+    execution order. A classic symptom is ``AttributeError: 'U' object has no
+    attribute 'roles'`` in ``require_roles`` — a synthetic patient user object
+    (with ``.role`` but not ``.roles``) leaked from an earlier test into the
+    credit-products endpoints.
+
+    This autouse fixture snapshots ``app.dependency_overrides`` before every
+    test and restores that exact snapshot afterward, so no test can pollute the
+    shared app's override map for the next one. It makes the whole suite
+    order-independent regardless of how individual fixtures clean up.
+    """
+    from app.main import app
+
+    snapshot = dict(app.dependency_overrides)
+    try:
+        yield
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(snapshot)
+
+
 @pytest.fixture(scope="function")
 def db_session():
     # Create test database if it doesn't exist

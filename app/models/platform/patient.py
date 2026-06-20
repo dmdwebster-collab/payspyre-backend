@@ -30,6 +30,10 @@ class PlatformPatient(Base):
     sin_declined = Column(Boolean, nullable=False, default=False)
     sin_declined_at = Column(DateTime(timezone=True), nullable=True)
 
+    # Disbursement: the borrower's payee id at the payments provider (Zumrails).
+    # Populated out-of-band by ops/onboarding; loan_lifecycle reads it to disburse.
+    zumrails_recipient_id = Column(String, nullable=True)
+
     # Verification depth (denormalized for fast filtering)
     verification_depth = Column(
         ENUM("none", "email_verified", "phone_verified", "id_verified", "id_bank_verified", "id_bank_cb_verified",
