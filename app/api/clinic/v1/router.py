@@ -8,9 +8,10 @@ Endpoints (all staff-authenticated via the platform JWT):
 """
 from fastapi import APIRouter
 
-from app.api.clinic.v1.endpoints import applications, financing_links, products
+from app.api.clinic.v1.endpoints import applications, financing_links, marketplace, products
 
 clinic_router = APIRouter()
 clinic_router.include_router(products.router)
 clinic_router.include_router(applications.router)
 clinic_router.include_router(financing_links.router)
+clinic_router.include_router(marketplace.router)

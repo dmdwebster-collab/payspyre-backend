@@ -1,0 +1,37 @@
+# Marketplace lead pricing (spec §6.2).
+#
+# A lead's price = base_prices[lead_state]
+#                  * multipliers.treatment_category[<highest-priced category on the listing>]
+#                  * multipliers.urgency[urgency]
+#                  * multipliers.verification_depth[verification_depth]
+# rounded to the nearest cent (integer cents).
+#
+# A category / urgency / verification_depth not listed here defaults to a 1.0
+# multiplier. The result is stored on platform_marketplace_listings.base_lead_price_cents.
+
+base_prices:
+  unqualified: 1500     # cents — $15
+  pre_qualified: 4000   # $40
+  pre_approved: 7500    # $75
+  approved: 15000       # $150
+
+multipliers:
+  treatment_category:
+    implants: 1.5
+    full_arch: 2.5
+    orthodontics: 1.3
+    general_dentistry: 1.0
+  urgency:
+    immediate: 1.4
+    this_week: 1.2
+    this_month: 1.0
+    flexible: 0.8
+  verification_depth:
+    none: 0.5
+    id_verified: 1.0
+    id_bank_verified: 1.3
+    id_bank_cb_verified: 1.5
+
+# Which event levies the lead charge against the vendor.
+# 'expressed_interest' | 'patient_selected' | 'appointment_booked' | 'treatment_completed'
+charge_trigger: 'patient_selected'
