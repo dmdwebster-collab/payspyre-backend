@@ -84,7 +84,11 @@ def validate_ssn(ssn: str) -> str:
 
 
 def validate_sin(sin: str) -> str:
-    """Validate Canadian Social Insurance Number format."""
+    """Validate Canadian Social Insurance Number format.
+
+    Returns a MASKED form (``***-***-NNN``) — safe to surface. Use
+    :func:`normalize_sin` when the bare digits are needed for encryption.
+    """
     sin = sanitize_string(sin, max_length=11)
 
     sin = re.sub(r"[^\d]", "", sin)
@@ -96,6 +100,38 @@ def validate_sin(sin: str) -> str:
         )
 
     return f"***-***-{sin[-3:]}"
+
+
+def _sin_luhn_valid(digits: str) -> bool:
+    """Canadian SIN Luhn (mod-10) check on a 9-digit string."""
+    total = 0
+    for i, ch in enumerate(digits):
+        n = int(ch)
+        if i % 2 == 1:  # every second digit (0-indexed positions 1,3,5,7) is doubled
+            n *= 2
+            if n > 9:
+                n -= 9
+        total += n
+    return total % 10 == 0
+
+
+def normalize_sin(sin: str) -> str:
+    """Return the bare 9-digit SIN after format + Luhn validation.
+
+    Raises HTTP 422 on any invalid input. This is the value passed to
+    ``encrypt_sin`` — it is the raw SIN and MUST NOT be logged or returned.
+    The returned value carries no masking; the caller is responsible for only
+    ever persisting it encrypted and exposing ``sin_last3`` instead.
+    """
+    cleaned = sanitize_string(sin, max_length=11)
+    cleaned = re.sub(r"[^\d]", "", cleaned)
+
+    if len(cleaned) != 9 or not _sin_luhn_valid(cleaned):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid SIN",
+        )
+    return cleaned
 
 
 def validate_amount(amount: Union[float, int, str], min_amount: float = 0, max_amount: float = 1000000) -> float:

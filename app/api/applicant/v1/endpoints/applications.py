@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import ipaddress
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from typing import Iterator
 from uuid import UUID
 
@@ -38,8 +39,12 @@ from app.api.applicant.v1.schemas import (
     CreateApplicationResponse,
     InitiateVerificationResponse,
     RequiredConsentsResponse,
+    SinCollectBody,
+    SinCollectResponse,
     SubmitResponse,
 )
+from app.core.sin_crypto import encrypt_sin
+from app.core.validation import normalize_sin
 from app.core.logging import get_logger
 from app.db.base import get_db
 from app.models.platform.credit_application import PlatformCreditApplication
@@ -240,4 +245,70 @@ def submit_for_decision(
         status=result.status,
         decision=result.decision,
         already_decided=result.already_decided,
+    )
+
+
+# --- SIN collection (C-3) --------------------------------------------------
+
+
+@router.post("/{application_id}/sin", response_model=SinCollectResponse)
+def collect_sin(
+    application_id: UUID,
+    body: SinCollectBody,
+    claims: ApplicantClaims = Depends(get_current_applicant),
+    db: Session = Depends(get_db),
+):
+    """Collect (or decline) the borrower's SIN for this application.
+
+    The full SIN is encrypted at rest with the dedicated SIN key and is NEVER
+    logged, NEVER persisted in plaintext, and NEVER returned. The response only
+    ever carries ``sin_last3`` + the collected/declined flags. Re-collection
+    overwrites (idempotent-ish). The SIN attaches to the application's PATIENT
+    (the canonical identity), not the application row.
+    """
+    require_app_scope(application_id, claims)
+
+    application = (
+        db.query(PlatformCreditApplication)
+        .filter(PlatformCreditApplication.id == application_id)
+        .first()
+    )
+    if application is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Application not found")
+
+    patient = (
+        db.query(PlatformPatient)
+        .filter(PlatformPatient.id == application.patient_id)
+        .first()
+    )
+    if patient is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Patient not found")
+
+    now = datetime.now(timezone.utc)
+
+    if body.declined:
+        patient.sin_declined = True
+        patient.sin_declined_at = now
+        db.add(patient)
+        db.commit()
+        # Never log the SIN; a decline has none to leak anyway.
+        return SinCollectResponse(
+            sin_last3=patient.sin_last3, collected=False, declined=True
+        )
+
+    # validate_sin (422 on invalid) then store encrypted. `digits` is the bare
+    # 9-digit SIN — it lives only in this local scope and the encrypt call.
+    digits = normalize_sin(body.sin or "")
+    patient.sin_encrypted = encrypt_sin(digits)
+    patient.sin_last3 = digits[-3:]
+    patient.sin_collected_at = now
+    # Re-collecting clears a prior decline.
+    patient.sin_declined = False
+    patient.sin_declined_at = None
+    db.add(patient)
+    db.commit()
+
+    # SECURITY: the response intentionally excludes the SIN — only last3 + flags.
+    return SinCollectResponse(
+        sin_last3=patient.sin_last3, collected=True, declined=False
     )

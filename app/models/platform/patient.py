@@ -23,8 +23,12 @@ class PlatformPatient(Base):
     email = Column(String, nullable=True)
     phone_e164 = Column(String, nullable=True)
 
-    # SIN — encrypted at rest, never logged, never returned by default APIs
-    sin_encrypted = Column(String, nullable=True)  # pgcrypto encrypted
+    # SIN — encrypted at rest, NEVER logged, NEVER returned by any API (only
+    # sin_last3 is ever exposed). Stores an app-layer Fernet token (string) under
+    # the dedicated SIN_ENCRYPTION_KEY — see app/core/sin_crypto.py. The column is
+    # TEXT (migration 030 reconciled the original BYTEA drift, audit C-3); String
+    # maps to TEXT in Postgres so model + DB now agree.
+    sin_encrypted = Column(String, nullable=True)
     sin_last3 = Column(String(3), nullable=True)
     sin_collected_at = Column(DateTime(timezone=True), nullable=True)
     sin_declined = Column(Boolean, nullable=False, default=False)

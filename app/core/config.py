@@ -102,6 +102,16 @@ class Settings(BaseSettings):
     # encryption-at-rest. Generate: python -c "from cryptography.fernet import
     # Fernet; print(Fernet.generate_key().decode())"
     SETTINGS_ENCRYPTION_KEY: str = ""
+
+    # DEDICATED app-layer encryption key (Fernet) for the borrower SIN, stored in
+    # platform_patients.sin_encrypted. SEPARATE from SETTINGS_ENCRYPTION_KEY by
+    # design (Hard Rule #7) so the SIN key can be rotated/scoped independently and
+    # a compromise of the integration-credentials key never exposes SINs.
+    # Empty in dev = no-op pass-through (plaintext); MUST be set in production.
+    # Generate: python -c "from cryptography.fernet import Fernet;
+    # print(Fernet.generate_key().decode())"
+    SIN_ENCRYPTION_KEY: str = ""
+
     OBSERVABILITY_ENABLED: bool = False
     OBSERVABILITY_POSTHOG_ALLOWLIST: str = (
         "verification_completed,"
