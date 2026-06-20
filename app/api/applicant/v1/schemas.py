@@ -124,3 +124,32 @@ class ProductSummary(BaseModel):
 
 class ProductsResponse(BaseModel):
     products: list[ProductSummary]
+
+
+# --- SIN collection (C-3) --------------------------------------------------
+
+
+class SinCollectBody(BaseModel):
+    """Either ``{"sin": "<9 digits>"}`` OR ``{"declined": true}``.
+
+    The full SIN is accepted on the request only; it is NEVER echoed back. The
+    model validator enforces exactly one of the two intents.
+    """
+
+    sin: Optional[str] = Field(default=None, min_length=9, max_length=11)
+    declined: bool = False
+
+    def model_post_init(self, __context: Any) -> None:  # pydantic v2 hook
+        provided_sin = self.sin is not None and self.sin.strip() != ""
+        if provided_sin and self.declined:
+            raise ValueError("Provide either 'sin' or 'declined', not both")
+        if not provided_sin and not self.declined:
+            raise ValueError("Provide either 'sin' or 'declined'")
+
+
+class SinCollectResponse(BaseModel):
+    """The ONLY SIN-related shape ever returned. Never contains the full SIN."""
+
+    sin_last3: Optional[str] = None
+    collected: bool
+    declined: bool
