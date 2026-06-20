@@ -92,6 +92,10 @@ class Settings(BaseSettings):
     # without re-reading that helper.
     POSTHOG_API_KEY: str = ""
     POSTHOG_HOST: str = "https://us.i.posthog.com"
+    # Google Analytics (GA4) — product analytics, distinct from PostHog (internal obs).
+    # Server-side Measurement Protocol; no-op when unset. Frontend uses gtag separately.
+    GA_MEASUREMENT_ID: str = ""
+    GA_API_SECRET: str = ""
     OBSERVABILITY_ENABLED: bool = False
     OBSERVABILITY_POSTHOG_ALLOWLIST: str = (
         "verification_completed,"

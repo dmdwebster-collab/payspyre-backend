@@ -6,6 +6,11 @@ from app.models.platform.verification import PlatformVerification
 from app.models.platform.consent import PlatformConsent
 from app.models.platform.event import PlatformEvent
 from app.models.platform.integration_settings import PlatformIntegrationSettings
+from app.models.platform.loan import (
+    PlatformLoan,
+    PlatformLoanScheduleItem,
+    PlatformLoanPayment,
+)
 
 __all__ = [
     "PlatformPatient",
@@ -16,4 +21,7 @@ __all__ = [
     "PlatformConsent",
     "PlatformEvent",
     "PlatformIntegrationSettings",
+    "PlatformLoan",
+    "PlatformLoanScheduleItem",
+    "PlatformLoanPayment",
 ]
