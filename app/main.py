@@ -40,10 +40,17 @@ if settings.SENTRY_DSN:
     )
     logger.info("sentry_initialized", dsn_configured=True)
 
+# Interactive docs + the OpenAPI schema expose the full internal API surface
+# (admin endpoints, webhook routes, request shapes). Disable them in production so
+# they aren't anonymous reconnaissance; keep them on elsewhere for development.
+_docs_enabled = settings.ENVIRONMENT != "production"
 app = FastAPI(
     title="PaySpyre API",
     description="PaySpyre Financial Backend API",
     version="0.1.0",
+    docs_url="/docs" if _docs_enabled else None,
+    redoc_url="/redoc" if _docs_enabled else None,
+    openapi_url="/openapi.json" if _docs_enabled else None,
 )
 
 app.state.limiter = limiter
