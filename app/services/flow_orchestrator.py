@@ -756,6 +756,21 @@ class FlowOrchestrator:
                     application_id=str(application.id),
                     error=str(exc),
                 )
+        # P9.x — ECOA/FCRA: on a decline, send the adverse-action notice (audit §7).
+        # DEFENSIVE + idempotent + internally swallows errors; never blocks the decision.
+        if application.status == "declined":
+            try:
+                from app.services import adverse_action
+
+                adverse_action.send_adverse_action_notice(
+                    self.db, application, flow_decision.decision_reasons
+                )
+            except Exception as exc:  # noqa: BLE001 — decision integrity over notice send
+                logger.error(
+                    "adverse_action_notice_failed",
+                    application_id=str(application.id),
+                    error=str(exc),
+                )
         logger.info(
             "decision_made",
             application_id=str(application.id),

@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Notice of Action Taken</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .header {
+            background: linear-gradient(135deg, #666 0%, #444 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+            border-radius: 10px 10px 0 0;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 24px;
+        }
+        .content {
+            background: #f9f9f9;
+            padding: 30px;
+            border-radius: 0 0 10px 10px;
+        }
+        .info-box {
+            background: white;
+            border-left: 4px solid #444;
+            padding: 15px;
+            margin: 20px 0;
+        }
+        .reason-box {
+            background: #fff;
+            border: 1px solid #ddd;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+        .legal {
+            font-size: 12px;
+            color: #555;
+            border-top: 1px solid #ddd;
+            margin-top: 25px;
+            padding-top: 15px;
+        }
+        .footer {
+            text-align: center;
+            margin-top: 30px;
+            color: #666;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Notice of Action Taken</h1>
+    </div>
+
+    <div class="content">
+        <p>Dear {{ applicant_name }},</p>
+
+        <p>Thank you for your recent credit application (Reference: {{ application_id }}).
+        After careful review, we are unable to approve your application at this time.</p>
+
+        <div class="reason-box">
+            <h3>Principal reason(s) for our decision:</h3>
+            <ul>
+                {% for reason in principal_reasons %}
+                <li>{{ reason }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+
+        <h3>Credit reporting agency disclosure</h3>
+        {% if bureau.bureau_used %}
+        <p>Our credit decision was based in whole or in part on information obtained in a
+        report from the consumer reporting agency listed below. You can contact them at:</p>
+        <div class="info-box">
+            <p><strong>{{ bureau.name }}</strong></p>
+            <p>{{ bureau.address }}</p>
+            <p>Phone: {{ bureau.phone }}</p>
+            <p>Web: {{ bureau.website }}</p>
+        </div>
+        {% else %}
+        <p>If a consumer report (credit report) was used in connection with this decision,
+        the consumer reporting agency that supplied it did not make the decision and cannot
+        provide the specific reasons for it. You may request the name, address, and telephone
+        number of any consumer reporting agency that provided a report by contacting us.</p>
+        {% endif %}
+
+        <div class="legal">
+            <p><strong>Your rights under the Fair Credit Reporting Act</strong></p>
+            <p>{{ fcra_rights }}</p>
+
+            <p><strong>Equal Credit Opportunity Act notice</strong></p>
+            <p>{{ ecoa_notice }}</p>
+        </div>
+
+        <div class="footer">
+            <p>PaySpyre Financial | 123 Finance Street, Suite 100 | Kelowna, BC V1Y 1X1</p>
+            <p>This is an automated notice. Please do not reply to this email.</p>
+        </div>
+    </div>
+</body>
+</html>
