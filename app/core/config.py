@@ -92,6 +92,16 @@ class Settings(BaseSettings):
     # without re-reading that helper.
     POSTHOG_API_KEY: str = ""
     POSTHOG_HOST: str = "https://us.i.posthog.com"
+    # Google Analytics (GA4) — product analytics, distinct from PostHog (internal obs).
+    # Server-side Measurement Protocol; no-op when unset. Frontend uses gtag separately.
+    GA_MEASUREMENT_ID: str = ""
+    GA_API_SECRET: str = ""
+
+    # App-layer encryption key (Fernet) for platform_integration_settings.secrets.
+    # Empty in dev = no-op pass-through (plaintext). Set in prod to enable
+    # encryption-at-rest. Generate: python -c "from cryptography.fernet import
+    # Fernet; print(Fernet.generate_key().decode())"
+    SETTINGS_ENCRYPTION_KEY: str = ""
     OBSERVABILITY_ENABLED: bool = False
     OBSERVABILITY_POSTHOG_ALLOWLIST: str = (
         "verification_completed,"
@@ -123,6 +133,12 @@ class Settings(BaseSettings):
     # Notifications
     RESEND_API_KEY: str = ""
     RESEND_FROM_EMAIL: str = "noreply@payspyre.com"
+
+    SENDGRID_API_KEY: str = ""
+    SENDGRID_FROM_EMAIL: str = "noreply@payspyre.com"
+    # "sendgrid" | "resend" — which provider the real dispatcher uses for email.
+    # Business uses SendGrid (dedicated IP), so it's the default.
+    EMAIL_PROVIDER: str = "sendgrid"
 
     TWILIO_ACCOUNT_SID: str = ""
     TWILIO_AUTH_TOKEN: str = ""
@@ -190,14 +206,22 @@ class Settings(BaseSettings):
                 )
         # P7.4: same shape — real notification outbound creds must be present.
         if self.USE_REAL_NOTIFICATIONS:
+            email_required = (
+                [("SENDGRID_API_KEY", self.SENDGRID_API_KEY),
+                 ("SENDGRID_FROM_EMAIL", self.SENDGRID_FROM_EMAIL)]
+                if self.EMAIL_PROVIDER == "sendgrid"
+                else [("RESEND_API_KEY", self.RESEND_API_KEY),
+                      ("RESEND_FROM_EMAIL", self.RESEND_FROM_EMAIL)]
+            )
             missing_notif = [
                 name
                 for name, value in (
-                    ("RESEND_API_KEY", self.RESEND_API_KEY),
-                    ("RESEND_FROM_EMAIL", self.RESEND_FROM_EMAIL),
-                    ("TWILIO_ACCOUNT_SID", self.TWILIO_ACCOUNT_SID),
-                    ("TWILIO_AUTH_TOKEN", self.TWILIO_AUTH_TOKEN),
-                    ("TWILIO_FROM_NUMBER", self.TWILIO_FROM_NUMBER),
+                    email_required
+                    + [
+                        ("TWILIO_ACCOUNT_SID", self.TWILIO_ACCOUNT_SID),
+                        ("TWILIO_AUTH_TOKEN", self.TWILIO_AUTH_TOKEN),
+                        ("TWILIO_FROM_NUMBER", self.TWILIO_FROM_NUMBER),
+                    ]
                 )
                 if not value
             ]

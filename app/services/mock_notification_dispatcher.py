@@ -23,6 +23,18 @@ from sqlalchemy.orm import Session
 
 from app.models.platform.event import PlatformEvent
 
+# Dev-only: the most recent plaintext magic-link code per application_id. In mock
+# mode no real SMS/email is sent and only a SHA-256 hash is persisted, so a local
+# demo has no way to obtain the code — this lets a gated dev endpoint surface it.
+# The mock dispatcher is only selected in non-prod (the prod selector returns
+# RealNotificationDispatcher), so this never holds production codes.
+_DEV_PLAINTEXT_CODES: dict[str, str] = {}
+
+
+def peek_dev_code(application_id: str) -> str | None:
+    """Return the last plaintext magic-link code for an application (dev only)."""
+    return _DEV_PLAINTEXT_CODES.get(application_id)
+
 
 class MockNotificationDispatcher:
     def __init__(self, db: Session) -> None:
@@ -69,6 +81,7 @@ class MockNotificationDispatcher:
         # captures cleanly.
         from app.services.observability.posthog_bridge import capture_event
         capture_event(event)
+        _DEV_PLAINTEXT_CODES[str(application_id)] = token  # dev-only peek (see module note)
         self._sent.append(
             {
                 "contact_method": contact_method,

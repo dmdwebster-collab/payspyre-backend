@@ -226,21 +226,36 @@ class TestFlinksRichPayloadArithmetic:
         # (100.00 + 250.50) * 100 = 35050 cents
         assert r.rich_payload["avg_balance_cents"] == 35050
 
-    def test_monthly_income_sums_credits_in_last_30_days(self):
+    def test_monthly_income_requires_recurring_stream(self):
+        # Income is now derived from RECURRING deposit streams (P8.x engine), not a
+        # naive sum of credits. Sporadic, dissimilar credits are NOT income.
         today = _today()
-        accounts = [
+        sporadic = [
             {
                 "Id": "a",
                 "Balance": {"Current": 0},
                 "Transactions": [
                     _txn(today - timedelta(days=2), credit=1000.00),
                     _txn(today - timedelta(days=15), credit=500.00),
-                    _txn(today - timedelta(days=60), credit=9999.99),  # outside window
                 ],
             }
         ]
-        r = translate_flinks_payload(_flinks_payload(Accounts=accounts))
-        assert r.rich_payload["monthly_income_cents"] == 150000  # 1500.00 in cents
+        r = translate_flinks_payload(_flinks_payload(Accounts=sporadic))
+        assert r.rich_payload["monthly_income_cents"] == 0
+
+        # A recurring bi-weekly payroll stream IS detected as income.
+        payroll = [
+            {
+                "Id": "a",
+                "Balance": {"Current": 0},
+                "Transactions": [
+                    _txn(today - timedelta(days=14 * i), credit=2000.00, description="PAYROLL")
+                    for i in range(6)
+                ],
+            }
+        ]
+        r2 = translate_flinks_payload(_flinks_payload(Accounts=payroll))
+        assert r2.rich_payload["monthly_income_cents"] > 0
 
     def test_nsf_counted_within_90_days(self):
         today = _today()
@@ -320,8 +335,11 @@ class TestFlinksNoRawPayloadPersisted:
         assert "Jane Doe" not in blob
         assert "jane@example.com" not in blob
         assert "JOHN SMITH" not in blob
-        # Derived non-PII metrics still present for ReplayBankAdapter.
-        assert r.rich_payload["monthly_income_cents"] == 100000
+        # Derived non-PII metrics still present for ReplayBankAdapter. Income is 0
+        # here: a single one-off Interac e-transfer is not recurring income under the
+        # transaction-analysis engine (transfers are excluded; recurrence is required).
+        assert "monthly_income_cents" in r.rich_payload
+        assert r.rich_payload["monthly_income_cents"] == 0
         assert r.rich_payload["vendor"] == "flinks"
 
 

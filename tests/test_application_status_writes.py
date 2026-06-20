@@ -16,8 +16,11 @@ from pathlib import Path
 
 _APP_DIR = Path(__file__).resolve().parents[1] / "app"
 _OWNER = "flow_orchestrator.py"
-# A `.status =` assignment — excluding `==` comparisons and `.status_updated_at` / `.status_code`.
-_STATUS_WRITE = re.compile(r"\.status\s*=(?!=)")
+# An ``<application-var>.status =`` assignment — application status transitions only.
+# Excludes ``==`` comparisons, ``.status_updated_at`` / ``.status_code``, and OTHER
+# models' status writes (e.g. loan-servicing writes ``loan.status`` / ``item.status``
+# while merely *referencing* PlatformCreditApplication to read it — not in scope).
+_STATUS_WRITE = re.compile(r"\b(?:application|credit_application|credit_app)\.status\s*=(?!=)")
 
 
 def test_application_status_written_only_by_orchestrator():

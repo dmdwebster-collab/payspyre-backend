@@ -161,6 +161,11 @@ from app.api.applicant.v1.router import applicant_router  # noqa: E402
 
 app.include_router(applicant_router, prefix="/api/applicant/v1")
 
+# Clinic/practice-facing API — P9.x. Separate surface/prefix.
+from app.api.clinic.v1.router import clinic_router  # noqa: E402
+
+app.include_router(clinic_router, prefix="/api/clinic/v1")
+
 # Vendor webhook API (HMAC-authenticated) — P6.6. Separate surface/prefix.
 from app.api.webhooks.v1.router import webhook_router  # noqa: E402
 

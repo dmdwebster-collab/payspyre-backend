@@ -31,6 +31,7 @@ from typing import Any, Literal, Optional
 from uuid import UUID
 
 from app.api.webhooks.v1.schemas import DiditWebhookPayload, FlinksWebhookPayload
+from app.services.bank.transaction_analysis import analyze_accounts
 
 
 class TranslatorError(Exception):
@@ -239,62 +240,16 @@ def _empty_bank_metrics() -> dict[str, int]:
 
 
 def _derive_bank_metrics(accounts: list[dict[str, Any]]) -> dict[str, int]:
-    """Walk Flinks ``Accounts[].Transactions[]`` to approximate underwriting metrics.
+    """Derive underwriting metrics from raw Flinks ``Accounts[].Transactions[]``.
 
-    Notes on the approximation (matched to ReplayBankAdapter contract):
-    - ``monthly_income_cents``: sum of Credit amounts in the trailing 30 days.
-      A single account; if multiple, sum across.
-    - ``nsf_count_90d``: count of transactions whose Description contains
-      "NSF" or " OD" (overdraft) in the trailing 90 days.
-    - ``account_age_months``: (now - earliest Transaction.Date) // 30 days.
-    - ``avg_balance_cents``: sum of ``Accounts[].Balance.Current`` across accounts
-      (proxy for "what's in the account right now").
-
-    Dollars → cents: Flinks reports amounts as decimal dollars
-    (e.g. ``"Credit": 1234.56``). We round to int cents.
+    Delegates to the transaction-analysis engine (P8.x), which detects RECURRING
+    income streams (not a naive sum of credits), word-boundary NSF events, account
+    age, and current balance — processing the raw 90-day data ourselves rather than
+    paying for Flinks' Enrich/Attributes API. Output keys match the ReplayBankAdapter
+    contract: ``monthly_income_cents``, ``nsf_count_90d``, ``account_age_months``,
+    ``avg_balance_cents``.
     """
-    now = datetime.now(timezone.utc).date()
-    income_30d = 0
-    nsf_90d = 0
-    earliest_txn = None
-    balance_sum_cents = 0
-
-    for account in accounts:
-        balance = account.get("Balance") or {}
-        current = balance.get("Current")
-        if isinstance(current, (int, float)):
-            balance_sum_cents += int(round(float(current) * 100))
-
-        for txn in account.get("Transactions") or []:
-            txn_date = _parse_flinks_date(txn.get("Date"))
-            if txn_date is None:
-                continue
-            if earliest_txn is None or txn_date < earliest_txn:
-                earliest_txn = txn_date
-
-            days_ago = (now - txn_date).days
-            description = (txn.get("Description") or "").upper()
-
-            if 0 <= days_ago <= 30:
-                credit = txn.get("Credit")
-                if isinstance(credit, (int, float)) and credit > 0:
-                    income_30d += int(round(float(credit) * 100))
-
-            if 0 <= days_ago <= 90:
-                if "NSF" in description or " OD " in f" {description} ":
-                    nsf_90d += 1
-
-    if earliest_txn is None:
-        account_age_months = 0
-    else:
-        account_age_months = max(0, (now - earliest_txn).days // 30)
-
-    return {
-        "monthly_income_cents": income_30d,
-        "nsf_count_90d": nsf_90d,
-        "account_age_months": account_age_months,
-        "avg_balance_cents": balance_sum_cents,
-    }
+    return analyze_accounts(accounts)
 
 
 def _parse_flinks_date(value: Any) -> Optional[Any]:
