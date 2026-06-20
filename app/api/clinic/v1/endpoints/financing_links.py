@@ -10,8 +10,9 @@ deliberately do NOT mint a patient JWT here, so the link carries only the
 application reference, not a credential. This mirrors what the frontend mock
 synthesizes (``${APP_ORIGIN}/?ref=...&product=...&amount=...``).
 
-Staff-authenticated (platform JWT). See ``app/api/clinic/v1/deps.py`` for the
-clinic-scoping follow-up note.
+Staff-authenticated (platform JWT) and clinic-scoped: the new application is
+stamped with the caller's ``vendor_id`` (their clinic, per spec §13), so it
+shows up only in that clinic's list/summary. See ``app/api/clinic/v1/deps.py``.
 """
 from __future__ import annotations
 
@@ -20,7 +21,7 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.api.clinic.v1.deps import get_current_user, get_orchestrator
+from app.api.clinic.v1.deps import ClinicPrincipal, get_current_clinic_user, get_orchestrator
 from app.api.clinic.v1.schemas import ClinicFinancingLink, CreateFinancingLinkBody
 from app.core.config import settings
 from app.db.base import get_db
@@ -102,7 +103,7 @@ def create_financing_link(
     body: CreateFinancingLinkBody,
     db: Session = Depends(get_db),
     orchestrator: FlowOrchestrator = Depends(get_orchestrator),
-    _user=Depends(get_current_user),
+    principal: ClinicPrincipal = Depends(get_current_clinic_user),
 ):
     product = (
         db.query(PlatformCreditProduct)
@@ -124,6 +125,7 @@ def create_financing_link(
             requested_amount_cents=body.amount_cents,
             requested_amount_source="clinic",
             clinic_proposed_amount_cents=body.amount_cents,
+            vendor_id=principal.vendor_id,
         )
     except OrchestratorError as exc:
         # Product existence is pre-checked above; this guards any other

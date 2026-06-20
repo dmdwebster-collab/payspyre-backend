@@ -12,10 +12,13 @@ from uuid import uuid4
 
 import pytest
 
+from cryptography.fernet import Fernet
+
 from app.api.schemas.integration_settings import (
     IntegrationSettingsRead,
     IntegrationSettingsUpsert,
 )
+from app.core import secret_crypto
 from app.services import integration_settings as service
 
 
@@ -175,6 +178,95 @@ def test_upsert_defaults_config_and_secrets_to_empty_dicts():
     setting = service.upsert(db, provider="equifax")
     assert setting.config == {}
     assert setting.secrets == {}
+
+
+# --------------------------------------------------------------------------
+# encryption-at-rest — upsert encrypts, get decrypts, redact still key-only
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def fernet_key(monkeypatch):
+    """Configure a fresh Fernet key (patches the crypto indirection point)."""
+    key = Fernet.generate_key().decode("utf-8")
+    monkeypatch.setattr(secret_crypto, "_configured_key", lambda: key)
+    monkeypatch.setattr(secret_crypto, "_warned_no_key", False, raising=False)
+    return key
+
+
+def test_upsert_persists_encrypted_secrets_not_plaintext(fernet_key):
+    db = MagicMock()
+    db.query.return_value.filter.return_value.first.return_value = None
+
+    # Capture the secrets at commit time — the service decrypts the row in place
+    # *after* commit (so internal callers get plaintext back), so we must snapshot
+    # what was actually staged for persistence before that happens.
+    persisted = {}
+
+    def _capture_commit():
+        persisted.update(db.add.call_args[0][0].secrets)
+
+    db.commit.side_effect = _capture_commit
+
+    setting = service.upsert(
+        db,
+        provider="sendgrid",
+        secrets={"api_key": "SG.supersecret"},
+        enabled=True,
+    )
+
+    # What was staged for the DB is CIPHERTEXT, never the plaintext.
+    assert persisted["api_key"] != "SG.supersecret"
+    assert persisted["api_key"].startswith(secret_crypto._MARKER)
+    # But the value returned to the internal caller is DECRYPTED.
+    assert setting.secrets == {"api_key": "SG.supersecret"}
+
+
+def test_get_decrypts_secrets_for_internal_callers(fernet_key):
+    db = MagicMock()
+    stored = secret_crypto.encrypt_secrets({"api_key": "SG.supersecret"})
+    row = _row(provider="sendgrid", secrets=stored)
+    db.query.return_value.filter.return_value.first.return_value = row
+
+    out = service.get(db, "sendgrid")
+    assert out.secrets == {"api_key": "SG.supersecret"}
+
+
+def test_round_trip_encrypt_store_decrypt_via_service(fernet_key):
+    plain = {"api_key": "SG.supersecret", "webhook_signing_key": "whsec_x"}
+    stored = secret_crypto.encrypt_secrets(plain)
+    # Stored ciphertext is NOT the plaintext.
+    for k, v in stored.items():
+        assert v != plain[k]
+    row = _row(secrets=stored)
+
+    db = MagicMock()
+    db.query.return_value.filter.return_value.first.return_value = row
+    out = service.get(db, "sendgrid")
+    assert out.secrets == plain
+
+
+def test_redact_only_exposes_keys_even_on_encrypted_row(fernet_key):
+    stored = secret_crypto.encrypt_secrets(
+        {"api_key": "SG.supersecret", "webhook_signing_key": "whsec_x"}
+    )
+    # redact runs on a decrypted row (the service decrypts before redacting),
+    # and must still expose ONLY key names — no values, plaintext or ciphertext.
+    decrypted_row = _row(secrets=secret_crypto.decrypt_secrets(stored))
+    out = service.redact(decrypted_row)
+    assert out["secret_keys"] == ["api_key", "webhook_signing_key"]
+    assert "SG.supersecret" not in repr(out)
+    assert "whsec_x" not in repr(out)
+    assert secret_crypto._MARKER not in repr(out)
+
+
+def test_upsert_noop_when_key_unset_stores_plaintext(monkeypatch):
+    # Default dev path: no key -> plaintext pass-through (tests still work).
+    monkeypatch.setattr(secret_crypto, "_configured_key", lambda: "")
+    db = MagicMock()
+    db.query.return_value.filter.return_value.first.return_value = None
+    setting = service.upsert(db, provider="twilio", secrets={"auth_token": "tok"})
+    assert setting.secrets == {"auth_token": "tok"}
 
 
 if __name__ == "__main__":

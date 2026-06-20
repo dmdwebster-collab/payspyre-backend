@@ -96,6 +96,12 @@ class Settings(BaseSettings):
     # Server-side Measurement Protocol; no-op when unset. Frontend uses gtag separately.
     GA_MEASUREMENT_ID: str = ""
     GA_API_SECRET: str = ""
+
+    # App-layer encryption key (Fernet) for platform_integration_settings.secrets.
+    # Empty in dev = no-op pass-through (plaintext). Set in prod to enable
+    # encryption-at-rest. Generate: python -c "from cryptography.fernet import
+    # Fernet; print(Fernet.generate_key().decode())"
+    SETTINGS_ENCRYPTION_KEY: str = ""
     OBSERVABILITY_ENABLED: bool = False
     OBSERVABILITY_POSTHOG_ALLOWLIST: str = (
         "verification_completed,"

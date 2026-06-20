@@ -54,6 +54,42 @@ class PlatformLoan(Base):
 
     disbursed_at = Column(DateTime(timezone=True), nullable=True)
 
+    # ---- Lifecycle: e-signature (SignNow) --------------------------------
+    # Where the loan-agreement signature is at. Advances forward only:
+    # not_sent -> sent -> signed (or -> declined).
+    agreement_status = Column(
+        ENUM(
+            "not_sent",
+            "sent",
+            "signed",
+            "declined",
+            name="platform_loan_agreement_status",
+            create_type=False,
+        ),
+        nullable=False,
+        default="not_sent",
+    )
+    # SignNow document id — durable vendor ref. NULL until an agreement is sent.
+    agreement_ref = Column(String, nullable=True)
+
+    # ---- Lifecycle: disbursement (Zumrails) ------------------------------
+    # Where the funding payout is at. Advances forward only:
+    # not_started -> in_progress -> completed (or -> failed).
+    disbursement_status = Column(
+        ENUM(
+            "not_started",
+            "in_progress",
+            "completed",
+            "failed",
+            name="platform_loan_disbursement_status",
+            create_type=False,
+        ),
+        nullable=False,
+        default="not_started",
+    )
+    # Zumrails transaction id — durable vendor ref. NULL until disbursement starts.
+    disbursement_ref = Column(String, nullable=True)
+
     # Outstanding principal — initialized to principal_cents, reduced by payments.
     principal_balance_cents = Column(BigInteger, nullable=False)
 
@@ -76,6 +112,12 @@ class PlatformLoan(Base):
         back_populates="loan",
         cascade="all, delete-orphan",
         order_by="PlatformLoanPayment.received_at",
+    )
+    statements = relationship(
+        "PlatformLoanStatement",
+        back_populates="loan",
+        cascade="all, delete-orphan",
+        order_by="PlatformLoanStatement.period_start",
     )
 
     def __repr__(self) -> str:
@@ -160,4 +202,44 @@ class PlatformLoanPayment(Base):
         return (
             f"<PlatformLoanPayment(loan_id={self.loan_id}, "
             f"amount_cents={self.amount_cents}, method={self.method})>"
+        )
+
+
+class PlatformLoanStatement(Base):
+    """A periodic billing statement for a loan.
+
+    One row per billing window. Snapshots the principal balance at the start
+    (``opening_balance_cents``) and end (``closing_balance_cents``) of the
+    period, plus the principal/interest actually paid within it. Money is
+    integer cents throughout, matching the rest of the LMS spine.
+    """
+
+    __tablename__ = "platform_loan_statements"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    loan_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("platform_loans.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    period_start = Column(Date, nullable=False)
+    period_end = Column(Date, nullable=False)
+
+    opening_balance_cents = Column(BigInteger, nullable=False)
+    principal_paid_cents = Column(BigInteger, nullable=False, default=0)
+    interest_paid_cents = Column(BigInteger, nullable=False, default=0)
+    closing_balance_cents = Column(BigInteger, nullable=False)
+
+    generated_at = Column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    loan = relationship("PlatformLoan", back_populates="statements")
+
+    def __repr__(self) -> str:
+        return (
+            f"<PlatformLoanStatement(loan_id={self.loan_id}, "
+            f"period={self.period_start}..{self.period_end}, "
+            f"closing_balance_cents={self.closing_balance_cents})>"
         )

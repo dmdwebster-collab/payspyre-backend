@@ -32,6 +32,7 @@ from app.models.platform.loan import (
     PlatformLoan,
     PlatformLoanPayment,
     PlatformLoanScheduleItem,
+    PlatformLoanStatement,
 )
 
 
@@ -416,3 +417,262 @@ def get_loan_status(db: Session, loan_id: UUID) -> Optional[dict]:
             "next_due_date": next_due.due_date.isoformat() if next_due else None,
         },
     }
+
+
+# ===========================================================================
+# Delinquency aging
+# ===========================================================================
+
+
+@dataclass(frozen=True)
+class AgingResult:
+    """Summary of one ``run_delinquency_aging`` pass (DB-free value object)."""
+
+    as_of: date
+    installments_flagged_late: int
+    loans_marked_delinquent: list[str]
+
+
+def run_delinquency_aging(db: Session, as_of: date) -> AgingResult:
+    """Flip overdue, not-fully-paid installments to ``late`` and their loans to
+    ``delinquent``.
+
+    A schedule item is overdue when ``due_date < as_of`` and it is not already
+    ``paid``/``waived`` (i.e. status in {scheduled, partial, late}) — any
+    unpaid balance past its due date is delinquent. Already-``late`` items stay
+    late (idempotent).
+
+    A loan is marked ``delinquent`` when it has at least one overdue, unpaid
+    installment AND it is currently ``active`` (we never override a terminal
+    status like ``paid_off`` / ``charged_off`` / ``cancelled``, nor disturb a
+    loan still in ``pending_disbursement``).
+
+    Designed to run as a scheduled job (e.g. nightly). Idempotent: running it
+    twice on the same ``as_of`` produces the same end state. Commits once.
+
+    Returns an ``AgingResult`` summarizing the pass.
+    """
+    overdue_items = (
+        db.query(PlatformLoanScheduleItem)
+        .filter(
+            PlatformLoanScheduleItem.due_date < as_of,
+            PlatformLoanScheduleItem.status.in_(("scheduled", "partial")),
+        )
+        .all()
+    )
+
+    flagged = 0
+    affected_loan_ids: set = set()
+    for item in overdue_items:
+        item.status = "late"
+        flagged += 1
+        affected_loan_ids.add(item.loan_id)
+
+    # Any loan with a late item (newly flagged or pre-existing) and an active
+    # status becomes delinquent.
+    late_loan_ids = {
+        row[0]
+        for row in (
+            db.query(PlatformLoanScheduleItem.loan_id)
+            .filter(PlatformLoanScheduleItem.status == "late")
+            .all()
+        )
+    }
+    late_loan_ids |= affected_loan_ids
+
+    marked: list[str] = []
+    if late_loan_ids:
+        loans = (
+            db.query(PlatformLoan)
+            .filter(
+                PlatformLoan.id.in_(late_loan_ids),
+                PlatformLoan.status == "active",
+            )
+            .all()
+        )
+        for loan in loans:
+            loan.status = "delinquent"
+            marked.append(str(loan.id))
+
+    db.commit()
+    return AgingResult(
+        as_of=as_of,
+        installments_flagged_late=flagged,
+        loans_marked_delinquent=marked,
+    )
+
+
+# ===========================================================================
+# Statement generation
+# ===========================================================================
+
+
+def generate_statement(
+    db: Session,
+    loan: PlatformLoan,
+    period: tuple[date, date],
+) -> PlatformLoanStatement:
+    """Generate (and persist) a billing statement for ``loan`` over ``period``.
+
+    ``period`` is an inclusive ``(period_start, period_end)`` window.
+
+    The statement snapshots:
+      * ``opening_balance_cents`` — principal balance entering the window,
+        reconstructed as ``current principal_balance + principal paid AFTER the
+        window's end`` (so it is correct even when generated retroactively).
+      * ``principal_paid_cents`` / ``interest_paid_cents`` — split of the cash
+        received in the window, allocated principal-first within each payment
+        the same way ``record_payment`` does.
+      * ``closing_balance_cents`` — ``opening - principal_paid_in_window``.
+
+    Idempotent: regenerating the same (loan, period) returns the existing row.
+    Commits once.
+    """
+    period_start, period_end = period
+    if period_end < period_start:
+        raise ValueError("period_end must be >= period_start")
+
+    existing = (
+        db.query(PlatformLoanStatement)
+        .filter(
+            PlatformLoanStatement.loan_id == loan.id,
+            PlatformLoanStatement.period_start == period_start,
+            PlatformLoanStatement.period_end == period_end,
+        )
+        .first()
+    )
+    if existing is not None:
+        return existing
+
+    payments = sorted(loan.payments, key=lambda p: p.received_at)
+
+    def _in_window(p: PlatformLoanPayment) -> bool:
+        d = p.received_at.date()
+        return period_start <= d <= period_end
+
+    def _after_window(p: PlatformLoanPayment) -> bool:
+        return p.received_at.date() > period_end
+
+    # Total principal/interest split for an arbitrary set of payments, applied
+    # oldest-first against the schedule (mirrors record_payment's allocation).
+    principal_in_window, interest_in_window = _split_payments(
+        loan, [p for p in payments if _in_window(p)]
+    )
+    principal_after_window, _ = _split_payments(
+        loan, [p for p in payments if _after_window(p)]
+    )
+
+    # Reconstruct the opening balance: current outstanding principal plus
+    # anything paid down after the window's end plus what was paid in-window.
+    closing_balance = loan.principal_balance_cents + principal_after_window
+    opening_balance = closing_balance + principal_in_window
+
+    statement = PlatformLoanStatement(
+        loan_id=loan.id,
+        period_start=period_start,
+        period_end=period_end,
+        opening_balance_cents=opening_balance,
+        principal_paid_cents=principal_in_window,
+        interest_paid_cents=interest_in_window,
+        closing_balance_cents=closing_balance,
+    )
+    db.add(statement)
+    db.commit()
+    db.refresh(statement)
+    return statement
+
+
+def _split_payments(
+    loan: PlatformLoan, payments: list
+) -> tuple[int, int]:
+    """Split a list of payments into (principal_cents, interest_cents).
+
+    Pure helper. Walks the loan's schedule oldest-first and allocates each
+    payment's cash principal-before-interest within an installment, exactly as
+    ``record_payment`` does — but without mutating state, so it can be used for
+    reporting/statement math.
+    """
+    schedule = sorted(loan.schedule, key=lambda s: s.installment_number)
+    # Track virtual paid_cents per installment so multiple payments compose.
+    paid = {s.installment_number: 0 for s in schedule}
+
+    total_principal = 0
+    total_interest = 0
+    for payment in payments:
+        remaining = payment.amount_cents
+        for item in schedule:
+            if remaining <= 0:
+                break
+            outstanding = item.total_cents - paid[item.installment_number]
+            if outstanding <= 0:
+                continue
+            applied = min(remaining, outstanding)
+            # Principal portion of THIS applied chunk: principal filled first.
+            principal_outstanding = max(
+                0, item.principal_cents - paid[item.installment_number]
+            )
+            principal_applied = min(applied, principal_outstanding)
+            interest_applied = applied - principal_applied
+            total_principal += principal_applied
+            total_interest += interest_applied
+            paid[item.installment_number] += applied
+            remaining -= applied
+    return total_principal, total_interest
+
+
+# ===========================================================================
+# Payoff
+# ===========================================================================
+
+
+@dataclass(frozen=True)
+class PayoffQuote:
+    """A payoff quote (DB-free value object). All amounts in integer cents."""
+
+    as_of: date
+    principal_cents: int
+    accrued_interest_cents: int
+    payoff_cents: int
+
+
+def compute_payoff(db: Session, loan: PlatformLoan, as_of: date) -> PayoffQuote:
+    """Compute the amount required to fully pay off ``loan`` as of ``as_of``.
+
+    payoff = remaining principal + accrued interest.
+
+    * REMAINING PRINCIPAL is ``loan.principal_balance_cents`` (the spine reduces
+      it by the principal portion of each payment).
+    * ACCRUED INTEREST is the unpaid interest on every installment whose
+      ``due_date <= as_of`` — interest that has already accrued (the borrower
+      has reached that period) but has not yet been covered by payments. For
+      each such installment, the unpaid interest is the installment's interest
+      minus the interest portion already paid into it; partial payments fill
+      principal before interest (mirrors ``record_payment``), so a partially
+      paid installment may still owe some or all of its interest.
+
+    Future installments (due after ``as_of``) contribute no accrued interest —
+    the borrower pays off early and is not charged unearned future interest.
+
+    Pure read: no writes, no commit.
+    """
+    schedule = sorted(loan.schedule, key=lambda s: s.installment_number)
+
+    accrued_interest = 0
+    for item in schedule:
+        if item.due_date > as_of:
+            continue
+        if item.status == "waived":
+            continue
+        # Of what's been paid into this installment, principal is satisfied
+        # first; the remainder (if any) covers interest.
+        interest_paid = max(0, item.paid_cents - item.principal_cents)
+        unpaid_interest = max(0, item.interest_cents - interest_paid)
+        accrued_interest += unpaid_interest
+
+    principal = max(0, loan.principal_balance_cents)
+    return PayoffQuote(
+        as_of=as_of,
+        principal_cents=principal,
+        accrued_interest_cents=accrued_interest,
+        payoff_cents=principal + accrued_interest,
+    )

@@ -22,12 +22,13 @@ from fastapi.testclient import TestClient
 from app.api.clinic.v1 import deps as clinic_deps
 from app.api.clinic.v1.endpoints import applications as apps_endpoint
 from app.api.clinic.v1.endpoints import financing_links as fl_endpoint
+from app.api.clinic.v1.deps import ClinicPrincipal, get_current_clinic_user
 from app.api.clinic.v1.router import clinic_router
 from app.api.clinic.v1.status_map import to_clinic_status
-from app.core.auth import get_current_user
 from app.db.base import get_db
 
 _BASE = "/api/clinic/v1"
+_VENDOR_ID = uuid.uuid4()
 
 
 # --- fakes -----------------------------------------------------------------
@@ -71,8 +72,10 @@ def _fake_application(status="approved", amount=1_800_000, patient=None, product
 def app_under_test():
     app = FastAPI()
     app.include_router(clinic_router, prefix="/api/clinic/v1")
-    # Auth: pretend a valid staff user.
-    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=uuid.uuid4())
+    # Auth + clinic scoping: pretend a valid staff user that belongs to a clinic.
+    app.dependency_overrides[get_current_clinic_user] = lambda: ClinicPrincipal(
+        user=SimpleNamespace(id=uuid.uuid4()), vendor_id=_VENDOR_ID
+    )
     yield app
     app.dependency_overrides.clear()
 
@@ -183,8 +186,9 @@ class TestProductsEndpoint:
         assert body[0]["currency"] == "CAD"
 
     def test_requires_auth(self, app_under_test):
-        # Drop the auth override so the real dependency runs (no token -> 403).
-        app_under_test.dependency_overrides.pop(get_current_user, None)
+        # Drop the clinic-scope override so the real dependency runs. With no
+        # token, the underlying get_current_user raises (no credentials -> 403).
+        app_under_test.dependency_overrides.pop(get_current_clinic_user, None)
         app_under_test.dependency_overrides[get_db] = lambda: MagicMock()
         client = TestClient(app_under_test)
         resp = client.get(f"{_BASE}/products")
@@ -195,7 +199,8 @@ class TestApplicationsEndpoint:
     def _wire_db(self, app_under_test, rows):
         db = MagicMock()
         (
-            db.query.return_value.options.return_value.order_by.return_value.limit.return_value.all
+            db.query.return_value.filter.return_value.options.return_value
+            .order_by.return_value.limit.return_value.all
         ).return_value = rows
         app_under_test.dependency_overrides[get_db] = lambda: db
         return db

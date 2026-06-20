@@ -3,23 +3,24 @@
 GET /clinic/v1/applications     — recent applications, shaped for the table.
 GET /clinic/v1/dashboard/summary — status-bucket counts for the dashboard cards.
 
-Both are staff-authenticated (platform JWT) reads. They share one query helper
-so the summary counts always agree with the rows shown in the table.
+Both are staff-authenticated (platform JWT) reads, SCOPED to the caller's
+clinic. They share one query helper so the summary counts always agree with the
+rows shown in the table.
 
-SCOPING (follow-up): there is NO clinic<->application link modeled yet. The
-``platform_credit_applications`` table has ``patient_id`` and ``vendor_id`` but
-no ``clinic_id``, and there is no ``user -> clinic`` membership. So today these
-endpoints return platform-wide data. Once a clinic principal + an
-``application.clinic_id`` (or ``vendor_id -> clinic``) link exist, add a
-``.filter(...)`` here keyed off the authenticated clinic. See module note in
-``app/api/clinic/v1/deps.py``.
+SCOPING: clinics ARE the ``vendors`` table (spec §13).
+``platform_credit_applications.vendor_id`` is the clinic that originated the
+application; ``get_current_clinic_user`` resolves the caller's ``vendor_id``
+(via ``platform_clinic_memberships``) and ``query_applications`` filters on it,
+so each clinic sees only its own applications. See ``app/api/clinic/v1/deps.py``.
 """
 from __future__ import annotations
+
+from uuid import UUID
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session, joinedload
 
-from app.api.clinic.v1.deps import get_current_user
+from app.api.clinic.v1.deps import ClinicPrincipal, get_current_clinic_user
 from app.api.clinic.v1.schemas import ClinicApplication, ClinicDashboardSummary
 from app.api.clinic.v1.status_map import to_clinic_status
 from app.db.base import get_db
@@ -54,13 +55,17 @@ def _product_currency(product) -> str:
     return product.currency
 
 
-def query_applications(db: Session, limit: int = 200) -> list[PlatformCreditApplication]:
-    """Most-recent-first application rows with patient + product eager-loaded.
+def query_applications(
+    db: Session, vendor_id: UUID, limit: int = 200
+) -> list[PlatformCreditApplication]:
+    """Most-recent-first application rows for ONE clinic (``vendor_id``).
 
-    NOTE: not clinic-scoped (see module docstring) — returns platform-wide.
+    Clinic-scoped: only applications whose ``vendor_id`` matches the caller's
+    clinic are returned. Patient + product are eager-loaded for shaping.
     """
     return (
         db.query(PlatformCreditApplication)
+        .filter(PlatformCreditApplication.vendor_id == vendor_id)
         .options(
             joinedload(PlatformCreditApplication.patient),
             joinedload(PlatformCreditApplication.credit_product),
@@ -97,16 +102,16 @@ def build_summary(rows: list[PlatformCreditApplication]) -> ClinicDashboardSumma
 @router.get("/applications", response_model=list[ClinicApplication])
 def list_applications(
     db: Session = Depends(get_db),
-    _user=Depends(get_current_user),
+    principal: ClinicPrincipal = Depends(get_current_clinic_user),
 ):
-    rows = query_applications(db)
+    rows = query_applications(db, principal.vendor_id)
     return [to_clinic_application(r) for r in rows]
 
 
 @router.get("/dashboard/summary", response_model=ClinicDashboardSummary)
 def dashboard_summary(
     db: Session = Depends(get_db),
-    _user=Depends(get_current_user),
+    principal: ClinicPrincipal = Depends(get_current_clinic_user),
 ):
-    rows = query_applications(db)
+    rows = query_applications(db, principal.vendor_id)
     return build_summary(rows)
