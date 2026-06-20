@@ -93,6 +93,11 @@ def admin_client(db_session: Session):
     def _override_role_checker():
         return fake_admin
 
+    # Defense in depth: restore the exact prior override snapshot on teardown
+    # instead of a blanket clear(), so a synthetic ``U`` user (``.role`` but no
+    # ``.roles``) can never leak into a later test's require_roles path.
+    _prior_overrides = dict(app.dependency_overrides)
+
     app.dependency_overrides[get_db] = lambda: db_session
     app.dependency_overrides[get_current_user] = _override_user
 
@@ -108,10 +113,12 @@ def admin_client(db_session: Session):
             for dep in getattr(route, "dependencies", []):
                 app.dependency_overrides[dep.dependency] = _override_role_checker
 
-    with TestClient(app) as client:
-        yield client
-
-    app.dependency_overrides.clear()
+    try:
+        with TestClient(app) as client:
+            yield client
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(_prior_overrides)
 
 
 @pytest.fixture
@@ -119,13 +126,18 @@ def read_only_client(db_session: Session):
     """TestClient authenticated as a non-admin (read-only)."""
     fake_user = type("U", (), {"id": uuid.uuid4(), "email": "user@payspyre.test", "role": "patient"})()
 
+    # Defense in depth: restore the exact prior override snapshot on teardown.
+    _prior_overrides = dict(app.dependency_overrides)
+
     app.dependency_overrides[get_db] = lambda: db_session
     app.dependency_overrides[get_current_user] = lambda: fake_user
 
-    with TestClient(app) as client:
-        yield client
-
-    app.dependency_overrides.clear()
+    try:
+        with TestClient(app) as client:
+            yield client
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(_prior_overrides)
 
 
 # ---------------------------------------------------------------------------

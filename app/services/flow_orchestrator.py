@@ -740,6 +740,22 @@ class FlowOrchestrator:
             rich_payload={"flow_decision": flow_decision.to_dict()},
         )
         self.db.flush()
+        # P9.x — LMS hand-off: when approved, book the loan + send its agreement for
+        # signature. DEFENSIVE: loan-booking must never block or fail the credit
+        # decision itself, so any error here is logged and swallowed. book_loan is
+        # idempotent; send_agreement gracefully no-ops if SignNow isn't configured.
+        if application.status == "approved":
+            try:
+                from app.services import loan_lifecycle
+
+                loan = loan_lifecycle.book_loan(self.db, application)
+                loan_lifecycle.send_agreement(self.db, loan)
+            except Exception as exc:  # noqa: BLE001 — decision integrity over LMS hand-off
+                logger.error(
+                    "loan_booking_failed",
+                    application_id=str(application.id),
+                    error=str(exc),
+                )
         logger.info(
             "decision_made",
             application_id=str(application.id),

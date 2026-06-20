@@ -82,9 +82,24 @@ def _build_signnow_adapter(db: Session):
         return None
     config = setting.config or {}
     secrets = setting.secrets or {}
-    api_key = secrets.get("api_key") or secrets.get("access_token")
     base_url = config.get("base_url")
-    if not api_key or not base_url:
+    if not base_url:
+        return None
+    api_key = secrets.get("api_key") or secrets.get("access_token")
+    if not api_key and all(
+        secrets.get(k) for k in ("client_id", "client_secret", "username", "password")
+    ):
+        # No static bearer — acquire (and cache) one via OAuth2.
+        from app.services.esign.signnow_oauth import get_signnow_token
+
+        api_key = get_signnow_token(
+            client_id=secrets["client_id"],
+            client_secret=secrets["client_secret"],
+            username=secrets["username"],
+            password=secrets["password"],
+            base_url=base_url,
+        )
+    if not api_key:
         return None
     # Local import keeps the adapter dependency optional at import time.
     from app.services.esign.signnow_adapter import SignNowAdapter
@@ -115,6 +130,16 @@ def _build_zumrails_adapter(db: Session):
         return None
     from app.services.payments.zumrails_adapter import ZumrailsAdapter
 
+    auth_mode = config.get("auth_mode", "oauth")
+    if auth_mode == "oauth" and api_secret:
+        # Resolve + cache the bearer token once via the shared helper, then hand the
+        # adapter a ready token so it doesn't re-authorize on every call.
+        from app.services.payments.zumrails_auth import get_zumrails_token
+
+        api_key = get_zumrails_token(api_key=api_key, api_secret=api_secret, base_url=base_url)
+        api_secret = ""
+        auth_mode = "static_bearer"
+
     return ZumrailsAdapter(
         api_key=api_key,
         api_secret=api_secret or "",
@@ -122,7 +147,7 @@ def _build_zumrails_adapter(db: Session):
         webhook_secret=secrets.get("webhook_secret"),
         funding_source_id=config.get("funding_source_id"),
         currency=config.get("currency", "CAD"),
-        auth_mode=config.get("auth_mode", "oauth"),
+        auth_mode=auth_mode,
     )
 
 
@@ -466,4 +491,4 @@ def _recipient_for_loan(db: Session, loan: PlatformLoan) -> Optional[str]:
         .first()
     )
     patient = getattr(application, "patient", None) if application else None
-    return getattr(patient, "zumrails_user_id", None)
+    return getattr(patient, "zumrails_recipient_id", None)
