@@ -55,6 +55,7 @@ from app.services.flow_orchestrator import (
     ConsentMissingError,
     DuplicateVerificationError,
     FlowOrchestrator,
+    InvalidAmountError,
     InvalidStateTransition,
     StillPendingError,
     UnknownVerificationType,
@@ -71,6 +72,8 @@ def _http_errors() -> Iterator[None]:
     try:
         yield
     except ConsentMissingError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+    except InvalidAmountError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
     except UnknownVerificationType as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))

@@ -21,7 +21,7 @@ reconciled into the final installment so the schedule sums EXACTLY to
 principal + total interest.
 """
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Optional
 from uuid import UUID
 
@@ -364,10 +364,22 @@ def record_payment(
             0, loan.principal_balance_cents - principal_applied
         )
 
-    # Loan-level status: fully paid off?
+    # Loan-level status transitions.
     if all(s.status in ("paid", "waived") for s in schedule) and schedule:
         loan.status = "paid_off"
         loan.principal_balance_cents = 0
+    elif loan.status == "delinquent":
+        # Delinquency cure: a delinquent loan returns to ``active`` once it has no
+        # overdue, unpaid installment left — the exact inverse of the condition
+        # run_delinquency_aging uses to mark it delinquent. Without this, a borrower
+        # who catches up stays flagged delinquent forever (and is then excluded from
+        # future aging passes, which only re-evaluate ``active`` loans).
+        today = datetime.now(timezone.utc).date()
+        has_overdue_unpaid = any(
+            s.due_date < today and s.status not in ("paid", "waived") for s in schedule
+        )
+        if not has_overdue_unpaid:
+            loan.status = "active"
 
     db.commit()
     db.refresh(payment)
@@ -553,13 +565,13 @@ def generate_statement(
     def _after_window(p: PlatformLoanPayment) -> bool:
         return p.received_at.date() > period_end
 
-    # Total principal/interest split for an arbitrary set of payments, applied
-    # oldest-first against the schedule (mirrors record_payment's allocation).
-    principal_in_window, interest_in_window = _split_payments(
-        loan, [p for p in payments if _in_window(p)]
-    )
-    principal_after_window, _ = _split_payments(
-        loan, [p for p in payments if _after_window(p)]
+    # Split principal/interest by window. CRITICAL: every payment must be replayed
+    # against ONE shared schedule state in chronological order — replaying the
+    # in-window and after-window subsets independently (each from a zero state)
+    # mis-allocates later payments to early installments, corrupting the split for
+    # any loan whose payments span more than one period.
+    principal_in_window, interest_in_window, principal_after_window = _split_payments_windowed(
+        loan, payments, _in_window, _after_window
     )
 
     # Reconstruct the opening balance: current outstanding principal plus
@@ -582,23 +594,28 @@ def generate_statement(
     return statement
 
 
-def _split_payments(
-    loan: PlatformLoan, payments: list
-) -> tuple[int, int]:
-    """Split a list of payments into (principal_cents, interest_cents).
+def _split_payments_windowed(
+    loan: PlatformLoan, payments: list, in_window, after_window
+) -> tuple[int, int, int]:
+    """Replay ALL payments oldest-first against ONE shared schedule state and
+    bucket each applied chunk's principal/interest by window.
 
-    Pure helper. Walks the loan's schedule oldest-first and allocates each
-    payment's cash principal-before-interest within an installment, exactly as
-    ``record_payment`` does — but without mutating state, so it can be used for
-    reporting/statement math.
+    Returns ``(principal_in_window, interest_in_window, principal_after_window)``.
+
+    Allocation mirrors ``record_payment``: each payment fills installments
+    oldest-first, principal-before-interest within an installment. By maintaining
+    a single ``paid`` map across the full chronological payment stream, a payment
+    is allocated to the installments it actually paid (after earlier payments
+    consumed prior installments) — not to installment 1 from scratch. ``payments``
+    should already be sorted by ``received_at``; we sort defensively.
     """
     schedule = sorted(loan.schedule, key=lambda s: s.installment_number)
-    # Track virtual paid_cents per installment so multiple payments compose.
     paid = {s.installment_number: 0 for s in schedule}
 
-    total_principal = 0
-    total_interest = 0
-    for payment in payments:
+    principal_in = interest_in = principal_after = 0
+    for payment in sorted(payments, key=lambda p: p.received_at):
+        is_in = in_window(payment)
+        is_after = after_window(payment)
         remaining = payment.amount_cents
         for item in schedule:
             if remaining <= 0:
@@ -607,17 +624,19 @@ def _split_payments(
             if outstanding <= 0:
                 continue
             applied = min(remaining, outstanding)
-            # Principal portion of THIS applied chunk: principal filled first.
             principal_outstanding = max(
                 0, item.principal_cents - paid[item.installment_number]
             )
             principal_applied = min(applied, principal_outstanding)
             interest_applied = applied - principal_applied
-            total_principal += principal_applied
-            total_interest += interest_applied
+            if is_in:
+                principal_in += principal_applied
+                interest_in += interest_applied
+            elif is_after:
+                principal_after += principal_applied
             paid[item.installment_number] += applied
             remaining -= applied
-    return total_principal, total_interest
+    return principal_in, interest_in, principal_after
 
 
 # ===========================================================================

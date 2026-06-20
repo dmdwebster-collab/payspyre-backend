@@ -8,6 +8,7 @@ from sqlalchemy import (
     Integer,
     BigInteger,
     ForeignKey,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import UUID, ENUM
@@ -25,6 +26,11 @@ class PlatformLoan(Base):
     """
 
     __tablename__ = "platform_loans"
+    # One loan per application (enforced in the DB by migration 032). Makes
+    # book_loan's idempotency race-safe — duplicate booking → IntegrityError.
+    __table_args__ = (
+        UniqueConstraint("application_id", name="uq_platform_loans_application"),
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     application_id = Column(

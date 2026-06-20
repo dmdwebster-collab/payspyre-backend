@@ -85,6 +85,10 @@ class InvalidStateTransition(OrchestratorError):
     """The application's current status forbids the requested action (→ 409)."""
 
 
+class InvalidAmountError(OrchestratorError):
+    """Requested amount is outside the product's [min, max] bounds (→ 422)."""
+
+
 class DuplicateVerificationError(OrchestratorError):
     """A pending/in_progress verification of this type already exists (→ 409)."""
 
@@ -318,6 +322,15 @@ class FlowOrchestrator:
     ) -> PlatformCreditApplication:
         """Create an application, snapshot the product version, emit application_created."""
         product = self._get_product(credit_product_id)
+        # Enforce the product's amount bounds at the single creation chokepoint (covers
+        # both the patient and clinic-financing-link entry points). Without this the
+        # requested amount was only validated > 0, so an approved application could book
+        # a real loan + schedule for any out-of-bounds principal (over/under-lending).
+        if not (product.min_amount_cents <= requested_amount_cents <= product.max_amount_cents):
+            raise InvalidAmountError(
+                f"Requested amount {requested_amount_cents} is outside the product's "
+                f"allowed range [{product.min_amount_cents}, {product.max_amount_cents}]."
+            )
         with self._unit_of_work(_in_external_txn):
             application = PlatformCreditApplication(
                 patient_id=patient_id,
