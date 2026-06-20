@@ -176,7 +176,7 @@ class TestCreateApplication:
             orch.create_application(
                 patient_id=patient.id,
                 credit_product_id=product_id,
-                requested_amount_cents=100000,
+                requested_amount_cents=2_500_000,  # in-bounds: isolate the invalid source
                 requested_amount_source="bogus_source",  # not a valid enum
             )
         db_session.rollback()

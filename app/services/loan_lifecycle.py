@@ -47,6 +47,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Optional
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
@@ -187,9 +188,28 @@ def book_loan(
         )
         return existing
 
-    loan = loan_servicing.create_loan_from_application(
-        db, application, first_due_date=first_due_date
-    )
+    try:
+        loan = loan_servicing.create_loan_from_application(
+            db, application, first_due_date=first_due_date
+        )
+    except IntegrityError:
+        # Race: another caller booked this application's loan between our SELECT and
+        # INSERT. The unique constraint (migration 032) held — return the winner's
+        # loan instead of surfacing a 500 / booking a duplicate.
+        db.rollback()
+        existing = (
+            db.query(PlatformLoan)
+            .filter(PlatformLoan.application_id == application.id)
+            .first()
+        )
+        if existing is not None:
+            logger.info(
+                "loan_book_idempotent_race",
+                application_id=str(application.id),
+                loan_id=str(existing.id),
+            )
+            return existing
+        raise
     logger.info(
         "loan_booked",
         application_id=str(application.id),
