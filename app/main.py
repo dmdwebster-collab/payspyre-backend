@@ -79,7 +79,7 @@ async def endpoint_rate_limiter(request: Request, call_next):
     if not settings.RATE_LIMIT_ENABLED:
         return await call_next(request)
 
-    if request.url.path in {"/", "/health", "/api/v1/health/db", "/docs", "/openapi.json"}:
+    if request.url.path in {"/", "/health", "/api/v1/health/db", "/docs", "/openapi.json", "/metrics"}:
         return await call_next(request)
 
     endpoint_type = classify_endpoint(request.url.path, request.method)
@@ -170,3 +170,8 @@ app.include_router(clinic_router, prefix="/api/clinic/v1")
 from app.api.webhooks.v1.router import webhook_router  # noqa: E402
 
 app.include_router(webhook_router, prefix="/api/webhooks/v1")
+
+# Prometheus §11 KPI metrics — H-8. Scraped at /metrics (no prefix).
+from app.api.metrics import metrics_router  # noqa: E402
+
+app.include_router(metrics_router)
