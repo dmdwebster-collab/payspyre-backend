@@ -1,6 +1,7 @@
 import logging
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
@@ -83,7 +84,22 @@ async def endpoint_rate_limiter(request: Request, call_next):
         return await call_next(request)
 
     endpoint_type = classify_endpoint(request.url.path, request.method)
-    check_endpoint_rate_limit(request, endpoint_type)
+    # check_endpoint_rate_limit raises HTTPException(429) when the limit is hit.
+    # An HTTPException raised inside HTTP middleware is NOT caught by FastAPI's
+    # exception handlers, so it would surface to the client as a 500. Convert it
+    # to a clean 429 JSON response here (with Retry-After) so rate-limited callers
+    # get a correct, actionable status instead of an opaque server error.
+    try:
+        check_endpoint_rate_limit(request, endpoint_type)
+    except HTTPException as exc:
+        headers = {"Retry-After": str(settings.RATE_LIMIT_AUTH_WINDOW)}
+        if exc.headers:
+            headers.update(exc.headers)
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail},
+            headers=headers,
+        )
 
     return await call_next(request)
 
