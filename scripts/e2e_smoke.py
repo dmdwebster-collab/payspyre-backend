@@ -63,7 +63,8 @@ S, H, app_id, state = run_patient_to_decision(760)
 check("approve journey -> approved", state["status"]=="approved", state["status"])
 L = S.post(f"{PA}/marketplace/listings",headers=H,json={
     "treatment_categories":["implants","general_dentistry"],"treatment_urgency":"immediate",
-    "estimated_budget_cents":2_500_000,"location_postal_code":"M5V 2T6","max_travel_km":25})
+    "estimated_budget_cents":2_500_000,"location_postal_code":"M5V 2T6","max_travel_km":25,
+    "consent_acknowledged":True})
 check("approved patient can list", L.status_code==201, str(L.status_code))
 listing = L.json(); listing_id = listing["id"]
 check("listing lead_state=approved (denorm maintained)", listing["lead_state"]=="approved", listing["lead_state"])
