@@ -401,6 +401,7 @@ class TestDecisionPaths:
         app = _create_app(orch, patient.id, _seed_product_id(db_session))
         for p in _REQUIRED_PURPOSES:
             _grant(orch, app.id, p)
+        _grant(orch, app.id, "automated_decision_making")  # decision-gate consent (finding #4)
         verifs = {p: orch.initiate_verification(app.id, p) for p in _REQUIRED_PURPOSES}
         for p, verif in verifs.items():
             if verif.verification_type == "kyc_id":
@@ -473,6 +474,7 @@ class TestConcurrency:
         app = _create_app(orch, patient.id, _seed_product_id(db_session))
         for p in _REQUIRED_PURPOSES:
             _grant(orch, app.id, p)
+        _grant(orch, app.id, "automated_decision_making")  # decision-gate consent (finding #4)
         verifs = {p: orch.initiate_verification(app.id, p) for p in _REQUIRED_PURPOSES}
 
         # Complete two of four up front, leaving two to race.

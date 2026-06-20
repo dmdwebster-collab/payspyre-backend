@@ -60,8 +60,9 @@ class TestApplicantDevTools:
         assert ex.status_code == 200, ex.text
         headers = {"Authorization": f"Bearer {ex.json()['jwt']}"}
 
-        # consents + initiate verifications
-        for p in _PURPOSES:
+        # consents (the 4 verification purposes + the automated-decision-making
+        # decision-gate consent the orchestrator requires before deciding) + initiate
+        for p in (*_PURPOSES, "automated_decision_making"):
             assert (
                 client.post(f"{_BASE}/applications/{app_id}/consents/{p}", headers=headers).status_code
                 == 200

@@ -335,8 +335,11 @@ class TestFlinksNoRawPayloadPersisted:
         assert "Jane Doe" not in blob
         assert "jane@example.com" not in blob
         assert "JOHN SMITH" not in blob
-        # Derived non-PII metrics still present for ReplayBankAdapter.
-        assert r.rich_payload["monthly_income_cents"] == 100000
+        # Derived non-PII metrics still present for ReplayBankAdapter. Income is 0
+        # here: a single one-off Interac e-transfer is not recurring income under the
+        # transaction-analysis engine (transfers are excluded; recurrence is required).
+        assert "monthly_income_cents" in r.rich_payload
+        assert r.rich_payload["monthly_income_cents"] == 0
         assert r.rich_payload["vendor"] == "flinks"
 
 
