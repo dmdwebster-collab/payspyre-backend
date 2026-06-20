@@ -47,6 +47,24 @@ services:
     scope: RUN_TIME
     value: https://payspyre.com
 
+# Run DB migrations to head BEFORE the new service goes live (else a fresh
+# managed Postgres has no tables and every request 500s). DATABASE_URL binds
+# to the managed db below.
+jobs:
+- name: migrate
+  kind: PRE_DEPLOY
+  source_dir: /
+  github:
+    repo: dmdwebster-collab/payspyre-backend
+    branch: main
+  dockerfile_path: Dockerfile
+  run_command: alembic upgrade head
+  instance_size_slug: basic-xxs
+  envs:
+  - key: DATABASE_URL
+    scope: RUN_TIME
+    value: ${db.DATABASE_URL}
+
 databases:
 - name: db
   engine: PG
