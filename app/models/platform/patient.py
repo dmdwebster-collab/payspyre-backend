@@ -71,4 +71,5 @@ class PlatformPatient(Base):
     events = relationship("PlatformEvent", back_populates="patient", cascade="all, delete-orphan")
 
     def __repr__(self) -> str:
-        return f"<PlatformPatient(id={self.id}, email={self.email}, verification_depth={self.verification_depth})>"
+        # No PII (e.g. email) in repr — it lands in tracebacks/logs/error trackers.
+        return f"<PlatformPatient(id={self.id}, verification_depth={self.verification_depth})>"

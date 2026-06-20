@@ -26,6 +26,7 @@ from uuid import uuid4
 from sqlalchemy import (
     Column,
     DateTime,
+    Index,
     String,
     Integer,
     BigInteger,
@@ -98,6 +99,17 @@ class PlatformMarketplaceVendorInterest(Base):
     """
 
     __tablename__ = "platform_marketplace_vendor_interest"
+    # One interest row per (vendor, listing) — makes express_interest idempotent at
+    # the DB level (mirrors migration 031's unique index; declared here so the model
+    # is the source of truth and the invariant is visible in the ORM).
+    __table_args__ = (
+        Index(
+            "idx_marketplace_interest_vendor_listing",
+            "vendor_id",
+            "listing_id",
+            unique=True,
+        ),
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     listing_id = Column(

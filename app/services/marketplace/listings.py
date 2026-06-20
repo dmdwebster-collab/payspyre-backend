@@ -28,8 +28,10 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.services import consent_service
 from app.models.platform.event import PlatformEvent
 from app.models.platform.marketplace import (
     PlatformMarketplaceListing,
@@ -107,21 +109,35 @@ def create_listing(
     location_postal_code: str,
     max_travel_km: int = 25,
     ttl_days: int = 30,
+    consent_acknowledged: bool = False,
 ) -> PlatformMarketplaceListing:
     """Create an active listing for ``patient_id``.
+
+    Requires the patient's ``marketplace_listing`` opt-in consent (PIPEDA: this
+    discloses a de-identified lead to third-party clinics). The consent is
+    recorded (verbatim text + version) before the listing is created.
 
     Denormalizes ``lead_state`` + ``verification_depth`` from the patient onto
     the listing (a stable historical snapshot), prices it via ``price_lead``,
     sets ``expires_at = now + ttl_days``, flips ``patient.marketplace_listed``,
     and emits ``marketplace.listing_created``. Commits.
     """
+    # Exclude soft-deleted (PIPEDA-erased) patients — they must not be listed.
     patient = (
         db.query(PlatformPatient)
         .filter(PlatformPatient.id == patient_id)
+        .filter(PlatformPatient.deleted_at.is_(None))
         .one_or_none()
     )
     if patient is None:
         raise LookupError(f"Patient not found: {patient_id}")
+
+    # Opt-in consent gate (spec §8.1: marketplace_listing is opt-in, never bundled).
+    if not consent_acknowledged:
+        raise ValueError(
+            "marketplace_listing consent is required before publishing a listing"
+        )
+    consent_service.record_consent(db, patient_id, "marketplace_listing", granted=True)
 
     lead_state = patient.lead_state
     verification_depth = patient.verification_depth
@@ -166,12 +182,36 @@ def create_listing(
     return listing
 
 
+def _refresh_marketplace_listed(db: Session, patient_id) -> None:
+    """Recompute ``patient.marketplace_listed`` from whether a LIVE listing exists.
+
+    The flag is a denormalized cache; nothing reset it after pause/close/expiry, so
+    it stayed True forever once set. Recompute it from the source of truth (an
+    active, non-expired listing) on every status transition. Must be called before
+    the surrounding commit."""
+    db.flush()  # ensure the caller's pending status change is visible to the query
+    has_live = (
+        db.query(PlatformMarketplaceListing.id)
+        .filter(PlatformMarketplaceListing.patient_id == patient_id)
+        .filter(PlatformMarketplaceListing.status == "active")
+        .filter(PlatformMarketplaceListing.expires_at > _now())
+        .first()
+        is not None
+    )
+    patient = (
+        db.query(PlatformPatient).filter(PlatformPatient.id == patient_id).one_or_none()
+    )
+    if patient is not None:
+        patient.marketplace_listed = has_live
+
+
 def pause_listing(db: Session, *, listing_id, patient_id) -> PlatformMarketplaceListing:
     """Owner-scoped pause. PermissionError if the caller doesn't own the listing."""
     listing = _load_listing(db, listing_id)
     if listing.patient_id != patient_id:
         raise PermissionError("Listing is owned by another patient")
     listing.status = "paused"
+    _refresh_marketplace_listed(db, patient_id)
     db.commit()
     db.refresh(listing)
     return listing
@@ -219,6 +259,7 @@ def select_clinic(
     if get_charge_trigger() == "patient_selected":
         _charge_lead(interest, listing, "patient_selected")
 
+    _refresh_marketplace_listed(db, patient_id)
     db.commit()
     db.refresh(listing)
     return listing
@@ -245,8 +286,12 @@ def list_leads_for_vendor(
                           ``listing.max_travel_km <= max_distance_km``. Real
                           FSA-to-clinic distance is future work.
     """
+    # Join the patient to exclude soft-deleted (PIPEDA-erased) patients' listings —
+    # an erased patient must not remain discoverable as a marketplace lead.
     listings = (
         db.query(PlatformMarketplaceListing)
+        .join(PlatformPatient, PlatformPatient.id == PlatformMarketplaceListing.patient_id)
+        .filter(PlatformPatient.deleted_at.is_(None))
         .filter(PlatformMarketplaceListing.status == "active")
         .filter(PlatformMarketplaceListing.expires_at > _now())
         .all()
@@ -309,7 +354,17 @@ def express_interest(
         patient_id=listing.patient_id,
     )
 
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # Race: a concurrent express_interest inserted the (vendor, listing) row
+        # first. The unique index held (no double-charge) — return the winner's row
+        # so the call stays idempotent instead of surfacing a 500.
+        db.rollback()
+        existing = _find_interest(db, listing_id=listing_id, vendor_id=vendor_id)
+        if existing is not None:
+            return existing
+        raise
     db.refresh(interest)
     return interest
 
