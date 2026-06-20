@@ -1,0 +1,41 @@
+# Marketplace lead visibility rules (spec §6.4).
+#
+# Controls what a vendor sees about a listing BEFORE the patient selects them.
+# PII (name, email, phone, exact address) NEVER crosses the wire to a vendor
+# pre-selection. Pre-select, vendors only ever see: treatment categories,
+# urgency, the postal FSA (first 3 chars), verification depth, lead state, and an
+# estimated-budget value gated by show_estimated_budget below.
+#
+# show_estimated_budget:
+#   false  -> budget omitted entirely
+#   'range' -> a bucketed range string (e.g. "$5,000–$10,000"), never the exact figure
+#   'exact' -> the exact estimated_budget_cents
+#
+# A lead_state absent from this map defaults to: visible_to_clinics false (hidden).
+
+default_visibility:
+  unqualified:
+    visible_to_clinics: true
+    show_estimated_budget: false
+    show_verification_depth: true
+    priority_placement: false
+  pre_qualified:
+    visible_to_clinics: true
+    show_estimated_budget: range
+    show_verification_depth: true
+    priority_placement: false
+  pre_approved:
+    visible_to_clinics: true
+    show_estimated_budget: exact
+    show_verification_depth: true
+    priority_placement: true
+  approved:
+    visible_to_clinics: true
+    show_estimated_budget: exact
+    show_verification_depth: true
+    priority_placement: true
+  declined:
+    visible_to_clinics: false
+    show_estimated_budget: false
+    show_verification_depth: true
+    priority_placement: false
