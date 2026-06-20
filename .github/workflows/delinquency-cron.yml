@@ -1,0 +1,25 @@
+name: Delinquency aging (nightly)
+
+# Ages overdue loan installments → late and their loans → delinquent.
+# Idempotent; safe to re-run. Requires:
+#   secret PROD_DATABASE_URL — the production DB connection string
+#   (postgresql+psycopg2://...). The DO managed DB's "Trusted Sources" must
+#   allow GitHub Actions runners (or be open) for this to connect.
+on:
+  schedule:
+    - cron: "0 8 * * *"   # 08:00 UTC daily
+  workflow_dispatch: {}
+
+jobs:
+  age:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e .
+      - name: Run delinquency aging
+        env:
+          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+        run: python -m app.jobs.delinquency
