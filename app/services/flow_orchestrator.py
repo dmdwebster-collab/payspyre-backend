@@ -345,6 +345,9 @@ class FlowOrchestrator:
                 after={"status": "started", "credit_product_version": product.version},
             )
         self.db.refresh(application)
+        from app.services.metrics.platform_metrics import record_application_started
+
+        record_application_started(product.code, vendor_id=vendor_id, vertical=product.vertical)
         logger.info(
             "application_created",
             application_id=str(application.id),
@@ -414,6 +417,9 @@ class FlowOrchestrator:
                 metadata={"ip_address": ip_address, "user_agent": user_agent},
             )
         self.db.refresh(consent)
+        from app.services.metrics.platform_metrics import record_consent
+
+        record_consent(purpose, granted=True)
         return consent
 
     def initiate_verification(
@@ -549,6 +555,14 @@ class FlowOrchestrator:
                 after={"verification_id": str(verification.id), "result": result},
             )
             self.db.flush()
+            from app.services.metrics.platform_metrics import record_verification_completed
+
+            record_verification_completed(
+                type=verification.verification_type,
+                vendor=verification.vendor or "mock",
+                status=new_status,
+                cost_cents=rich_payload.get("cost_cents"),
+            )
 
             if self._ready_to_decide(application):
                 decision_dict = self._decide(application)
@@ -740,6 +754,9 @@ class FlowOrchestrator:
             rich_payload={"flow_decision": flow_decision.to_dict()},
         )
         self.db.flush()
+        from app.services.metrics.platform_metrics import record_decision
+
+        record_decision(product.code, flow_decision.decision)
         # P9.x — LMS hand-off: when approved, book the loan + send its agreement for
         # signature. DEFENSIVE: loan-booking must never block or fail the credit
         # decision itself, so any error here is logged and swallowed. book_loan is

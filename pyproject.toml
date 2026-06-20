@@ -33,6 +33,7 @@ dependencies = [
     "jsonschema>=4.20.0",
     "respx>=0.20.0",
     "posthog>=3.0.0",
+    "prometheus-client>=0.20.0",
 ]
 
 [tool.pytest.ini_options]
