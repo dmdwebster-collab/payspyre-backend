@@ -27,6 +27,10 @@ class CreateListingRequest(BaseModel):
     estimated_budget_cents: Optional[int] = Field(default=None, ge=0)
     location_postal_code: str
     max_travel_km: int = 25
+    # Opt-in consent to share a de-identified lead with clinics (spec §8.1).
+    # The client must set this true (a checked consent box); the service records
+    # the marketplace_listing consent and refuses to list without it.
+    consent_acknowledged: bool = False
 
 
 class SelectClinicRequest(BaseModel):

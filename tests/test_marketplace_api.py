@@ -72,6 +72,7 @@ def test_marketplace_happy_path(db_session):
             "treatment_urgency": "this_week",
             "estimated_budget_cents": 2_000_000,
             "location_postal_code": "V1Y 2A3",
+            "consent_acknowledged": True,
         },
     )
     assert resp.status_code == 201, resp.text
@@ -143,6 +144,7 @@ def test_pause_other_patients_listing_is_403(db_session):
             "treatment_urgency": "flexible",
             "estimated_budget_cents": None,
             "location_postal_code": "V1Y 2A3",
+            "consent_acknowledged": True,
         },
     )
     assert resp.status_code == 201, resp.text

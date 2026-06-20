@@ -44,6 +44,7 @@ def _create(db, patient, **kw):
         treatment_urgency="this_week",
         estimated_budget_cents=2_000_000,
         location_postal_code="V1Y 2A3",
+        consent_acknowledged=True,
     )
     defaults.update(kw)
     return svc.create_listing(db, **defaults)

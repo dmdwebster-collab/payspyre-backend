@@ -45,6 +45,7 @@ def create_listing(
             estimated_budget_cents=body.estimated_budget_cents,
             location_postal_code=body.location_postal_code,
             max_travel_km=body.max_travel_km,
+            consent_acknowledged=body.consent_acknowledged,
         )
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
