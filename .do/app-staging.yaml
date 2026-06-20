@@ -1,3 +1,17 @@
+# DigitalOcean App Platform — STAGING spec (template).
+#
+# The live staging app was created from this shape with real SECRET values
+# generated at create time and stored encrypted in DO. This committed file is a
+# secret-free TEMPLATE: the four SECRET envs below carry a placeholder — set the
+# real values in the DO console (App → Settings → Environment Variables) or at
+# create time, and NEVER commit real secrets here. Re-applying this file as-is
+# would overwrite the live secrets with the placeholder.
+#
+# Generate a JWT secret:   python -c "import secrets; print(secrets.token_urlsafe(48))"
+# Generate a Fernet key:   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+#
+# Create/update:  doctl apps create --spec .do/app-staging.yaml   (or `apps update <id> --spec`)
+
 name: payspyre-api-staging
 
 services:
@@ -9,47 +23,53 @@ services:
   dockerfile_path: Dockerfile
   instance_count: 1
   instance_size_slug: basic-xxs
+  # The container's uvicorn listens on 8000 (Dockerfile CMD). Must be pinned —
+  # App Platform otherwise defaults http_port to 8080 and the health check fails.
+  http_port: 8000
   health_check:
     http_path: /health
   routes:
   - path: /
   envs:
+  # ENVIRONMENT=staging keeps mock adapters/notifications active and SKIPS the
+  # production secret-validator (app/core/config.py) — so the app boots without
+  # real vendor creds. Do NOT set this to "production" until real creds are wired.
+  - key: ENVIRONMENT
+    scope: RUN_TIME
+    value: staging
   - key: DATABASE_URL
     scope: RUN_TIME
     value: ${db.DATABASE_URL}
   - key: JWT_SECRET_KEY
     scope: RUN_TIME
     type: SECRET
-    value: ${jwt.JWT_SECRET_KEY}
+    value: SET_IN_DO_CONSOLE   # staff JWT signing key — real value lives in DO
+  - key: PATIENT_JWT_SECRET
+    scope: RUN_TIME
+    type: SECRET
+    value: SET_IN_DO_CONSOLE   # patient magic-link JWT key — real value lives in DO
+  - key: SETTINGS_ENCRYPTION_KEY
+    scope: RUN_TIME
+    type: SECRET
+    value: SET_IN_DO_CONSOLE   # Fernet key for integration_settings — real value in DO
+  - key: SIN_ENCRYPTION_KEY
+    scope: RUN_TIME
+    type: SECRET
+    value: SET_IN_DO_CONSOLE   # dedicated Fernet key for SIN-at-rest — real value in DO
   - key: JWT_ALGORITHM
     scope: RUN_TIME
     value: HS256
   - key: JWT_ACCESS_TOKEN_EXPIRE_MINUTES
     scope: RUN_TIME
-    value: 30
-  - key: DIDIT_API_KEY
-    scope: RUN_TIME
-    type: SECRET
-    value: ${vendors.DIDIT_API_KEY}
-  - key: DIDIT_WEBHOOK_SECRET
-    scope: RUN_TIME
-    type: SECRET
-    value: ${vendors.DIDIT_WEBHOOK_SECRET}
-  - key: PERSONA_API_KEY
-    scope: RUN_TIME
-    type: SECRET
-    value: ${vendors.PERSONA_API_KEY}
-  - key: PERSONA_WEBHOOK_SECRET
-    scope: RUN_TIME
-    type: SECRET
-    value: ${vendors.PERSONA_WEBHOOK_SECRET}
+    value: "30"
   - key: CORS_ORIGINS
     scope: RUN_TIME
-    value: https://staging.payspyre.com,http://localhost:3000
+    value: http://localhost:3000   # add the staging frontend origin once deployed
 
 # Run DB migrations to head BEFORE the new service goes live (else a fresh
-# managed Postgres has no tables and every request 500s). DATABASE_URL binds
-# to the managed db below.
+# managed Postgres has no tables and every request 500s). `python -m alembic`
+# (not the bare `alembic` console script) is used so it resolves via the
+# importable package regardless of PATH.
 jobs:
 - name: migrate
   kind: PRE_DEPLOY
@@ -58,18 +78,17 @@ jobs:
     repo: dmdwebster-collab/payspyre-backend
     branch: staging
   dockerfile_path: Dockerfile
-  run_command: alembic upgrade head
+  run_command: python -m alembic upgrade head
   instance_size_slug: basic-xxs
   envs:
   - key: DATABASE_URL
     scope: RUN_TIME
     value: ${db.DATABASE_URL}
 
+# Dev-tier managed Postgres. A dev DB cannot carry a custom db_name/db_user
+# (must match the component name or be blank) — so neither is set here.
 databases:
 - name: db
   engine: PG
   version: "16"
   production: false
-  cluster_name: payspyre-db-staging
-  db_name: payspyre_staging
-  db_user: payspyre

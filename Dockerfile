@@ -8,9 +8,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
+# Install Python dependencies.
+# System-wide (NOT --user): console scripts (uvicorn, alembic, ...) land in
+# /usr/local/bin, which is on PATH for the non-root `appuser` we switch to below.
+# A `--user` install as root puts them in /root/.local/bin, unreachable by appuser
+# — which broke the PRE_DEPLOY `alembic upgrade head` job on DigitalOcean.
 COPY pyproject.toml ./
-RUN pip install --no-cache-dir --user -e . && \
+RUN pip install --no-cache-dir -e . && \
     rm -rf /root/.cache/pip
 
 # Copy application code
