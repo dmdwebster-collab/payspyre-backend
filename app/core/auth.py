@@ -17,7 +17,7 @@ from app.db.base import get_db
 from app.schemas.auth import TokenPayload
 
 if TYPE_CHECKING:
-    from app.models.user import User, ApiKey
+    from app.models.user import User
 
 security = HTTPBearer()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
@@ -98,64 +98,13 @@ def require_permission(resource: str, action: str):
     return permission_checker
 
 
-def get_api_user(
-    request: Request,
-    db: Session = Depends(get_db)
-) -> Optional:
-    from app.models.user import User, ApiKey
-
-    api_key = request.headers.get("X-API-Key")
-    if not api_key:
-        return None
-
-    api_key_record = db.query(ApiKey).filter(
-        ApiKey.key_hash == api_key,
-        ApiKey.is_active == True
-    ).first()
-
-    if not api_key_record:
-        return None
-
-    if api_key_record.expires_at and api_key_record.expires_at < datetime.utcnow():
-        return None
-
-    api_key_record.last_used = datetime.utcnow()
-    db.commit()
-
-    user = db.query(User).filter(User.id == api_key_record.user_id).first()
-    if not user or not user.is_active:
-        return None
-
-    return user
-
-
-async def get_current_user_or_api_key(
-    request: Request,
-    db: Session = Depends(get_db)
-):
-    from app.models.user import User
-
-    api_user = get_api_user(request, db)
-    if api_user:
-        return api_user
-
-    try:
-        credentials: HTTPAuthorizationCredentials = await security(request)
-        payload = decode_token(credentials.credentials)
-        if payload is None:
-            raise HTTPException(status_code=401, detail="Invalid credentials")
-
-        token_payload = TokenPayload(**payload)
-        if token_payload.type != "access":
-            raise HTTPException(status_code=401, detail="Invalid token type")
-
-        user = db.query(User).filter(User.id == token_payload.sub).first()
-        if not user or not user.is_active or not user.is_verified:
-            raise HTTPException(status_code=401, detail="Invalid user")
-
-        return user
-    except Exception:
-        raise HTTPException(status_code=401, detail="Could not validate credentials")
+# P8.1 (H-4) — removed the broken X-API-Key authentication path (`get_api_user` +
+# `get_current_user_or_api_key`). It compared the raw `X-API-Key` header directly
+# against the bcrypt `ApiKey.key_hash`, so it could never match a correctly-created
+# key (failed closed) — and the only way to make it "work" would have been storing
+# keys in plaintext. Both functions were unused by any endpoint; JWT (`get_current_user`)
+# is the live auth path. The admin-gated /api-keys management endpoints + ApiKey model
+# remain (not a vulnerability); removing that now-inert feature is an optional follow-up.
 
 
 class RateLimiter:

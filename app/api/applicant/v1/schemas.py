@@ -105,3 +105,22 @@ class SubmitResponse(BaseModel):
     status: str
     decision: Optional[dict[str, Any]] = None
     already_decided: bool
+
+
+# --- products (applicant-facing catalogue) ---------------------------------
+
+
+class ProductSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    code: str
+    name: str
+    vertical: str
+    min_amount_cents: int
+    max_amount_cents: int
+    currency: str
+
+
+class ProductsResponse(BaseModel):
+    products: list[ProductSummary]
