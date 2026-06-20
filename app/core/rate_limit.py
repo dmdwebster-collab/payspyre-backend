@@ -76,7 +76,7 @@ def check_endpoint_rate_limit(request: Request, endpoint_type: str):
             raise HTTPException(
                 status_code=HTTP_429_TOO_MANY_REQUESTS,
                 detail=f"User rate limit exceeded: {limit} requests per {window} seconds",
-                headers={"Retry-After": str(window - (time.time() - limiter.user_requests[user_id]["reset_time"]))},
+                headers={"Retry-After": _retry_after(window, limiter.user_requests[user_id]["reset_time"])},
             )
     else:
         ip_key = f"ip:{get_remote_address(request)}"
@@ -84,8 +84,14 @@ def check_endpoint_rate_limit(request: Request, endpoint_type: str):
             raise HTTPException(
                 status_code=HTTP_429_TOO_MANY_REQUESTS,
                 detail=f"IP rate limit exceeded: {limit} requests per {window} seconds",
-                headers={"Retry-After": str(window - (time.time() - limiter.user_requests[ip_key]["reset_time"]))},
+                headers={"Retry-After": _retry_after(window, limiter.user_requests[ip_key]["reset_time"])},
             )
+
+
+def _retry_after(window: int, reset_time: float) -> str:
+    """RFC 7231 Retry-After: a non-negative INTEGER number of seconds. The raw
+    `window - elapsed` can be a float or go slightly negative around the boundary."""
+    return str(max(0, int(window - (time.time() - reset_time))))
 
 
 def classify_endpoint(path: str, method: str) -> str:
