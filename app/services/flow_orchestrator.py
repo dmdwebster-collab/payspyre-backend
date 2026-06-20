@@ -564,6 +564,19 @@ class FlowOrchestrator:
                 cost_cents=rich_payload.get("cost_cents"),
             )
 
+            # Maintain the patient-level marketplace denorm fields (lead_state +
+            # verification_depth) as verifications pass — the marketplace tiers +
+            # prices leads off these. Forward-only; safe to run on any result.
+            from app.services import lead_metrics
+
+            patient = (
+                self.db.query(PlatformPatient)
+                .filter(PlatformPatient.id == application.patient_id)
+                .first()
+            )
+            if patient is not None:
+                lead_metrics.refresh_from_verifications(self.db, patient)
+
             if self._ready_to_decide(application):
                 decision_dict = self._decide(application)
         if not _in_external_txn:
@@ -742,6 +755,14 @@ class FlowOrchestrator:
         application.decision = decision_summary
         application.decision_at = datetime.now(timezone.utc)
         application.decision_by = "auto"
+
+        # Stamp the terminal marketplace lead_state (approved/declined) + capture
+        # any verification depth gained in this flow. Non-terminal (under_review)
+        # is left on the forward ladder maintained at verification time.
+        if patient is not None:
+            from app.services import lead_metrics
+
+            lead_metrics.apply_decision(self.db, patient, application.status)
 
         # One decision_made event; run_flow's events_to_emit are folded in as content (decision #10).
         self._emit_event(

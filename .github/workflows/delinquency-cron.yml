@@ -5,9 +5,16 @@ name: Delinquency aging (nightly)
 #   secret PROD_DATABASE_URL — the production DB connection string
 #   (postgresql+psycopg2://...). The DO managed DB's "Trusted Sources" must
 #   allow GitHub Actions runners (or be open) for this to connect.
+#
+# PARKED: the nightly `schedule:` trigger is commented out until there is a real
+# environment+DB for this to run against. There is no production DB yet, and the
+# staging DB is a dev-tier App Platform DB whose connection string isn't wired in
+# here — so the cron would only fail nightly. Re-enable by uncommenting `schedule:`
+# once PROD_DATABASE_URL (or a STAGING_DATABASE_URL) secret is set. Until then it
+# can still be run on demand via the Actions "Run workflow" button (workflow_dispatch).
 on:
-  schedule:
-    - cron: "0 8 * * *"   # 08:00 UTC daily
+  # schedule:
+  #   - cron: "0 8 * * *"   # 08:00 UTC daily — re-enable when a DB secret is wired
   workflow_dispatch: {}
 
 jobs:
