@@ -20,6 +20,9 @@ services:
   github:
     repo: dmdwebster-collab/payspyre-backend
     branch: staging
+    # Native App Platform CD: a push to `staging` auto-rebuilds + redeploys this
+    # service (no GitHub Action, no registry, no DO_ACCESS_TOKEN secret needed).
+    deploy_on_push: true
   dockerfile_path: Dockerfile
   instance_count: 1
   instance_size_slug: basic-xxs
@@ -77,6 +80,9 @@ jobs:
   github:
     repo: dmdwebster-collab/payspyre-backend
     branch: staging
+    # Re-run migrations on each push to `staging` as a PRE_DEPLOY gate before the
+    # web service goes live (matches the web component's deploy_on_push).
+    deploy_on_push: true
   dockerfile_path: Dockerfile
   run_command: python -m alembic upgrade head
   instance_size_slug: basic-xxs
