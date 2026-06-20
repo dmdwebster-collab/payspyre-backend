@@ -9,9 +9,17 @@ Endpoints (all staff-authenticated via the platform JWT):
 from fastapi import APIRouter
 
 from app.api.clinic.v1.endpoints import applications, financing_links, marketplace, products
+from app.core.config import settings
 
 clinic_router = APIRouter()
 clinic_router.include_router(products.router)
 clinic_router.include_router(applications.router)
 clinic_router.include_router(financing_links.router)
 clinic_router.include_router(marketplace.router)
+
+# Dev/staging-only: seed a clinic (vendor + staff user + membership) so the clinic
+# console + vendor marketplace can be demoed/tested end-to-end. NEVER in production.
+if settings.ENVIRONMENT != "production":
+    from app.api.clinic.v1.endpoints import dev_tools
+
+    clinic_router.include_router(dev_tools.router)
