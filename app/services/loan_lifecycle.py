@@ -322,6 +322,15 @@ def on_agreement_signed(
         db.refresh(loan)
         logger.info("loan_agreement_signed", loan_id=str(loan.id))
 
+    # Serialize the disbursement decision: take a row lock on the loan so two
+    # concurrent agreement-signed webhooks can't both pass the not_started check
+    # below and double-push to Zumrails. refresh(with_for_update=True) issues a
+    # SELECT ... FOR UPDATE and refreshes disbursement_status to the committed value,
+    # so the second caller blocks, then sees in_progress and no-ops. (The in-memory
+    # check alone is not atomic.) A retried push that survives a transient timeout is
+    # additionally deduped vendor-side by client_transaction_id=loan.id.
+    db.refresh(loan, with_for_update=True)
+
     # Trigger disbursement exactly once.
     if loan.disbursement_status != "not_started":
         logger.info(
