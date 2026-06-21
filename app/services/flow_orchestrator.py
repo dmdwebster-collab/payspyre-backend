@@ -532,6 +532,21 @@ class FlowOrchestrator:
                 decision=application.decision,
             )
 
+        # If the application is already decided, a late vendor result (new
+        # vendor_event_id, so the cache above missed) must NOT proceed: processing it
+        # would flip the verification, then _decide would raise InvalidStateTransition
+        # and the whole unit-of-work rolls back (losing the verification write) with a
+        # 422 → the vendor retries forever. Treat it as an idempotent no-op instead.
+        application = self._get_application(application_id)
+        if application.status in _DECISION_STATUSES:
+            return HandleResult(
+                verification_id=verification_id,
+                application_status=application.status,
+                decided=True,
+                idempotent_replay=True,
+                decision=application.decision,
+            )
+
         new_status = _TERMINAL_RESULT_TO_STATUS.get(result)
         if new_status is None:
             raise OrchestratorError(f"Unsupported verification result '{result}'")

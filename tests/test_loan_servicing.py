@@ -123,6 +123,16 @@ def test_invalid_inputs_raise():
 # In-memory fakes for record_payment (no DB)
 # ---------------------------------------------------------------------------
 
+class _NoResultQuery:
+    """Query stub whose filtered .first() finds nothing (no prior payment)."""
+
+    def filter(self, *a, **k):
+        return self
+
+    def first(self):
+        return None
+
+
 class _FakeSession:
     """Captures add/commit/refresh without persisting anything."""
 
@@ -131,6 +141,9 @@ class _FakeSession:
 
     def add(self, obj):
         self.added.append(obj)
+
+    def query(self, *args, **kwargs):
+        return _NoResultQuery()
 
     def commit(self):
         pass
@@ -233,3 +246,28 @@ def test_non_positive_payment_raises():
     db = _FakeSession()
     with pytest.raises(ValueError):
         record_payment(db, loan, 0, _now(), "manual")
+
+
+def test_record_payment_idempotent_on_duplicate_external_ref():
+    # A replayed receipt (same external_ref) must return the ORIGINAL payment and
+    # apply nothing — no double-count of cash to principal.
+    existing_payment = object()
+
+    class _DedupQuery:
+        def filter(self, *a, **k):
+            return self
+
+        def first(self):
+            return existing_payment
+
+    class _DedupSession(_FakeSession):
+        def query(self, *a, **k):
+            return _DedupQuery()
+
+    db = _DedupSession()
+    loan = _build_loan()
+    before_balance = loan.principal_balance_cents
+    out = record_payment(db, loan, 110, _now(), "zumrails", external_ref="dup-1")
+    assert out is existing_payment        # returned the original receipt
+    assert db.added == []                 # inserted no new payment row
+    assert loan.principal_balance_cents == before_balance  # applied nothing
