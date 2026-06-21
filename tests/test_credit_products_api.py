@@ -18,9 +18,25 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.api.v1.endpoints import credit_products as endpoint_module
-from app.core.auth import get_current_user, require_roles
+from app.core.auth import get_current_user
 from app.db.base import get_db
 from app.main import app
+
+
+def _fake_user(role_name: str, email: str):
+    """Build a synthetic user whose ``.roles`` collection matches what the real
+    ``require_roles`` checker reads (``{r.role.name for r in user.roles}``).
+
+    Carrying a real ``roles`` shape lets the genuine authorization dependency run
+    unmodified — the admin user passes, a non-admin gets a real 403 — instead of
+    monkeypatching FastAPI's route internals (which drift across versions). This
+    exercises the actual auth logic and is robust to FastAPI/Starlette upgrades.
+    """
+    role = type("Role", (), {"name": role_name})()
+    user_role = type("UserRole", (), {"role": role})()
+    return type(
+        "U", (), {"id": uuid.uuid4(), "email": email, "role": role_name, "roles": [user_role]}
+    )()
 
 
 # ---------------------------------------------------------------------------
@@ -83,35 +99,21 @@ def _make_payload(suffix: str | None = None) -> dict:
 
 @pytest.fixture
 def admin_client(db_session: Session):
-    """TestClient with auth dependencies overridden to a synthetic admin user."""
-    fake_admin = type("U", (), {"id": uuid.uuid4(), "email": "admin@payspyre.test", "role": "admin"})()
+    """TestClient authenticated as a synthetic admin user.
 
-    def _override_user():
-        return fake_admin
-
-    # require_roles returns an inner role_checker function; override it to a no-op.
-    def _override_role_checker():
-        return fake_admin
+    Only ``get_current_user`` is overridden; the real ``require_roles('admin')``
+    dependency runs against the admin's ``.roles`` and admits it. No route-internal
+    monkeypatching — robust across FastAPI/Starlette versions.
+    """
+    fake_admin = _fake_user("admin", "admin@payspyre.test")
 
     # Defense in depth: restore the exact prior override snapshot on teardown
-    # instead of a blanket clear(), so a synthetic ``U`` user (``.role`` but no
-    # ``.roles``) can never leak into a later test's require_roles path.
+    # instead of a blanket clear(), so the synthetic user can never leak into a
+    # later test's auth path.
     _prior_overrides = dict(app.dependency_overrides)
 
     app.dependency_overrides[get_db] = lambda: db_session
-    app.dependency_overrides[get_current_user] = _override_user
-
-    # require_roles is built dynamically per-call, so we override at the route
-    # dependency layer by patching the role_checker that the routes registered.
-    # FastAPI stores the actual Depends() callable, so the cleanest approach is
-    # to monkeypatch require_roles' returned callable. The endpoint declared
-    # Depends(require_roles("admin")) at import time — that closure is what we
-    # must override. We do this via app.dependency_overrides keyed on the
-    # callable object.
-    for route in app.routes:
-        if getattr(route, "path", "").startswith("/api/v1/credit-products"):
-            for dep in getattr(route, "dependencies", []):
-                app.dependency_overrides[dep.dependency] = _override_role_checker
+    app.dependency_overrides[get_current_user] = lambda: fake_admin
 
     try:
         with TestClient(app) as client:
@@ -123,8 +125,11 @@ def admin_client(db_session: Session):
 
 @pytest.fixture
 def read_only_client(db_session: Session):
-    """TestClient authenticated as a non-admin (read-only)."""
-    fake_user = type("U", (), {"id": uuid.uuid4(), "email": "user@payspyre.test", "role": "patient"})()
+    """TestClient authenticated as a non-admin (read-only).
+
+    The real ``require_roles('admin')`` runs and correctly 403s on mutating routes.
+    """
+    fake_user = _fake_user("patient", "user@payspyre.test")
 
     # Defense in depth: restore the exact prior override snapshot on teardown.
     _prior_overrides = dict(app.dependency_overrides)
