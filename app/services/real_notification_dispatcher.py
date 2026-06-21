@@ -283,10 +283,15 @@ class TwilioSmsSender:
             f"Your PaySpyre verification code is {token}. "
             f"It expires in {ttl_minutes} minutes."
         )
+        # Tell Twilio where to POST delivery-status updates so the (already-built)
+        # StatusCallback receiver at /api/webhooks/v1/notifications/twilio can
+        # reconcile delivered/failed — without this, every SMS stays "queued" forever.
+        create_kwargs = {"to": to_phone, "from_": self._from_number, "body": body}
+        base = settings.WEBHOOK_PUBLIC_BASE_URL.rstrip("/")
+        if base:
+            create_kwargs["status_callback"] = f"{base}/api/webhooks/v1/notifications/twilio"
         try:
-            message = self._client.messages.create(
-                to=to_phone, from_=self._from_number, body=body
-            )
+            message = self._client.messages.create(**create_kwargs)
         except Exception as exc:
             raise _classify_twilio_error(exc) from exc
         status_raw = getattr(message, "status", "queued") or "queued"

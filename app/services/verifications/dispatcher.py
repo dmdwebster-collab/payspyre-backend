@@ -11,12 +11,13 @@ Bureau (Equifax) always uses the mock path until the subscriber agreement is in
 place. Any verification type other than ``kyc_id`` / ``bank_link`` also goes
 through the mock path even when ``USE_REAL_ADAPTERS=True``.
 
-**Wiring note:** P7.2 builds and tests this dispatcher via direct injection into
-``FlowOrchestrator`` (see ``tests/test_verification_dispatcher.py``). The live
-``get_orchestrator`` dependencies (applicant + webhooks deps) still construct
-``MockVerificationDispatcher`` directly; rewiring them to use
-``VerificationDispatcher`` is the production rollout step paired with flipping
-``USE_REAL_ADAPTERS=True`` and is out of scope for this PR.
+**Wiring note (UPDATED 2026-06):** the live ``get_orchestrator`` dependencies (both
+``app/api/applicant/v1/deps.py`` and ``app/api/webhooks/v1/deps.py``) ALREADY
+construct ``VerificationDispatcher``. So flipping ``USE_REAL_ADAPTERS=True`` (with
+Didit/Flinks creds present) routes the live applicant flow to the real adapters
+immediately — the flag is the only remaining gate for kyc_id/bank_link. Bureau
+(``bureau_soft``/``bureau_hard``) still always uses the mock path regardless of the
+flag (no real-bureau switch is wired yet — gated on the Equifax agreement).
 """
 from __future__ import annotations
 
