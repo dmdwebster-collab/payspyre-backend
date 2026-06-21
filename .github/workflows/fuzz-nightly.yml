@@ -62,4 +62,5 @@ jobs:
           command.upgrade(cfg, 'head')
           "
       - name: Fuzz (seed=$FUZZ_SEED, examples=$FUZZ_MAX_EXAMPLES)
-        run: pytest tests/test_api_fuzz_schemathesis.py -q -p no:randomly -rf
+        # -m fuzz overrides the default `-m 'not fuzz'` so the explorer actually runs.
+        run: pytest tests/test_api_fuzz_schemathesis.py -m fuzz -q -p no:randomly -rf

@@ -13,10 +13,13 @@ from __future__ import annotations
 
 import os
 
+import pytest
 import schemathesis
 from hypothesis import HealthCheck, seed, settings
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
+
+pytestmark = pytest.mark.fuzz  # non-blocking nightly explorer (see pyproject addopts)
 
 from app.db.base import get_db
 from app.main import app

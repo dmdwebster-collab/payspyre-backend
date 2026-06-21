@@ -47,6 +47,15 @@ python_files = "test_*.py"
 python_classes = "Test*"
 python_functions = "test_*"
 asyncio_mode = "auto"
+# The Schemathesis no-5xx fuzz is a NON-BLOCKING explorer: the same seed maps to
+# different inputs across Python/Hypothesis versions, so it can't be a deterministic
+# per-push gate. Excluded by default; the nightly fuzz-explorer opts back in with
+# `-m fuzz`. Concrete bugs it found are pinned deterministically by the regression
+# tests, which DO run per-push.
+addopts = "-m 'not fuzz'"
+markers = [
+    "fuzz: property/contract fuzzing — non-deterministic across envs; nightly-only",
+]
 
 [tool.black]
 line-length = 100
