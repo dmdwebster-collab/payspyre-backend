@@ -63,5 +63,9 @@ def get_db_pool_status():
         "checked_in": pool.checkedin(),
         "checked_out": pool.checkedout(),
         "overflow": pool.overflow(),
-        "max_overflow": pool.max_overflow,
+        # QueuePool stores the configured cap privately; non-queue pools
+        # (NullPool/StaticPool) have none. getattr keeps the health check from
+        # crashing on any pool type (caught by Schemathesis: a public
+        # ``max_overflow`` attribute does not exist).
+        "max_overflow": getattr(pool, "_max_overflow", None),
     }

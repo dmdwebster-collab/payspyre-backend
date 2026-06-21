@@ -38,11 +38,15 @@ def set_rls_context(
         vendor_id: Vendor ID (required if user_role is vendor)
         borrower_id: Borrower ID (required if user_role is borrower)
     """
-    # Clear any existing context
-    db.execute(text("SET LOCAL app.current_user_id = NULL"))
-    db.execute(text("SET LOCAL app.current_user_role = NULL"))
-    db.execute(text("SET LOCAL app.vendor_id = NULL"))
-    db.execute(text("SET LOCAL app.borrower_id = NULL"))
+    # Clear any existing context. NOTE: `SET LOCAL <param> = NULL` is a Postgres
+    # syntax error (the value must be a string/number/identifier) — it aborts the
+    # transaction. The RLS policies read these via NULLIF(current_setting(.., true),
+    # '')::uuid, so the correct "cleared" representation is the EMPTY STRING, which
+    # NULLIF maps back to NULL. (Caught by Schemathesis: GET /api/v1/db 500'd here.)
+    db.execute(text("SET LOCAL app.current_user_id = ''"))
+    db.execute(text("SET LOCAL app.current_user_role = ''"))
+    db.execute(text("SET LOCAL app.vendor_id = ''"))
+    db.execute(text("SET LOCAL app.borrower_id = ''"))
 
     # Set new context
     db.execute(text(f"SET LOCAL app.current_user_id = '{user_id}'"))
@@ -50,7 +54,10 @@ def set_rls_context(
 
     if user_role == UserRole.VENDOR.value and vendor_id:
         db.execute(text(f"SET LOCAL app.vendor_id = '{vendor_id}'"))
-    elif user_role == UserRole.BORROWER.value and borrower_id:
+    # NB: UserRole has no BORROWER member — `UserRole.BORROWER.value` raised
+    # AttributeError for every non-vendor caller. The borrower GUC keys off the
+    # role string directly (the RLS policies read app.borrower_id regardless).
+    elif user_role == "borrower" and borrower_id:
         db.execute(text(f"SET LOCAL app.borrower_id = '{borrower_id}'"))
 
 

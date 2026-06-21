@@ -13,8 +13,9 @@ from __future__ import annotations
 import secrets
 from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.security import create_access_token, get_password_hash
@@ -76,10 +77,19 @@ def seed_clinic(body: SeedClinicRequest, db: Session = Depends(get_db)):
         is_verified=True,
     )
     db.add(user)
-    db.flush()
-
-    db.add(PlatformClinicMembership(user_id=user.id, vendor_id=vendor.id, role="staff"))
-    db.commit()
+    # A caller-supplied email that already exists collides on User.email. The
+    # violation surfaces at the flush (not only the commit), so the whole write
+    # must be guarded — a conflict, not a 500.
+    try:
+        db.flush()
+        db.add(PlatformClinicMembership(user_id=user.id, vendor_id=vendor.id, role="staff"))
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"A user with email {email!r} already exists.",
+        )
 
     token = create_access_token({"sub": str(user.id)})
     return SeedClinicResponse(
