@@ -397,24 +397,94 @@ def _record_event(
     db.flush()
 
 
+def _record_failure_event(
+    db: Session, *, application: Any, reasons: list[str] | None
+) -> None:
+    """Append an ``adverse_action_notice_failed`` audit row so an undelivered notice
+    is provable + actionable (compliance: we must show we attempted to notify). No PII."""
+    payload = {
+        "v": 1,
+        "actor": {"type": "system", "id": "system"},
+        "application_id": str(application.id),
+        "patient_id": str(application.patient_id),
+        "after": {
+            "notice_type": "adverse_action",
+            "delivered": False,
+            "reason_codes": list(reasons or []),
+        },
+    }
+    event = PlatformEvent(
+        event_type=ADVERSE_ACTION_FAILED_EVENT_TYPE,
+        actor="system",
+        patient_id=application.patient_id,
+        application_id=application.id,
+        payload=payload,
+    )
+    db.add(event)
+    db.flush()
+
+
 # ---------------------------------------------------------------------------
 # Public entry point — the hook target
 # ---------------------------------------------------------------------------
 
 
-class _EmailServiceDispatcher:
-    """Default dispatcher: a sync ``send_email`` over the async ``email_service``
-    (Resend/SendGrid HTTP). Returns False / no-ops cleanly when email isn't
-    configured. Used when the caller (the _decide hook) injects no dispatcher."""
+ADVERSE_ACTION_FAILED_EVENT_TYPE = "adverse_action_notice_failed"
 
-    def send_email(self, to, subject, html_content, text_content=None):
+
+def _send_via_sendgrid(
+    *, api_key: str, from_email: str, to: str, subject: str, html_content: str, text_content=None
+) -> bool:
+    """Send a generic email through SendGrid. Returns True only on a 2xx ack."""
+    from sendgrid import SendGridAPIClient
+    from sendgrid.helpers.mail import Mail
+
+    message = Mail(
+        from_email=from_email,
+        to_emails=to,
+        subject=subject,
+        plain_text_content=text_content or None,
+        html_content=html_content,
+    )
+    response = SendGridAPIClient(api_key).send(message)
+    status = getattr(response, "status_code", None)
+    return isinstance(status, int) and 200 <= status < 300
+
+
+class _EmailServiceDispatcher:
+    """Default dispatcher for the adverse-action notice.
+
+    Routes through the CONFIGURED email provider (``EMAIL_PROVIDER``) — SendGrid for
+    the business, Resend as fallback — so the legally-required ECOA/FCRA notice
+    actually delivers. The previous implementation only ever hit the Resend
+    singleton, which no-ops silently when ``RESEND_API_KEY`` is empty (it always is,
+    since the business uses SendGrid) — so declined applicants got no notice.
+
+    Returns True only when the provider accepted the message; the caller treats a
+    falsy result as "not sent" and records a failure event rather than success."""
+
+    def send_email(self, to, subject, html_content, text_content=None) -> bool:
+        from app.core.config import settings
+
+        if settings.EMAIL_PROVIDER == "sendgrid" and settings.SENDGRID_API_KEY:
+            return _send_via_sendgrid(
+                api_key=settings.SENDGRID_API_KEY,
+                from_email=settings.SENDGRID_FROM_EMAIL,
+                to=to,
+                subject=subject,
+                html_content=html_content,
+                text_content=text_content,
+            )
+
         import asyncio
 
         from app.services.email_service import email_service
 
-        return asyncio.run(
-            email_service.send_email(
-                to=to, subject=subject, html_content=html_content, text_content=text_content
+        return bool(
+            asyncio.run(
+                email_service.send_email(
+                    to=to, subject=subject, html_content=html_content, text_content=text_content
+                )
             )
         )
 
@@ -476,13 +546,23 @@ def send_adverse_action_notice(
         html = render_notice_html(content)
         text_body = render_notice_text(content)
 
-        # Send via the injected dispatcher. Any vendor error is swallowed below.
-        dispatcher.send_email(
+        # Send via the injected dispatcher. A vendor exception is swallowed below;
+        # a falsy return means the provider did NOT accept it (e.g. unconfigured) —
+        # in that case we must NOT record the notice as sent.
+        sent = dispatcher.send_email(
             to=email,
             subject=EMAIL_SUBJECT,
             html_content=html,
             text_content=text_body,
         )
+        if not sent:
+            logger.error(
+                "adverse_action_notice_not_delivered",
+                application_id=str(application_id),
+                patient_id=str(application.patient_id),
+            )
+            _record_failure_event(db, application=application, reasons=reasons)
+            return False
 
         _record_event(
             db,

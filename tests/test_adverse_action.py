@@ -198,3 +198,47 @@ def test_missing_patient_is_swallowed():
 
     assert sent is False
     dispatcher.send_email.assert_not_called()
+
+
+def test_undelivered_send_records_failure_event_not_sent():
+    # The provider accepted nothing (falsy return) — the notice must NOT be recorded
+    # as sent; a failure event is recorded instead so it's auditable.
+    application = _make_application()
+    patient = _make_patient(email="patient@example.com")
+    db = _make_db(already_sent=False, patient=patient)
+    dispatcher = MagicMock()
+    dispatcher.send_email.return_value = False
+
+    sent = adverse_action.send_adverse_action_notice(
+        db, application, ["bureau_below_minimum"], dispatcher
+    )
+
+    assert sent is False
+    added_types = [getattr(c.args[0], "event_type", None) for c in db.add.call_args_list]
+    assert adverse_action.ADVERSE_ACTION_FAILED_EVENT_TYPE in added_types
+    assert adverse_action.ADVERSE_ACTION_EVENT_TYPE not in added_types
+
+
+def test_default_dispatcher_routes_to_sendgrid_when_configured(monkeypatch):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "EMAIL_PROVIDER", "sendgrid")
+    monkeypatch.setattr(settings, "SENDGRID_API_KEY", "SG.testkey")
+    monkeypatch.setattr(settings, "SENDGRID_FROM_EMAIL", "noreply@payspyre.com")
+
+    captured = {}
+
+    def _fake_send(**kw):
+        captured.update(kw)
+        return True
+
+    monkeypatch.setattr(adverse_action, "_send_via_sendgrid", _fake_send)
+
+    ok = adverse_action._EmailServiceDispatcher().send_email(
+        to="x@example.com", subject="s", html_content="<p>h</p>", text_content="t"
+    )
+
+    assert ok is True
+    assert captured["to"] == "x@example.com"
+    assert captured["api_key"] == "SG.testkey"
+    assert captured["from_email"] == "noreply@payspyre.com"
