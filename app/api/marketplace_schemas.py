@@ -12,7 +12,7 @@ schema — the shape is config-driven (budget disclosure varies by lead_state).
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -22,11 +22,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class CreateListingRequest(BaseModel):
-    treatment_categories: list[str] = Field(..., min_length=1)
-    treatment_urgency: str
+    treatment_categories: list[str] = Field(..., min_length=1, max_length=10)
+    # Strict enum: an unknown urgency was previously accepted + silently priced at
+    # the 1.0x default (mispriced lead). The set matches config/marketplace/lead_pricing.yaml.
+    treatment_urgency: Literal["immediate", "this_week", "this_month", "flexible"]
     estimated_budget_cents: Optional[int] = Field(default=None, ge=0)
-    location_postal_code: str
-    max_travel_km: int = 25
+    location_postal_code: str = Field(..., min_length=3, max_length=12)
+    max_travel_km: int = Field(default=25, ge=1, le=500)
     # Opt-in consent to share a de-identified lead with clinics (spec §8.1).
     # The client must set this true (a checked consent box); the service records
     # the marketplace_listing consent and refuses to list without it.

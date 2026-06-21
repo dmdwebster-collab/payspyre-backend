@@ -313,7 +313,44 @@ def test_book_appointment_sets_timestamp(db_session):
     listing = _create(db_session, patient)
     vendor_id = uuid4()
     svc.express_interest(db_session, listing_id=listing.id, vendor_id=vendor_id)
+    # Only the patient-selected vendor can book — select first.
+    svc.select_clinic(db_session, listing_id=listing.id, patient_id=patient.id, vendor_id=vendor_id)
     interest = svc.book_appointment(
         db_session, listing_id=listing.id, vendor_id=vendor_id
     )
     assert interest.appointment_booked_at is not None
+
+
+def test_book_appointment_rejects_non_selected_vendor(db_session):
+    patient = _make_patient(db_session)
+    listing = _create(db_session, patient)
+    chosen, loser = uuid4(), uuid4()
+    svc.express_interest(db_session, listing_id=listing.id, vendor_id=chosen)
+    svc.express_interest(db_session, listing_id=listing.id, vendor_id=loser)
+    svc.select_clinic(db_session, listing_id=listing.id, patient_id=patient.id, vendor_id=chosen)
+    with pytest.raises(ValueError):
+        svc.book_appointment(db_session, listing_id=listing.id, vendor_id=loser)
+
+
+def test_double_select_clinic_rejected_no_double_charge(db_session):
+    patient = _make_patient(db_session)
+    listing = _create(db_session, patient)
+    a, b = uuid4(), uuid4()
+    svc.express_interest(db_session, listing_id=listing.id, vendor_id=a)
+    svc.express_interest(db_session, listing_id=listing.id, vendor_id=b)
+    svc.select_clinic(db_session, listing_id=listing.id, patient_id=patient.id, vendor_id=a)
+    with pytest.raises(ValueError):
+        svc.select_clinic(db_session, listing_id=listing.id, patient_id=patient.id, vendor_id=b)
+    # Only vendor A was ever charged.
+    bills = svc.vendor_billing(db_session, vendor_id=b)
+    assert bills == []
+
+
+def test_pause_rejected_on_closed_listing(db_session):
+    patient = _make_patient(db_session)
+    listing = _create(db_session, patient)
+    v = uuid4()
+    svc.express_interest(db_session, listing_id=listing.id, vendor_id=v)
+    svc.select_clinic(db_session, listing_id=listing.id, patient_id=patient.id, vendor_id=v)
+    with pytest.raises(ValueError):
+        svc.pause_listing(db_session, listing_id=listing.id, patient_id=patient.id)

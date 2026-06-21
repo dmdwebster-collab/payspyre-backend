@@ -210,6 +210,11 @@ def pause_listing(db: Session, *, listing_id, patient_id) -> PlatformMarketplace
     listing = _load_listing(db, listing_id)
     if listing.patient_id != patient_id:
         raise PermissionError("Listing is owned by another patient")
+    if listing.status == "paused":
+        return listing  # idempotent
+    if listing.status != "active":
+        # Can't un-close a terminal (closed/expired) listing.
+        raise ValueError(f"Cannot pause a listing in status '{listing.status}'")
     listing.status = "paused"
     _refresh_marketplace_listed(db, patient_id)
     db.commit()
@@ -245,6 +250,10 @@ def select_clinic(
     listing = _load_listing(db, listing_id)
     if listing.patient_id != patient_id:
         raise PermissionError("Listing is owned by another patient")
+    if listing.status != "active":
+        # A selection is final. Re-selecting on a closed listing would switch the
+        # accepted vendor AND record a SECOND lead charge — reject it.
+        raise ValueError(f"Cannot select a clinic on a listing in status '{listing.status}'")
 
     interest = _find_interest(db, listing_id=listing_id, vendor_id=vendor_id)
     if interest is None:
@@ -406,15 +415,19 @@ def book_appointment(
     Stamps ``appointment_booked_at`` and records the charge if the configured
     trigger is ``appointment_booked``.
     """
-    _load_listing(db, listing_id)  # 404 if listing is gone
+    listing = _load_listing(db, listing_id)  # 404 if listing is gone
     interest = _find_interest(db, listing_id=listing_id, vendor_id=vendor_id)
     if interest is None:
         raise ValueError("Vendor has not expressed interest in this listing")
+    # Only the patient-selected vendor may book (and, under an appointment_booked
+    # trigger, be charged). Without this any still-interested loser vendor could
+    # self-attribute an appointment / generate a lead charge after losing the pick.
+    if listing.accepted_vendor_id != vendor_id:
+        raise ValueError("Only the clinic the patient selected can book an appointment")
 
     interest.appointment_booked_at = _now()
 
     if get_charge_trigger() == "appointment_booked":
-        listing = _load_listing(db, listing_id)
         _charge_lead(interest, listing, "appointment_booked")
 
     db.commit()
