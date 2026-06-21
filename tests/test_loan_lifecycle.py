@@ -54,7 +54,9 @@ class _FakeSession:
     def commit(self):
         self.commits += 1
 
-    def refresh(self, obj):
+    def refresh(self, obj, **kwargs):
+        # Accept with_for_update= (used by the disbursement row lock); the fake has
+        # no real row to lock/reload, so it's a no-op.
         pass
 
     def query(self, *args, **kwargs):
