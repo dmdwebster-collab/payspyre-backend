@@ -182,6 +182,29 @@ def test_irregular_unlabeled_credits_not_treated_as_income():
     assert out["monthly_income_cents"] == 0
 
 
+def test_two_unkeyworded_deposits_not_treated_as_income():
+    # A coincidental pair: two similar deposits 14 days apart with NO income keyword.
+    # A single gap is not enough corroboration — must NOT register as biweekly income.
+    txns = [_txn(d, "ACME WIDGETS 8842", credit=1200.00) for d in _biweekly_dates(2)]
+    out = analyze_accounts([_account(txns)], today=TODAY)
+    assert out["monthly_income_cents"] == 0
+
+
+def test_three_unkeyworded_recurring_deposits_count_as_income():
+    # Three deposits on a stable biweekly cadence (2 corroborating gaps) qualify as
+    # income even without a keyword.
+    txns = [_txn(d, "ACME WIDGETS 8842", credit=1200.00) for d in _biweekly_dates(3)]
+    out = analyze_accounts([_account(txns)], today=TODAY)
+    assert out["monthly_income_cents"] > 0
+
+
+def test_two_keyworded_deposits_still_count_as_income():
+    # A positive income keyword still rescues a 2-deposit stream.
+    txns = [_txn(d, "PAYROLL DEPOSIT EMPLOYER", credit=1200.00) for d in _biweekly_dates(2)]
+    out = analyze_accounts([_account(txns)], today=TODAY)
+    assert out["monthly_income_cents"] > 0
+
+
 # ---------------------------------------------------------------------------
 # Empty / short history
 # ---------------------------------------------------------------------------
