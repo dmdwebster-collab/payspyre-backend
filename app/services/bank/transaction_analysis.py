@@ -388,7 +388,13 @@ def _stream_monthly_income_cents(stream: _Stream) -> int:
     qualifies = False
     per_month = 1.0
 
-    if cadence is not None and cv <= MAX_AMOUNT_CV:
+    # (a) regular cadence + stable amounts. An UNKEYWORDED stream additionally needs
+    #     >= 3 deposits (>= 2 corroborating gaps), so a single coincidental gap
+    #     between two one-off transfers (e.g. two similar e-transfers 14 days apart
+    #     that dodge the negative-keyword filter) can't masquerade as biweekly income
+    #     and inflate the income estimate. A positive income keyword still qualifies a
+    #     2-deposit stream.
+    if cadence is not None and cv <= MAX_AMOUNT_CV and (has_income_kw or len(deposits) >= 3):
         qualifies = True
         per_month = cadence[1]
     elif has_income_kw and cv <= MAX_AMOUNT_CV:

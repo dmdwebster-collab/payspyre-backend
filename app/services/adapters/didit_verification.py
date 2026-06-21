@@ -62,16 +62,22 @@ class DiditVerificationAdapter(VerificationAdapter):
             body["contact_details"] = {"email": patient.email}
 
         # No retries inside the adapter — orchestrator-level idempotency handles
-        # that; retrying here risks double-charging the vendor.
-        with httpx.Client(timeout=10.0) as client:
-            response = client.post(
-                f"{self._api_base_url}{self._SESSION_PATH}",
-                headers={
-                    "x-api-key": self._api_key,
-                    "Content-Type": "application/json",
-                },
-                json=body,
-            )
+        # that; retrying here risks double-charging the vendor. Routed through the
+        # shared HTTP helper for consistent connect/read timeouts + status/latency
+        # logging (no PII/keys logged).
+        from app.core import http_client
+
+        response = http_client.request(
+            "POST",
+            f"{self._api_base_url}{self._SESSION_PATH}",
+            provider="didit",
+            op="create_session",
+            headers={
+                "x-api-key": self._api_key,
+                "Content-Type": "application/json",
+            },
+            json=body,
+        )
         if response.status_code // 100 != 2:
             raise DiditAPIError(
                 f"Didit create-session failed: HTTP {response.status_code} {response.text[:200]}"
