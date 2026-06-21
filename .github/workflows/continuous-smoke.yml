@@ -1,0 +1,43 @@
+name: Continuous smoke (L5/L8 always-on)
+
+# The "test over and over until perfect" loop. On a schedule, fires the live
+# end-to-end + concurrency smoke scripts at the running staging deployment and
+# fails (→ GitHub notifies) if any money-critical path regresses in production-like
+# conditions. This is synthetic monitoring: it exercises the real deployed artifact,
+# not the code in isolation.
+#
+#   - e2e_smoke.py         : full applicant→approval→marketplace flow over HTTP
+#   - concurrency_smoke.py : genuinely-parallel money paths (caught a real double-charge)
+#
+# Both target staging by default (PAYSPYRE_API_BASE) and rely on the dev helpers,
+# which are mounted on staging (ENABLE_DEV_TOOLS=true, no real PII). NEVER point this
+# at an environment holding real PII.
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"  # every 6h
+  workflow_dispatch:
+    inputs:
+      api_base:
+        description: "API base URL (default: staging)"
+        required: false
+        default: "https://payspyre-api-staging-5cflx.ondigitalocean.app/api"
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    env:
+      PAYSPYRE_API_BASE: ${{ github.event.inputs.api_base || 'https://payspyre-api-staging-5cflx.ondigitalocean.app/api' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install requests
+
+      - name: Live E2E smoke
+        run: python scripts/e2e_smoke.py
+
+      - name: Concurrency smoke (money-race protection)
+        if: always()  # run even if E2E failed — both are independent monitors
+        run: python scripts/concurrency_smoke.py
