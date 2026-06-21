@@ -17,9 +17,11 @@ clinic_router.include_router(applications.router)
 clinic_router.include_router(financing_links.router)
 clinic_router.include_router(marketplace.router)
 
-# Dev/staging-only: seed a clinic (vendor + staff user + membership) so the clinic
-# console + vendor marketplace can be demoed/tested end-to-end. NEVER in production.
-if settings.ENVIRONMENT != "production":
-    from app.api.clinic.v1.endpoints import dev_tools
+# UNAUTHENTICATED dev helper: seed a clinic (vendor + staff user + membership + JWT).
+# Auto-on in development/test; elsewhere requires an EXPLICIT ENABLE_DEV_TOOLS (e.g.
+# mock-mode staging). NEVER in production, and never where real PII lives.
+if settings.ENVIRONMENT in ("development", "test") or settings.ENABLE_DEV_TOOLS:
+    if settings.ENVIRONMENT != "production":
+        from app.api.clinic.v1.endpoints import dev_tools
 
-    clinic_router.include_router(dev_tools.router)
+        clinic_router.include_router(dev_tools.router)

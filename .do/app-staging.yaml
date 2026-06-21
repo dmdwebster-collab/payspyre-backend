@@ -40,6 +40,12 @@ services:
   - key: ENVIRONMENT
     scope: RUN_TIME
     value: staging
+  # Mock-mode beta: explicitly enable the UNAUTHENTICATED dev helpers (magic-link
+  # code, simulate verification, seed clinic) so testers can complete the flow.
+  # OK only because staging holds NO real PII. Never set this with real data.
+  - key: ENABLE_DEV_TOOLS
+    scope: RUN_TIME
+    value: "true"
   - key: DATABASE_URL
     scope: RUN_TIME
     value: ${db.DATABASE_URL}
