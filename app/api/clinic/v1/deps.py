@@ -64,4 +64,4 @@ def get_orchestrator(db: Session = Depends(get_db)):
     from app.services.flow_orchestrator import FlowOrchestrator
     from app.services.verifications.dispatcher import VerificationDispatcher
 
-    return FlowOrchestrator(db, consent_service, VerificationDispatcher())
+    return FlowOrchestrator(db, consent_service, VerificationDispatcher(db))
