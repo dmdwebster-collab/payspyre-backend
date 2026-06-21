@@ -250,6 +250,12 @@ def select_clinic(
     listing = _load_listing(db, listing_id)
     if listing.patient_id != patient_id:
         raise PermissionError("Listing is owned by another patient")
+    # Lock the listing row so two CONCURRENT select_clinic calls can't both pass the
+    # active check below and double-charge / switch the accepted vendor. The status
+    # check alone is not atomic — both readers see 'active' before either commits.
+    # refresh(with_for_update) serializes them: the first closes+charges+commits; the
+    # second then re-reads 'closed' and is rejected. (Concurrency test caught this.)
+    db.refresh(listing, with_for_update=True)
     if listing.status != "active":
         # A selection is final. Re-selecting on a closed listing would switch the
         # accepted vendor AND record a SECOND lead charge — reject it.
