@@ -449,23 +449,39 @@ class RealNotificationDispatcher:
         return event
 
     def _build_sender(self, contact_method: str):
+        # Prefer creds from the settings area (Dave's mandate), env fallback.
+        from app.services.integration_creds import resolve
+
         if contact_method == "email":
             if settings.EMAIL_PROVIDER == "sendgrid":
                 from app.services.sendgrid_email import SendGridEmailSender
 
-                return SendGridEmailSender(
-                    api_key=settings.SENDGRID_API_KEY,
-                    from_email=settings.SENDGRID_FROM_EMAIL,
+                c = resolve(
+                    self.db, "sendgrid",
+                    secret_keys=["api_key"], config_keys=["from_email"],
+                    env={"api_key": "SENDGRID_API_KEY", "from_email": "SENDGRID_FROM_EMAIL"},
                 )
-            return ResendEmailSender(
-                api_key=settings.RESEND_API_KEY,
-                from_email=settings.RESEND_FROM_EMAIL,
+                return SendGridEmailSender(api_key=c["api_key"], from_email=c["from_email"])
+            c = resolve(
+                self.db, "resend",
+                secret_keys=["api_key"], config_keys=["from_email"],
+                env={"api_key": "RESEND_API_KEY", "from_email": "RESEND_FROM_EMAIL"},
             )
+            return ResendEmailSender(api_key=c["api_key"], from_email=c["from_email"])
         if contact_method == "sms":
+            c = resolve(
+                self.db, "twilio",
+                secret_keys=["account_sid", "auth_token"], config_keys=["from_number"],
+                env={
+                    "account_sid": "TWILIO_ACCOUNT_SID",
+                    "auth_token": "TWILIO_AUTH_TOKEN",
+                    "from_number": "TWILIO_FROM_NUMBER",
+                },
+            )
             return TwilioSmsSender(
-                account_sid=settings.TWILIO_ACCOUNT_SID,
-                auth_token=settings.TWILIO_AUTH_TOKEN,
-                from_number=settings.TWILIO_FROM_NUMBER,
+                account_sid=c["account_sid"],
+                auth_token=c["auth_token"],
+                from_number=c["from_number"],
             )
         # _resolve_recipient already rejected this, but keep the guard local.
         raise PermanentNotificationError(

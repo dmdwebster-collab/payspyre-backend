@@ -43,20 +43,42 @@ class DispatchResult:
 
 
 class VerificationDispatcher:
-    def __init__(self) -> None:
+    def __init__(self, db=None) -> None:
         self._use_real = settings.USE_REAL_ADAPTERS
         # Mock is always constructed — it's the flag-off path AND the bureau path.
         self._mock = MockVerificationDispatcher()
         if self._use_real:
+            # Prefer creds from the settings area (Dave's mandate); env fallback.
+            # db=None (e.g. unit tests) -> env only, preserving prior behavior.
+            from app.services.integration_creds import resolve
+
+            d = resolve(
+                db, "didit",
+                secret_keys=["api_key"], config_keys=["api_base_url", "workflow_id"],
+                env={
+                    "api_key": "DIDIT_API_KEY",
+                    "api_base_url": "DIDIT_API_BASE_URL",
+                    "workflow_id": "DIDIT_WORKFLOW_ID",
+                },
+            )
             self._didit = DiditVerificationAdapter(
-                api_key=settings.DIDIT_API_KEY,
-                api_base_url=settings.DIDIT_API_BASE_URL,
-                workflow_id=settings.DIDIT_WORKFLOW_ID,
+                api_key=d["api_key"],
+                api_base_url=d["api_base_url"],
+                workflow_id=d["workflow_id"],
+            )
+            f = resolve(
+                db, "flinks",
+                secret_keys=["api_key"], config_keys=["api_base_url", "customer_id"],
+                env={
+                    "api_key": "FLINKS_API_KEY",
+                    "api_base_url": "FLINKS_API_BASE_URL",
+                    "customer_id": "FLINKS_CUSTOMER_ID",
+                },
             )
             self._flinks = FlinksBankAdapter(
-                api_key=settings.FLINKS_API_KEY,
-                api_base_url=settings.FLINKS_API_BASE_URL,
-                customer_id=settings.FLINKS_CUSTOMER_ID,
+                api_key=f["api_key"],
+                api_base_url=f["api_base_url"],
+                customer_id=f["customer_id"],
             )
 
     def initiate(
