@@ -16,7 +16,10 @@ set), never the values.
 """
 from __future__ import annotations
 
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.api.schemas.integration_settings import (
@@ -25,9 +28,17 @@ from app.api.schemas.integration_settings import (
 )
 from app.core.auth import get_current_user, require_roles
 from app.db.base import get_db
+from app.services import connection_test
 from app.services import integration_settings as service
 
 router = APIRouter()
+
+
+class ConnectionTestResponse(BaseModel):
+    provider: str
+    ok: bool
+    reason: str
+    checked_at: datetime
 
 
 @router.get(
@@ -103,3 +114,29 @@ async def upsert_integration_settings(
             status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
         ) from exc
     return service.redact(setting)
+
+
+@router.post(
+    "/{provider}/test",
+    response_model=ConnectionTestResponse,
+    summary="Validate a provider's stored credentials",
+    description=(
+        "Admin-only. Runs a cheap, auth-only, side-effect-free call against the "
+        "provider using the credentials currently in the settings area, so the team "
+        "can confirm a key works right after entering it. Sends/charges/pulls "
+        "nothing and never echoes secret values — only an ok flag + a redacted reason."
+    ),
+    dependencies=[Depends(require_roles("admin"))],
+)
+async def test_integration_connection(
+    provider: str,
+    db: Session = Depends(get_db),
+    _user=Depends(get_current_user),
+):
+    result = connection_test.test_connection(db, provider)
+    return ConnectionTestResponse(
+        provider=provider,
+        ok=result.ok,
+        reason=result.reason,
+        checked_at=result.checked_at,
+    )
