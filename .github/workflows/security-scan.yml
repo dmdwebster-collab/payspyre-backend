@@ -1,0 +1,50 @@
+name: Security scan (L0)
+
+# Supply-chain + SAST + secrets gate. Runs on every push/PR (fast feedback) and
+# weekly (catch newly-disclosed CVEs in unchanged deps).
+#   - bandit     : Python SAST (insecure code patterns)
+#   - pip-audit  : known-CVE dependency scan (SCA)
+#   - gitleaks   : secret scanning (140+ credential types)
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 9 * * 1"  # Mondays 09:00 UTC — re-audit deps against new CVE disclosures
+
+jobs:
+  sast-and-sca:
+    name: bandit + pip-audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install project + scanners
+        run: |
+          python -m pip install --upgrade pip   # clears PYSEC-2026-196 (pip self)
+          pip install -e .
+          pip install bandit pip-audit
+
+      - name: Bandit SAST (fail on medium+ severity)
+        run: bandit -r app/ -ll -q
+
+      - name: pip-audit SCA (fail on known CVEs)
+        # The project itself isn't on PyPI; --skip-editable avoids auditing it.
+        run: pip-audit --skip-editable --progress-spinner off
+
+  secrets:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history so gitleaks scans every commit
+      - name: Gitleaks secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
