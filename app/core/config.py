@@ -189,6 +189,10 @@ class Settings(BaseSettings):
                 ("PATIENT_JWT_SECRET", self.PATIENT_JWT_SECRET, PATIENT_JWT_DEV_DEFAULT),
                 ("FLINKS_WEBHOOK_SECRET", self.FLINKS_WEBHOOK_SECRET, FLINKS_WEBHOOK_DEV_DEFAULT),
                 ("EQUIFAX_WEBHOOK_SECRET", self.EQUIFAX_WEBHOOK_SECRET, EQUIFAX_WEBHOOK_DEV_DEFAULT),
+                # Encryption-at-rest keys: empty = no-op pass-through (plaintext). In
+                # production that means vendor secrets / SINs land unencrypted — fail loud.
+                ("SETTINGS_ENCRYPTION_KEY", self.SETTINGS_ENCRYPTION_KEY, ""),
+                ("SIN_ENCRYPTION_KEY", self.SIN_ENCRYPTION_KEY, ""),
             )
             if value == dev_default
         ]
