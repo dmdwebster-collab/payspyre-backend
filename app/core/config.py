@@ -18,6 +18,13 @@ class Settings(BaseSettings):
 
     # Application
     ENVIRONMENT: str = "development"
+    # Dev/test helper endpoints (surface the mock magic-link code, simulate
+    # verification results, seed a clinic) are auto-on in development/test. To expose
+    # them anywhere else (e.g. a mock-mode staging beta) this must be EXPLICITLY set
+    # true — they are UNAUTHENTICATED (anyone can mint a session/clinic JWT or
+    # force-pass a verification), so never enable on an environment with real PII.
+    # Production can never mount them regardless of this flag.
+    ENABLE_DEV_TOOLS: bool = False
     VERSION: str = "0.1.0"
 
     # Observability

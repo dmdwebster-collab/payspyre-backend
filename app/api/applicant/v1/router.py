@@ -10,10 +10,11 @@ applicant_router.include_router(applications.router)
 applicant_router.include_router(products.router)
 applicant_router.include_router(marketplace.router)
 
-# Dev/staging-only helpers (surface the mock magic-link code; simulate verification
-# results) so the patient flow can be demoed end-to-end without real vendors. NEVER
-# mounted in production.
-if settings.ENVIRONMENT != "production":
-    from app.api.applicant.v1.endpoints import dev_tools
+# UNAUTHENTICATED dev helpers (surface the mock magic-link code; simulate verification
+# results). Auto-on in development/test; elsewhere requires an EXPLICIT ENABLE_DEV_TOOLS
+# (e.g. mock-mode staging). NEVER in production, and never where real PII lives.
+if settings.ENVIRONMENT in ("development", "test") or settings.ENABLE_DEV_TOOLS:
+    if settings.ENVIRONMENT != "production":
+        from app.api.applicant.v1.endpoints import dev_tools
 
-    applicant_router.include_router(dev_tools.router)
+        applicant_router.include_router(dev_tools.router)
