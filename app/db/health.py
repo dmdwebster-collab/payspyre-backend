@@ -102,9 +102,12 @@ class DatabaseHealthChecker:
             result = self.db.execute(text("SELECT COUNT(*) FROM loan_applications"))
             count = result.scalar()
 
-            # Clear context
-            self.db.execute(text("SET LOCAL app.vendor_id = NULL"))
-            self.db.execute(text("SET LOCAL app.current_user_id = NULL"))
+            # Clear context. `SET LOCAL <param> = NULL` is a Postgres syntax error
+            # that aborts the transaction (then the next health query fails with
+            # "current transaction is aborted"). Use the empty string, which the RLS
+            # policies map back to NULL via NULLIF(current_setting(.., true), '').
+            self.db.execute(text("SET LOCAL app.vendor_id = ''"))
+            self.db.execute(text("SET LOCAL app.current_user_id = ''"))
 
             return {
                 "status": "working",
@@ -123,17 +126,20 @@ class DatabaseHealthChecker:
     def check_index_usage(self) -> Dict[str, Any]:
         """Check if critical indexes are being used."""
         # Get index usage statistics from PostgreSQL
+        # pg_stat_user_indexes exposes the table as `relname` and the index as
+        # `indexrelname` (NOT tablename/indexname — those exist only on pg_indexes).
+        # Aliasing keeps the row.tablename / row.indexname access below working.
         result = self.db.execute(text("""
             SELECT
                 schemaname,
-                tablename,
-                indexname,
+                relname AS tablename,
+                indexrelname AS indexname,
                 idx_scan as index_scans,
                 idx_tup_read as tuples_read,
                 idx_tup_fetch as tuples_fetched
             FROM pg_stat_user_indexes
             WHERE schemaname = 'public'
-            AND indexname LIKE 'idx_%'
+            AND indexrelname LIKE 'idx_%'
             ORDER BY idx_scan DESC
             LIMIT 20;
         """))
@@ -237,11 +243,19 @@ class DatabaseHealthChecker:
             "overall_status": "unknown"
         }
 
-        # Determine overall status
-        if all(
-            check.get("status", "error") in ("healthy", "working", "secure", "isolated", "analyzed")
-            for check in health_report["checks"].values()
-        ):
+        # Determine overall status. `connection` is a bare bool (the other checks are
+        # dicts with a "status"), so the rollup must tolerate both shapes — calling
+        # .get() on the bool was an unhandled 500 (caught by Schemathesis).
+        _ok_statuses = ("healthy", "working", "secure", "isolated", "analyzed")
+
+        def _check_passed(check: Any) -> bool:
+            if isinstance(check, bool):
+                return check
+            if isinstance(check, dict):
+                return check.get("status", "error") in _ok_statuses
+            return False
+
+        if all(_check_passed(c) for c in health_report["checks"].values()):
             health_report["overall_status"] = "healthy"
         else:
             health_report["overall_status"] = "degraded"

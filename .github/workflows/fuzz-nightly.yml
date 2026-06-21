@@ -1,0 +1,65 @@
+name: API fuzz explorer (L3 nightly)
+
+# The per-push Tests workflow runs the Schemathesis no-5xx fuzz with a PINNED seed
+# (deterministic gate). This nightly job runs the SAME fuzz with a ROTATING seed
+# (the run number) and more examples per operation, so it keeps roaming new inputs
+# and surfacing fresh crash classes over time — the "test over and over until
+# perfect" loop. A failure here is a real, reproducible 5xx (the seed is logged);
+# fix it and the per-push gate locks it in.
+
+on:
+  schedule:
+    - cron: "0 7 * * *"  # 07:00 UTC daily
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: "Fuzz seed (default: run number)"
+        required: false
+      max_examples:
+        description: "Examples per operation"
+        required: false
+        default: "60"
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: payspyre
+          POSTGRES_PASSWORD: dev123
+          POSTGRES_DB: payspyre_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      DATABASE_URL: postgresql+psycopg2://payspyre:dev123@localhost:5432/payspyre_test
+      TEST_DATABASE_URL: postgresql+psycopg2://payspyre:dev123@localhost:5432/payspyre_test
+      JWT_SECRET_KEY: test-secret-key-for-ci-only
+      JWT_ALGORITHM: HS256
+      STRIPE_API_KEY: sk_test_fake_key
+      STRIPE_SECRET_KEY: sk_test_fake_secret
+      FUZZ_SEED: ${{ github.event.inputs.seed || github.run_number }}
+      FUZZ_MAX_EXAMPLES: ${{ github.event.inputs.max_examples || '60' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+      - name: Migrate test DB
+        run: |
+          python -c "
+          from alembic.config import Config
+          from alembic import command
+          cfg = Config('alembic.ini')
+          cfg.set_main_option('sqlalchemy.url', '$TEST_DATABASE_URL')
+          command.upgrade(cfg, 'head')
+          "
+      - name: Fuzz (seed=$FUZZ_SEED, examples=$FUZZ_MAX_EXAMPLES)
+        run: pytest tests/test_api_fuzz_schemathesis.py -q -p no:randomly -rf

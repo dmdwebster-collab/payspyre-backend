@@ -22,6 +22,8 @@ from typing import Iterator
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.applicant.v1.deps import (
@@ -57,6 +59,7 @@ from app.services.flow_orchestrator import (
     FlowOrchestrator,
     InvalidAmountError,
     InvalidStateTransition,
+    OrchestratorError,
     StillPendingError,
     UnknownVerificationType,
 )
@@ -92,6 +95,12 @@ def _http_errors() -> Iterator[None]:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Verification replay error",
         )
+    except OrchestratorError as exc:
+        # Catch-all for any base/unsubclassed orchestrator domain error (e.g. a
+        # request referencing a non-existent credit product or verification). These
+        # are client-input failures, not server faults — 422, never a 500. (Caught
+        # by Schemathesis: POST /applications with a bogus credit_product_id 500'd.)
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
 
 
 def _client_ip(request: Request) -> str | None:
@@ -115,25 +124,52 @@ def create_application(
 ):
     # Patient find-or-create (kickoff §3 #6): match by phone first, then email.
     profile = body.patient_profile
-    patient: PlatformPatient | None = None
-    if profile.phone_e164:
-        patient = (
-            db.query(PlatformPatient)
-            .filter(PlatformPatient.phone_e164 == profile.phone_e164)
-            .first()
-        )
-    if patient is None and profile.email:
-        patient = db.query(PlatformPatient).filter(PlatformPatient.email == profile.email).first()
+    # Normalize email: an empty string is not an address, and storing it would
+    # collide on the lower(email) unique index for every blank-email applicant.
+    email = (profile.email or "").strip() or None
+
+    def _find_existing() -> PlatformPatient | None:
+        found: PlatformPatient | None = None
+        if profile.phone_e164:
+            found = (
+                db.query(PlatformPatient)
+                .filter(PlatformPatient.phone_e164 == profile.phone_e164)
+                .first()
+            )
+        if found is None and email:
+            # Case-insensitive match — the unique index is on lower(email), so an
+            # exact `==` match would miss a different-cased duplicate and then 500
+            # on the INSERT (caught by Schemathesis).
+            found = (
+                db.query(PlatformPatient)
+                .filter(func.lower(PlatformPatient.email) == email.lower())
+                .first()
+            )
+        return found
+
+    patient: PlatformPatient | None = _find_existing()
     if patient is None:
         patient = PlatformPatient(
             legal_first_name=profile.legal_first_name,
             legal_last_name=profile.legal_last_name,
-            email=profile.email,
+            email=email,
             phone_e164=profile.phone_e164,
         )
         db.add(patient)
-        db.commit()
-        db.refresh(patient)
+        try:
+            db.commit()
+        except IntegrityError:
+            # Lost a race (or a case-insensitive duplicate slipped past the lookup):
+            # roll back and reuse the row that now exists. Never surface a 500.
+            db.rollback()
+            patient = _find_existing()
+            if patient is None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Could not create or resolve the patient record.",
+                )
+        else:
+            db.refresh(patient)
 
     with _http_errors():
         application = orchestrator.create_application(
