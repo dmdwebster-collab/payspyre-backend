@@ -316,6 +316,23 @@ def record_payment(
     if amount_cents <= 0:
         raise ValueError("amount_cents must be positive")
 
+    # Idempotency: a payment rail (Zumrails collection webhook) can deliver the same
+    # receipt more than once (at-least-once / retries). Dedupe on external_ref so a
+    # replay returns the original receipt instead of double-applying cash to
+    # principal — a money-conservation hole. Backed by a partial unique index on
+    # (loan_id, external_ref) (migration 033) for the concurrent case.
+    if external_ref:
+        existing = (
+            db.query(PlatformLoanPayment)
+            .filter(
+                PlatformLoanPayment.loan_id == loan.id,
+                PlatformLoanPayment.external_ref == external_ref,
+            )
+            .first()
+        )
+        if existing is not None:
+            return existing
+
     payment = PlatformLoanPayment(
         loan_id=loan.id,
         amount_cents=amount_cents,
