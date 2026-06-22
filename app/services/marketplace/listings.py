@@ -97,9 +97,18 @@ def _emit_event(db: Session, *, event_type: str, payload: dict, patient_id=None)
 
 
 def _load_listing(db: Session, listing_id) -> PlatformMarketplaceListing:
+    # Join the patient and drop soft-deleted (PIPEDA-erased) patients' listings —
+    # an erased patient must not be loadable by direct id through ANY read path
+    # (pause / interested_clinics / select_clinic / express_interest /
+    # get_listing_for_vendor / book_appointment). Every one of those goes through
+    # here, so the guard lives here rather than at each call site. create_listing
+    # loads the patient directly (with its own deleted_at guard) and does NOT use
+    # this helper, so the create/own-listing flow is unaffected.
     listing = (
         db.query(PlatformMarketplaceListing)
+        .join(PlatformPatient, PlatformPatient.id == PlatformMarketplaceListing.patient_id)
         .filter(PlatformMarketplaceListing.id == listing_id)
+        .filter(PlatformPatient.deleted_at.is_(None))
         .one_or_none()
     )
     if listing is None:
