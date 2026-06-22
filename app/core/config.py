@@ -144,6 +144,12 @@ class Settings(BaseSettings):
     RATE_LIMIT_WEBHOOK_REQUESTS: int = 1000
     RATE_LIMIT_WEBHOOK_WINDOW: int = 60
 
+    # Prometheus /metrics scrape auth. When set, /metrics requires
+    # `Authorization: Bearer <token>`. When unset, /metrics is open in
+    # non-production (dev/staging convenience) and DENIED in production — so the
+    # KPI surface is never unauthenticated on a production deployment.
+    METRICS_AUTH_TOKEN: str | None = None
+
     # CSRF
     CSRF_ENABLED: bool = False
 

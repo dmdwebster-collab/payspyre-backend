@@ -15,6 +15,7 @@ from app.core.config import settings
 from app.core.logging import setup_logging, log_request, get_logger
 from app.api.v1.api import api_router
 from app.core.security_middleware import SecurityHeadersMiddleware, RequestIDMiddleware, CsrfMiddleware
+from app.core.null_byte_middleware import RejectNullBytesMiddleware
 from app.core.auth import RLSAuthMiddleware
 from app.core.rate_limit import limiter, classify_endpoint, check_endpoint_rate_limit
 
@@ -63,6 +64,10 @@ app.add_middleware(RequestIDMiddleware)
 
 if settings.CSRF_ENABLED:
     app.add_middleware(CsrfMiddleware)
+
+# Reject NUL bytes in JSON bodies (turns a 500 at the DB/bcrypt layer into a 422).
+# Inside CORS so preflight is handled first; only inspects application/json bodies.
+app.add_middleware(RejectNullBytesMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
