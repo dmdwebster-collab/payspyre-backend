@@ -17,7 +17,9 @@ from datetime import date, datetime, timezone
 
 import pytest
 
+from app.models.platform.event import PlatformEvent
 from app.services.loan_servicing import (
+    LOAN_PAYMENT_RECORDED_EVENT,
     ScheduleRow,
     generate_amortization_schedule,
     record_payment,
@@ -165,6 +167,7 @@ class _Item:
 class _Loan:
     def __init__(self, schedule, principal_balance_cents):
         self.id = "loan-1"
+        self.application_id = "app-1"
         self.schedule = schedule
         self.principal_balance_cents = principal_balance_cents
         self.status = "active"
@@ -193,6 +196,51 @@ def test_full_payment_marks_oldest_installment_paid():
     # The payment row was recorded with its external ref.
     payments = [o for o in db.added if getattr(o, "external_ref", "n/a") != "n/a"]
     assert payments and payments[0].external_ref == "zr_txn_1"
+
+
+def _events(db):
+    return [o for o in db.added if isinstance(o, PlatformEvent)]
+
+
+def test_record_payment_emits_audit_event_with_amount_and_ref():
+    loan = _build_loan()
+    db = _FakeSession()
+    record_payment(db, loan, 110, _now(), "zumrails", external_ref="zr_txn_1")
+
+    events = _events(db)
+    assert len(events) == 1
+    event = events[0]
+    assert event.event_type == LOAN_PAYMENT_RECORDED_EVENT
+    assert event.actor == "system"
+    # No PII: ids + amounts only, application_id sourced straight off the loan.
+    assert event.application_id == "app-1"
+    assert event.payload["loan_id"] == "loan-1"
+    assert event.payload["application_id"] == "app-1"
+    assert event.payload["after"]["amount_cents"] == 110
+    assert event.payload["after"]["external_ref"] == "zr_txn_1"
+    assert event.payload["after"]["method"] == "zumrails"
+
+
+def test_record_payment_audit_event_omitted_on_idempotent_replay():
+    # A replayed receipt returns the original payment and applies nothing — so it
+    # must NOT emit a second money-IN audit row.
+    existing_payment = object()
+
+    class _DedupQuery:
+        def filter(self, *a, **k):
+            return self
+
+        def first(self):
+            return existing_payment
+
+    class _DedupSession(_FakeSession):
+        def query(self, *a, **k):
+            return _DedupQuery()
+
+    db = _DedupSession()
+    loan = _build_loan()
+    record_payment(db, loan, 110, _now(), "zumrails", external_ref="dup-1")
+    assert _events(db) == []
 
 
 def test_partial_payment_marks_partial():
