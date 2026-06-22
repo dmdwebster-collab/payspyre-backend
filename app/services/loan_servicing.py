@@ -77,17 +77,110 @@ class ScheduleRow:
     total_cents: int
 
 
+def _actual_360_schedule(
+    principal_cents: int,
+    annual_rate_bps: int,
+    term_months: int,
+    first_due_date: date,
+    accrual_start_date: date,
+) -> list[ScheduleRow]:
+    """Equal-payment schedule with actual/360 interest accrual (Turnkey-legacy).
+
+    Interest each period = balance * annual_rate * actual_days / 360, where ``days``
+    is the real calendar gap to the due date (and accrual_start -> first due for the
+    first installment). The regular payment is solved (integer cents, by bisection) so
+    the loan fully amortizes within ``term_months``; the final installment absorbs the
+    rounding remainder, preserving the SAME exact tie-out invariants as 30/360.
+    """
+    annual = annual_rate_bps / 10_000.0
+    due_dates = [_add_months(first_due_date, n) for n in range(term_months)]
+    period_starts = [accrual_start_date] + due_dates[:-1]
+    days = [max(0, (due_dates[i] - period_starts[i]).days) for i in range(term_months)]
+
+    def interest_at(balance: int, i: int) -> int:
+        return int(round(balance * annual * days[i] / 360.0))
+
+    if annual == 0.0:
+        # Interest-free: even principal split, remainder to the final row.
+        base = principal_cents // term_months
+        rows: list[ScheduleRow] = []
+        running = 0
+        for n in range(1, term_months + 1):
+            prin = base if n < term_months else principal_cents - running
+            running += prin
+            rows.append(ScheduleRow(n, due_dates[n - 1], prin, 0, prin))
+        return rows
+
+    def balance_after_term(payment: int) -> int:
+        bal = principal_cents
+        for i in range(term_months):
+            prin = payment - interest_at(bal, i)
+            prin = 0 if prin < 0 else (bal if prin > bal else prin)
+            bal -= prin
+        return bal
+
+    # Bisection for the smallest integer-cent payment that amortizes within term.
+    lo = principal_cents // term_months  # floor: the zero-interest payment
+    hi = lo + interest_at(principal_cents, 0) + 1
+    while balance_after_term(hi) > 0:
+        hi *= 2
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if balance_after_term(mid) <= 0:
+            hi = mid
+        else:
+            lo = mid + 1
+    payment_cents = lo
+
+    rows = []
+    balance = principal_cents
+    for n in range(1, term_months + 1):
+        interest = interest_at(balance, n - 1)
+        if n < term_months:
+            principal_part = payment_cents - interest
+            principal_part = 0 if principal_part < 0 else (
+                balance if principal_part > balance else principal_part
+            )
+            balance -= principal_part
+        else:
+            principal_part = balance  # final installment absorbs the remainder exactly
+            balance = 0
+        rows.append(
+            ScheduleRow(
+                installment_number=n,
+                due_date=due_dates[n - 1],
+                principal_cents=principal_part,
+                interest_cents=interest,
+                total_cents=principal_part + interest,
+            )
+        )
+    return rows
+
+
 def generate_amortization_schedule(
     principal_cents: int,
     annual_rate_bps: int,
     term_months: int,
     first_due_date: date,
+    *,
+    day_count: str = "30/360",
+    accrual_start_date: Optional[date] = None,
 ) -> list[ScheduleRow]:
     """Compute a standard fully-amortizing (equal-payment) schedule.
 
     PURE function — no DB, no side effects, deterministic.
 
-    Method:
+    ``day_count`` selects how per-period interest accrues:
+      * ``"30/360"`` (default): every period is a flat month, interest = balance *
+        annual_rate / 12. This is PaySpyre's native convention.
+      * ``"actual/360"``: interest = balance * annual_rate * ACTUAL_DAYS / 360, where
+        the day count is the real calendar gap between consecutive due dates (and, for
+        the first installment, between ``accrual_start_date`` and ``first_due_date``).
+        This matches Turnkey Lender's legacy book (reconciled to the cent against real
+        loans), so migrated/legacy-consistent loans can be originated identically.
+        ``accrual_start_date`` defaults to one month before ``first_due_date``.
+
+    Method (30/360):
       * Monthly rate r = annual_rate_bps / 10_000 / 12.
       * For r == 0 (interest-free): payment = principal / term, all interest 0.
       * Otherwise the standard annuity payment:
@@ -102,6 +195,8 @@ def generate_amortization_schedule(
             sum(total_cents)     == principal + sum(interest_cents) exactly.
         No fractional cents ever escape.
 
+    Both conventions guarantee the same exact tie-out invariants.
+
     Returns rows ordered by installment_number (1-based). Due dates step monthly
     from ``first_due_date``.
     """
@@ -111,6 +206,17 @@ def generate_amortization_schedule(
         raise ValueError("term_months must be positive")
     if annual_rate_bps < 0:
         raise ValueError("annual_rate_bps must be non-negative")
+    if day_count not in ("30/360", "actual/360"):
+        raise ValueError("day_count must be '30/360' or 'actual/360'")
+
+    if day_count == "actual/360":
+        return _actual_360_schedule(
+            principal_cents,
+            annual_rate_bps,
+            term_months,
+            first_due_date,
+            accrual_start_date or _add_months(first_due_date, -1),
+        )
 
     monthly_rate = (annual_rate_bps / 10_000.0) / 12.0
 
