@@ -129,20 +129,31 @@ class TestShaping:
         assert out.product_name == "Financing"
         assert out.currency == "CAD"
 
-    def test_build_summary_counts(self):
-        rows = [
-            _fake_application(status="approved"),
-            _fake_application(status="approved"),
-            _fake_application(status="declined"),
-            _fake_application(status="under_review"),
-            _fake_application(status="verifying"),
+    def test_summary_from_status_counts_buckets(self):
+        # (platform_status, count) pairs as a GROUP BY would return them.
+        pairs = [
+            ("approved", 2),
+            ("declined", 1),
+            ("under_review", 1),
+            ("verifying", 1),
         ]
-        summary = apps_endpoint.build_summary(rows)
+        summary = apps_endpoint._summary_from_status_counts(pairs)
         assert summary.approved == 2
         assert summary.declined == 1
         assert summary.manual_review == 1
         assert summary.started == 1
         assert summary.total == 5
+
+    def test_summary_counts_are_not_capped(self):
+        # The whole point of the GROUP BY: counts reflect ALL rows, not a capped
+        # fetch. A clinic with 5,000 approvals must report 5,000.
+        summary = apps_endpoint._summary_from_status_counts(
+            [("approved", 5000), ("started", 1200), ("withdrawn", 7)]
+        )
+        assert summary.approved == 5000
+        assert summary.started == 1200
+        assert summary.declined == 7  # withdrawn -> declined bucket
+        assert summary.total == 6207
 
 
 class TestFinancingLinkHelpers:
@@ -217,13 +228,18 @@ class TestApplicationsEndpoint:
         assert statuses == {"approved", "manual_review"}
 
     def test_dashboard_summary(self, app_under_test):
-        rows = [
-            _fake_application(status="approved"),
-            _fake_application(status="declined"),
-            _fake_application(status="under_review"),
-            _fake_application(status="started"),
+        # The summary now counts via SQL GROUP BY, so the DB yields
+        # (platform_status, count) pairs rather than full rows.
+        db = MagicMock()
+        (
+            db.query.return_value.filter.return_value.group_by.return_value.all
+        ).return_value = [
+            ("approved", 1),
+            ("declined", 1),
+            ("under_review", 1),
+            ("started", 1),
         ]
-        self._wire_db(app_under_test, rows)
+        app_under_test.dependency_overrides[get_db] = lambda: db
         client = TestClient(app_under_test)
         resp = client.get(f"{_BASE}/dashboard/summary")
         assert resp.status_code == 200, resp.text

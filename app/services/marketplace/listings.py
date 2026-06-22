@@ -39,7 +39,11 @@ from app.models.platform.marketplace import (
 )
 from app.models.platform.patient import PlatformPatient
 from app.services.marketplace.pricing import get_charge_trigger, price_lead
-from app.services.marketplace.visibility import is_visible_to_vendors, vendor_view
+from app.services.marketplace.visibility import (
+    is_visible_to_vendors,
+    vendor_view,
+    visible_lead_states,
+)
 
 
 # Ordering for the ``min_verification`` filter. Higher = deeper verification.
@@ -60,6 +64,22 @@ def _verification_rank(depth: str | None) -> int:
     return _VERIFICATION_ORDER.get(depth, _UNKNOWN_VERIFICATION_RANK)
 
 
+def _verification_depths_at_or_above(min_verification: str) -> list[str]:
+    """The known verification_depth values whose rank meets the ``min_verification``
+    floor — used to push the floor into SQL as ``verification_depth IN (...)``.
+
+    Unknown snapshot values are excluded (they have no rank), matching the Python
+    rule that an unrecognized depth never satisfies a "must be at least X" floor.
+    """
+    floor = _verification_rank(min_verification)
+    return [depth for depth, rank in _VERIFICATION_ORDER.items() if rank >= floor]
+
+
+# Browse page size for the vendor lead feed. Bounds the previously unbounded
+# scan; callers can page with ``offset``. Generous for beta lead volumes.
+_DEFAULT_LEAD_PAGE_LIMIT = 200
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -77,9 +97,18 @@ def _emit_event(db: Session, *, event_type: str, payload: dict, patient_id=None)
 
 
 def _load_listing(db: Session, listing_id) -> PlatformMarketplaceListing:
+    # Join the patient and drop soft-deleted (PIPEDA-erased) patients' listings —
+    # an erased patient must not be loadable by direct id through ANY read path
+    # (pause / interested_clinics / select_clinic / express_interest /
+    # get_listing_for_vendor / book_appointment). Every one of those goes through
+    # here, so the guard lives here rather than at each call site. create_listing
+    # loads the patient directly (with its own deleted_at guard) and does NOT use
+    # this helper, so the create/own-listing flow is unaffected.
     listing = (
         db.query(PlatformMarketplaceListing)
+        .join(PlatformPatient, PlatformPatient.id == PlatformMarketplaceListing.patient_id)
         .filter(PlatformMarketplaceListing.id == listing_id)
+        .filter(PlatformPatient.deleted_at.is_(None))
         .one_or_none()
     )
     if listing is None:
@@ -289,46 +318,58 @@ def list_leads_for_vendor(
     treatment_category: str | None = None,
     max_distance_km: int | None = None,
     min_verification: str | None = None,
+    limit: int = _DEFAULT_LEAD_PAGE_LIMIT,
+    offset: int = 0,
 ) -> list[dict]:
-    """Return ``vendor_view`` projections of every live, visible listing.
+    """Return ``vendor_view`` projections of live, visible listings.
 
-    "Live" = status 'active', not expired, and ``is_visible_to_vendors``. Filters:
-      treatment_category: listing must carry this category.
-      min_verification:   listing.verification_depth must rank >= this rung
+    Every filter is applied in SQL (previously the whole active set was fetched
+    and filtered in Python). "Live" = status 'active', not expired, patient not
+    PIPEDA-erased, and ``lead_state`` visible to vendors. Filters:
+      treatment_category: listing's ``treatment_categories`` array contains it.
+      min_verification:   ``verification_depth`` ranks >= this rung
                           (none < id_verified < id_bank_verified < id_bank_cb_verified;
-                          unknown snapshots sort lowest so they never satisfy a floor).
-      max_distance_km:    PLACEHOLDER — no geocoding yet, so this filters on
+                          unknown snapshots never satisfy a floor).
+      max_distance_km:    PLACEHOLDER — no geocoding yet, so filters on
                           ``listing.max_travel_km <= max_distance_km``. Real
                           FSA-to-clinic distance is future work.
+
+    Results are newest-first and bounded by ``limit`` (default
+    ``_DEFAULT_LEAD_PAGE_LIMIT``); page with ``offset``.
     """
     # Join the patient to exclude soft-deleted (PIPEDA-erased) patients' listings —
     # an erased patient must not remain discoverable as a marketplace lead.
-    listings = (
+    query = (
         db.query(PlatformMarketplaceListing)
         .join(PlatformPatient, PlatformPatient.id == PlatformMarketplaceListing.patient_id)
         .filter(PlatformPatient.deleted_at.is_(None))
         .filter(PlatformMarketplaceListing.status == "active")
         .filter(PlatformMarketplaceListing.expires_at > _now())
-        .all()
+        # Visibility rule pushed to SQL (was an in-Python is_visible_to_vendors check).
+        .filter(PlatformMarketplaceListing.lead_state.in_(visible_lead_states()))
     )
 
-    min_rank = _verification_rank(min_verification) if min_verification else None
+    if treatment_category is not None:
+        # TEXT[] containment: treatment_category = ANY(treatment_categories).
+        query = query.filter(
+            PlatformMarketplaceListing.treatment_categories.any(treatment_category)
+        )
+    if min_verification is not None:
+        query = query.filter(
+            PlatformMarketplaceListing.verification_depth.in_(
+                _verification_depths_at_or_above(min_verification)
+            )
+        )
+    if max_distance_km is not None:
+        query = query.filter(PlatformMarketplaceListing.max_travel_km <= max_distance_km)
 
-    out: list[dict] = []
-    for listing in listings:
-        if not is_visible_to_vendors(listing.lead_state):
-            continue
-        if treatment_category is not None and treatment_category not in (
-            listing.treatment_categories or []
-        ):
-            continue
-        if min_rank is not None and _verification_rank(listing.verification_depth) < min_rank:
-            continue
-        # Placeholder distance filter — see docstring.
-        if max_distance_km is not None and listing.max_travel_km > max_distance_km:
-            continue
-        out.append(vendor_view(listing))
-    return out
+    listings = (
+        query.order_by(PlatformMarketplaceListing.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+        .all()
+    )
+    return [vendor_view(listing) for listing in listings]
 
 
 def express_interest(
