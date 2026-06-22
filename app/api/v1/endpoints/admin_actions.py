@@ -28,7 +28,7 @@ from app.core.auth import require_roles
 from app.db.base import get_db
 from app.models.platform.credit_application import PlatformCreditApplication
 from app.models.platform.event import PlatformEvent
-from app.models.platform.loan import PlatformLoan
+from app.models.platform.loan import PlatformLoan, PlatformLoanPayment
 from app.services import loan_servicing
 from app.services.adverse_action import send_adverse_action_notice
 
@@ -82,6 +82,25 @@ def decide(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Application already {app.status}; pass override=true to re-decide.",
         )
+
+    # Orphan-loan guard: overriding an APPROVED app away from "approved" would leave
+    # its already-booked loan live (a declined/referred application with a fundable
+    # loan). Block it — the loan must be charged-off/cancelled first. (Re-approving
+    # is separately backstopped by the uq_platform_loans_application unique constraint.)
+    if body.override and app.status == "approved" and body.outcome != "approved":
+        existing_loan = (
+            db.query(PlatformLoan.id)
+            .filter(PlatformLoan.application_id == application_id)
+            .first()
+        )
+        if existing_loan is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Application has a booked loan ({existing_loan[0]}); cancel or "
+                    f"charge-off the loan before re-deciding."
+                ),
+            )
 
     actor = _actor_id(user)
     new_status = "under_review" if body.outcome == "refer" else body.outcome
@@ -146,6 +165,22 @@ def record_payment(
     loan = _get_loan(db, loan_id)
     if body.amount_cents <= 0:
         raise HTTPException(status_code=422, detail="amount_cents must be positive")
+    # Idempotency: when the caller supplies an external_ref, a retry / double-submit
+    # must NOT post the payment (and reduce the balance) twice. Return the existing
+    # receipt instead. Without an external_ref we can't dedupe, so the caller owns it.
+    if body.external_ref:
+        prior = (
+            db.query(PlatformLoanPayment)
+            .filter(
+                PlatformLoanPayment.loan_id == loan_id,
+                PlatformLoanPayment.external_ref == body.external_ref,
+            )
+            .first()
+        )
+        if prior is not None:
+            return {"payment_id": str(prior.id), "loan_status": loan.status,
+                    "principal_balance_cents": loan.principal_balance_cents,
+                    "idempotent_replay": True}
     payment = loan_servicing.record_payment(
         db, loan, body.amount_cents, body.received_at or datetime.now(timezone.utc),
         body.method, body.external_ref,
@@ -251,8 +286,14 @@ def list_pending(db: Session = Depends(get_db), _user=Depends(require_roles("adm
 
 
 def _load_pending(db: Session, request_event_id: int) -> dict:
+    # FOR UPDATE locks the request-event row so two concurrent approvers serialize:
+    # the first holds the lock through its commit, the second then re-reads and sees
+    # the now-present terminal event → 409. Without this lock both could pass the
+    # "already decided?" check under READ COMMITTED and double-execute (e.g. a double
+    # disbursement). The unique index in migration 039 is the belt-and-suspenders.
     row = db.execute(
-        text("SELECT payload FROM platform_events WHERE id = :id AND event_type = 'admin_action_requested'"),
+        text("SELECT payload FROM platform_events "
+             "WHERE id = :id AND event_type = 'admin_action_requested' FOR UPDATE"),
         {"id": request_event_id},
     ).first()
     if row is None:
