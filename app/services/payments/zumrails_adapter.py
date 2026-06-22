@@ -54,6 +54,14 @@ ASSUMPTION: amounts are sent as decimal **dollars** (e.g. 100.50), NOT cents.
 We accept ``amount_cents`` at the boundary (the codebase's money unit) and
 convert. Flip ``AMOUNT_IN_CENTS = True`` if Zumrails actually wants minor units.
 
+MONEY UNIT CONTRACT: amounts are **integer cents** everywhere internally. The
+cents→dollars conversion happens at exactly one place (``_format_amount``) and
+is done in ``Decimal`` — never float arithmetic — so it is exact. The vendor
+wire format requires a JSON number and ``json.dumps`` cannot serialize a
+``Decimal``, so the final value is emitted as a float, but only after proving it
+round-trips back to the exact 2dp ``Decimal`` (true for every loan amount below
+~$90T); otherwise we raise rather than risk a wrong-amount disbursement.
+
 RESPONSE SHAPE: ``{"isError": false, "result": {"Id": "<uuid>",
 "TransactionStatus": "Pending" | "InProgress" | "Completed" | "Failed" |
 "Cancelled", ...}}``. We normalize ``TransactionStatus`` to our own
@@ -464,13 +472,31 @@ class ZumrailsAdapter:
         }
 
     def _format_amount(self, amount_cents: int) -> Any:
+        # Money is integer cents everywhere internally; we only convert to the
+        # vendor's wire unit at this single boundary. The conversion is done in
+        # ``Decimal`` (never float arithmetic) so cents → dollars is exact.
+        if not isinstance(amount_cents, int) or isinstance(amount_cents, bool):
+            # Guard the money-out path against a float/str sneaking in upstream:
+            # any non-int amount here is a programming error, not a vendor one.
+            raise PermanentZumrailsError("amount_cents must be an int (minor units)")
         if AMOUNT_IN_CENTS:
             return amount_cents
-        # Decimal dollars, 2dp, no float artifacts.
+        # Exact decimal dollars, 2dp. We must hand httpx (``json.dumps``) a
+        # JSON-encodable number, and json.dumps cannot serialize Decimal, so we
+        # emit a float — but ONLY after proving the float round-trips back to the
+        # exact 2dp value. For every realistic loan amount this holds (Python's
+        # shortest-repr recovers any value below ~2**53 cents ≈ $90T exactly);
+        # the guard turns the theoretical large-amount FP-drift case into a hard
+        # failure on the MONEY OUT path instead of a silent wrong-amount push.
         dollars = (Decimal(amount_cents) / Decimal(100)).quantize(
             Decimal("0.01"), rounding=ROUND_HALF_UP
         )
-        return float(dollars)
+        wire = float(dollars)
+        if Decimal(str(wire)) != dollars:
+            raise PermanentZumrailsError(
+                "amount_cents too large to represent losslessly as a wire amount"
+            )
+        return wire
 
     def _parse_response(self, response: httpx.Response, op: str) -> dict[str, Any]:
         """Classify HTTP status → transient/permanent, then return parsed JSON.
