@@ -1,27 +1,26 @@
-"""Adverse-action (ECOA / FCRA) notice service — audit §7 (launch blocker).
+"""Notice-of-decision (declined application) service — audit §7 (launch blocker).
 
-When a credit application is **declined**, a regulated lender must deliver an
-*adverse-action notice* to the applicant. This module builds that notice and
-sends it. It is deliberately a **standalone, side-effect-only** module (mirrors
-``loan_lifecycle``): it owns NO decisioning logic, only the post-decline
+CANADA-ONLY. PaySpyre operates solely in Canada; this notice is built to the
+Canadian regime (federal + provincial), NOT US ECOA/FCRA. When a credit
+application is **declined**, the applicant is sent a notice explaining the
+decision. This module builds + sends it as a **standalone, side-effect-only**
+module (mirrors ``loan_lifecycle``): no decisioning logic, only the post-decline
 notification + audit.
 
-What the notice must contain (legal requirements):
+What the notice contains:
 
-1. **Principal reasons for the denial** — the specific, accurate reasons credit
-   was denied (ECOA / Reg B §1002.9; FCRA §615(a) where a bureau was used).
-   We translate the engine's stable ``decision_reasons`` codes into plain
+1. **Principal reasons for the decision** — the specific, accurate reasons. We
+   translate the engine's stable ``decision_reasons`` codes into plain
    applicant-facing sentences.
-2. **Credit-bureau disclosure** — when a consumer report was used in the
-   decision, FCRA §615(a) requires naming the consumer reporting agency (CRA)
-   that furnished it, with its address + toll-free number, and a statement that
-   the CRA did not make the decision and cannot explain it. When a real bureau
-   was used we name it from settings; otherwise we emit a generic CRA
-   disclosure.
-3. **ECOA rights / non-discrimination statement** — the standard ECOA boilerplate
-   (the federal agency notice that creditors may not discriminate on the basis
-   of race, color, religion, national origin, sex, marital status, age, etc.),
-   plus the FCRA consumer rights (free report within 60 days, right to dispute).
+2. **Consumer-reporting agency disclosure** — when a consumer report was used,
+   we name the agency (Equifax Canada / TransUnion Canada) with its contact
+   details and state that it did not make the decision and cannot explain it.
+   When a real bureau was used we name it from settings; otherwise a generic
+   consumer-reporting disclosure.
+3. **Consumer-report rights** (PIPEDA + provincial consumer reporting
+   legislation: access the file, be told a report's contents, dispute
+   inaccuracies) and a **non-discrimination notice** (Canadian Human Rights Act +
+   provincial human rights codes).
 
 Operational contract (mirrors the ``book_loan`` hook in
 ``FlowOrchestrator._decide``):
@@ -38,14 +37,11 @@ Operational contract (mirrors the ``book_loan`` hook in
   bureau *name*. The SIN, raw bureau data, and the rendered letter body are
   NEVER written to the event log.
 
-LEGAL-REVIEW CAVEAT: the ECOA/FCRA wording below is the standard federal
-boilerplate (US Reg B / FCRA). PaySpyre operates in Canada (Equifax Canada /
-TransUnion Canada), where the analogous regime is provincial consumer-reporting
-legislation + PIPEDA rather than ECOA/FCRA. The task specified ECOA/FCRA wording
-explicitly, so that is what is included here verbatim. **Counsel must confirm the
-correct jurisdiction's adverse-action wording before this goes live** — the
+LEGAL-REVIEW CAVEAT: the disclosure wording below states the Canadian rights at
+a high level (PIPEDA + provincial consumer reporting + human rights legislation).
+**Counsel must confirm the precise wording per province before launch** — the
 content is structured so the boilerplate strings are the only thing that needs
-swapping.
+swapping, and per-province variants can be selected by the applicant's province.
 """
 from __future__ import annotations
 
@@ -72,8 +68,8 @@ EMAIL_SUBJECT = "Important information about your PaySpyre application"
 # ---------------------------------------------------------------------------
 
 # Maps the engine's stable ``decision_reasons`` codes (flow_engine.py) to the
-# plain-language "principal reason for denial" the applicant reads. ECOA / Reg B
-# requires the *specific* reason, not a generic "you did not score high enough".
+# plain-language "principal reason" the applicant reads — the *specific* reason,
+# not a generic "you did not score high enough".
 _REASON_TEXT: dict[str, str] = {
     "quebec_coming_soon": "Service is not yet available in your province.",
     "manual_review_band": "Your application requires further review before it can be approved.",
@@ -161,36 +157,37 @@ def _bureau_disclosure() -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# ECOA / FCRA boilerplate (standard federal wording)
+# Canadian disclosures (LEGAL REVIEW REQUIRED — per province)
 # ---------------------------------------------------------------------------
+# Canada has no single federal ECOA/Reg-B equivalent. Non-discrimination in
+# credit is governed by the Canadian Human Rights Act + each province's human
+# rights code; consumer-report access/dispute rights are governed by PIPEDA +
+# each province's consumer reporting legislation. The wording below states those
+# rights at a high level and is structured so counsel can drop in the precise
+# provincial language. Counsel must confirm the correct wording per province
+# before launch.
 
-# ECOA non-discrimination notice — Reg B §1002.9(b)(1) prescribed wording.
-ECOA_NOTICE = (
-    "Notice: The federal Equal Credit Opportunity Act prohibits creditors from "
-    "discriminating against credit applicants on the basis of race, color, "
-    "religion, national origin, sex, marital status, age (provided the applicant "
-    "has the capacity to enter into a binding contract); because all or part of "
-    "the applicant's income derives from any public assistance program; or "
-    "because the applicant has in good faith exercised any right under the "
-    "Consumer Credit Protection Act. The federal agency that administers "
-    "compliance with this law concerning this creditor is the Consumer Financial "
-    "Protection Bureau, 1700 G Street NW, Washington, DC 20006."
+NONDISCRIMINATION_NOTICE = (
+    "PaySpyre evaluates every applicant against the same criteria and does not "
+    "deny credit on the basis of any ground protected by applicable Canadian "
+    "human rights legislation, including the Canadian Human Rights Act and the "
+    "human rights code of your province or territory. If you believe this "
+    "decision was based on a prohibited ground, you may contact us, and you may "
+    "also contact the human rights commission in your province or territory or "
+    "the Canadian Human Rights Commission."
 )
 
-# FCRA §615(a) consumer-report rights — free report within 60 days + right to
-# dispute. Surfaced whenever a consumer report (bureau) contributed to the
-# decision; the generic fallback keeps the structural disclosure intact.
-FCRA_RIGHTS = (
+CONSUMER_REPORT_RIGHTS = (
     "In evaluating your application, a consumer report (credit report) may have "
-    "been used. The consumer reporting agency named below did not make the "
-    "decision to take the adverse action and is unable to provide you with the "
-    "specific reasons why the action was taken. You have a right under the Fair "
-    "Credit Reporting Act to know the information contained in your credit file "
-    "at the consumer reporting agency. You have a right to a free copy of your "
-    "report from the agency if you request it no later than 60 days after you "
-    "receive this notice. You also have a right to dispute, directly with the "
-    "consumer reporting agency, the accuracy or completeness of any information "
-    "in your report."
+    "been used. The consumer reporting agency named below did not make this "
+    "decision and cannot provide the specific reasons for it. Under Canada's "
+    "Personal Information Protection and Electronic Documents Act (PIPEDA) and "
+    "the consumer reporting legislation of your province or territory, you have "
+    "the right to be told the contents of any consumer report used, to access "
+    "the information in your file at the consumer reporting agency, and to "
+    "dispute the accuracy or completeness of any information it contains. To "
+    "obtain a copy of your consumer report, contact the consumer reporting "
+    "agency listed below."
 )
 
 
@@ -218,8 +215,8 @@ def build_notice_content(
         "application_id": str(application_id),
         "principal_reasons": principal_reasons,
         "bureau": bureau,
-        "ecoa_notice": ECOA_NOTICE,
-        "fcra_rights": FCRA_RIGHTS,
+        "nondiscrimination_notice": NONDISCRIMINATION_NOTICE,
+        "consumer_report_rights": CONSUMER_REPORT_RIGHTS,
     }
 
 
@@ -262,17 +259,22 @@ def render_notice_html(content: dict[str, Any]) -> str:
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Notice of Action Taken</title>
     <style>
-        body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; }}
-        .header {{ background: linear-gradient(135deg, #666 0%, #444 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }}
-        .header h1 {{ margin: 0; font-size: 24px; }}
-        .content {{ background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px; }}
-        .info-box {{ background: white; border-left: 4px solid #444; padding: 15px; margin: 20px 0; }}
-        .reason-box {{ background: #fff; border: 1px solid #ddd; padding: 15px; border-radius: 5px; margin: 20px 0; }}
-        .legal {{ font-size: 12px; color: #555; border-top: 1px solid #ddd; margin-top: 25px; padding-top: 15px; }}
-        .footer {{ text-align: center; margin-top: 30px; color: #666; font-size: 12px; }}
+        body {{ font-family: 'Work Sans', Arial, sans-serif; line-height: 1.6; color: #1a1a1a; max-width: 600px; margin: 0 auto; padding: 20px; }}
+        .header {{ background: #1a1a1a; color: #fff; padding: 28px; text-align: center; border-radius: 20px 20px 0 0; }}
+        .header h1 {{ margin: 0; font-size: 22px; }}
+        .content {{ background: #faf9f6; padding: 30px; border-radius: 0 0 20px 20px; }}
+        h3 {{ font-size: 16px; font-weight: 600; }}
+        .info-box {{ background: #fff; border-left: 4px solid #1a1a1a; padding: 16px; margin: 20px 0; border-radius: 8px; }}
+        .reason-box {{ background: #fff; border: 1px solid #e6e3da; padding: 16px; border-radius: 8px; margin: 20px 0; }}
+        .legal {{ font-size: 12px; color: #555; border-top: 1px solid #e6e3da; margin-top: 25px; padding-top: 15px; }}
+        .footer {{ text-align: center; margin-top: 28px; color: #666; font-size: 12px; }}
     </style>
 </head>
 <body>
+    <div style="padding:16px 0 10px; text-align:center;">
+        <svg width="24" height="24" viewBox="99.5 71.5 48 48.2" xmlns="http://www.w3.org/2000/svg" style="vertical-align:middle;" role="img" aria-label="PaySpyre"><path fill="#84d1d1" fill-opacity="0.4" d="M128.074 72C128.074 87.082 140.66 90.852 146.953 90.852L146.953 100.277C131.852 100.277 118.637 90.852 128.074 72Z"/><path fill="#84d1d1" fill-opacity="0.4" d="M118.879 119.215C118.879 104.133 106.293 100.363 100 100.363L100 90.938C115.105 90.938 128.32 100.363 118.879 119.215Z"/><path fill="#84d1d1" d="M100 90.879C115.082 90.879 118.852 78.293 118.852 72L128.277 72C128.277 87.105 118.852 100.32 100 90.879Z"/><path fill="#84d1d1" d="M146.953 100.336C131.871 100.336 128.102 112.922 128.102 119.215L118.676 119.215C118.676 104.109 128.102 90.895 146.953 100.336Z"/></svg>
+        <span style="font-size:18px; font-weight:600; color:#1a1a1a; vertical-align:middle; margin-left:8px;">PaySpyre</span>
+    </div>
     <div class="header">
         <h1>Notice of Action Taken</h1>
     </div>
@@ -290,14 +292,14 @@ def render_notice_html(content: dict[str, Any]) -> str:
         {bureau_block}
 
         <div class="legal">
-            <p><strong>Your rights under the Fair Credit Reporting Act</strong></p>
-            <p>{content['fcra_rights']}</p>
-            <p><strong>Equal Credit Opportunity Act notice</strong></p>
-            <p>{content['ecoa_notice']}</p>
+            <p><strong>Your consumer-reporting rights</strong></p>
+            <p>{content['consumer_report_rights']}</p>
+            <p><strong>Non-discrimination notice</strong></p>
+            <p>{content['nondiscrimination_notice']}</p>
         </div>
 
         <div class="footer">
-            <p>PaySpyre Financial | 123 Finance Street, Suite 100 | Kelowna, BC V1Y 1X1</p>
+            <p>PaySpyre Financial | Kelowna, BC</p>
             <p>This is an automated notice. Please do not reply to this email.</p>
         </div>
     </div>
@@ -333,13 +335,13 @@ def render_notice_text(content: dict[str, Any]) -> str:
         )
     lines += [
         "",
-        "Your rights under the Fair Credit Reporting Act:",
-        content["fcra_rights"],
+        "Your consumer-reporting rights:",
+        content["consumer_report_rights"],
         "",
-        "Equal Credit Opportunity Act notice:",
-        content["ecoa_notice"],
+        "Non-discrimination notice:",
+        content["nondiscrimination_notice"],
         "",
-        "PaySpyre Financial | 123 Finance Street, Suite 100 | Kelowna, BC V1Y 1X1",
+        "PaySpyre Financial | Kelowna, BC",
     ]
     return "\n".join(lines)
 
@@ -455,7 +457,7 @@ class _EmailServiceDispatcher:
     """Default dispatcher for the adverse-action notice.
 
     Routes through the CONFIGURED email provider (``EMAIL_PROVIDER``) — SendGrid for
-    the business, Resend as fallback — so the legally-required ECOA/FCRA notice
+    the business, Resend as fallback — so the legally-required decline notice
     actually delivers. The previous implementation only ever hit the Resend
     singleton, which no-ops silently when ``RESEND_API_KEY`` is empty (it always is,
     since the business uses SendGrid) — so declined applicants got no notice.

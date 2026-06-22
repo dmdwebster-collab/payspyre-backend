@@ -1,0 +1,36 @@
+name: Notification processor
+
+# Drains the notification outbox: maps new platform_events (decision_made →
+# approval email; payment_due_reminder / payment_overdue from the dunning job)
+# to sent notifications. Idempotent + deduped; safe to re-run. Requires:
+#   secret PROD_DATABASE_URL — the production DB connection string
+#   (postgresql+psycopg2://...). The DO managed DB's "Trusted Sources" must
+#   allow GitHub Actions runners (or be open) for this to connect.
+#   Real sends additionally need USE_REAL_NOTIFICATIONS=true + vendor creds
+#   (SendGrid/Twilio) configured in the settings area / env.
+#
+# PARKED: the `schedule:` trigger is commented out until there is a real
+# environment+DB to run against (same reason as delinquency-cron.yml). The
+# transactional lane wants a tighter cadence than the nightly delinquency job,
+# so the schedule below is every 15 minutes — re-enable by uncommenting it once
+# PROD_DATABASE_URL (or STAGING_DATABASE_URL) is set. Until then it runs on
+# demand via the Actions "Run workflow" button (workflow_dispatch).
+on:
+  # schedule:
+  #   - cron: "*/15 * * * *"   # every 15 min — re-enable when a DB secret is wired
+  workflow_dispatch: {}
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e .
+      - name: Run notification processor
+        env:
+          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+          USE_REAL_NOTIFICATIONS: "true"
+        run: python -m app.jobs.notifications
