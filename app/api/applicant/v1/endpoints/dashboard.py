@@ -63,14 +63,45 @@ class MarkReadOut(BaseModel):
 # --- helpers ----------------------------------------------------------------
 
 # A dashboard_notification is "read" iff a dashboard_notification_read receipt
-# event exists referencing its id in payload->>'read_event_id'. Expressed as a
-# correlated NOT EXISTS so we can both filter (unread_only) and project the flag.
-_READ_EXISTS_SQL = """
-    EXISTS (
-        SELECT 1 FROM platform_events r
-        WHERE r.event_type = :read_type
-          AND r.payload->>'read_event_id' = e.id::text
-    )
+# event exists referencing its id in payload->>'read_event_id'. These are fully
+# STATIC SQL literals (no string interpolation — every caller value is a bound
+# param :etype/:pid/:read_type), so there is no injection surface.
+_LIST_SQL = """
+    SELECT e.id AS id, e.occurred_at AS occurred_at,
+           e.payload->>'subject' AS subject,
+           e.payload->>'body' AS body,
+           e.payload->>'notification_type' AS notification_type,
+           e.payload->>'loan_id' AS loan_id,
+           EXISTS (SELECT 1 FROM platform_events r
+                   WHERE r.event_type = :read_type
+                     AND r.payload->>'read_event_id' = e.id::text) AS read
+    FROM platform_events e
+    WHERE e.event_type = :etype AND e.patient_id = :pid
+    ORDER BY e.id DESC
+"""
+
+_LIST_UNREAD_SQL = """
+    SELECT e.id AS id, e.occurred_at AS occurred_at,
+           e.payload->>'subject' AS subject,
+           e.payload->>'body' AS body,
+           e.payload->>'notification_type' AS notification_type,
+           e.payload->>'loan_id' AS loan_id,
+           FALSE AS read
+    FROM platform_events e
+    WHERE e.event_type = :etype AND e.patient_id = :pid
+      AND NOT EXISTS (SELECT 1 FROM platform_events r
+                      WHERE r.event_type = :read_type
+                        AND r.payload->>'read_event_id' = e.id::text)
+    ORDER BY e.id DESC
+"""
+
+_UNREAD_COUNT_SQL = """
+    SELECT COUNT(*) AS n
+    FROM platform_events e
+    WHERE e.event_type = :etype AND e.patient_id = :pid
+      AND NOT EXISTS (SELECT 1 FROM platform_events r
+                      WHERE r.event_type = :read_type
+                        AND r.payload->>'read_event_id' = e.id::text)
 """
 
 
@@ -89,25 +120,9 @@ def list_notifications(
     receipt for each event id. ``?unread_only=true`` filters to those without a
     receipt.
     """
-    sql = f"""
-        SELECT
-            e.id AS id,
-            e.occurred_at AS occurred_at,
-            e.payload->>'subject' AS subject,
-            e.payload->>'body' AS body,
-            e.payload->>'notification_type' AS notification_type,
-            e.payload->>'loan_id' AS loan_id,
-            {_READ_EXISTS_SQL} AS read
-        FROM platform_events e
-        WHERE e.event_type = :etype
-          AND e.patient_id = :pid
-        {{unread_filter}}
-        ORDER BY e.id DESC
-    """
-    unread_filter = f"AND NOT {_READ_EXISTS_SQL}" if unread_only else ""
     rows = (
         db.execute(
-            text(sql.format(unread_filter=unread_filter)),
+            text(_LIST_UNREAD_SQL if unread_only else _LIST_SQL),
             {
                 "etype": DASHBOARD_EVENT_TYPE,
                 "pid": str(claims.patient_id),
@@ -137,15 +152,8 @@ def unread_count(
     claims: ApplicantClaims = Depends(get_current_applicant),
 ):
     """Count of this patient's dashboard notifications with no read receipt."""
-    sql = f"""
-        SELECT COUNT(*) AS n
-        FROM platform_events e
-        WHERE e.event_type = :etype
-          AND e.patient_id = :pid
-          AND NOT {_READ_EXISTS_SQL}
-    """
     n = db.execute(
-        text(sql),
+        text(_UNREAD_COUNT_SQL),
         {
             "etype": DASHBOARD_EVENT_TYPE,
             "pid": str(claims.patient_id),
