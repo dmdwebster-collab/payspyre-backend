@@ -1,4 +1,4 @@
-"""Unit tests for the adverse-action (ECOA/FCRA) notice service.
+"""Unit tests for the Canadian notice-of-decision (declined) service.
 
 Fully mocked: a MagicMock dispatcher + a MagicMock DB session — NO live DB, NO
 network. We control the idempotency query (``_already_sent``) and the patient
@@ -46,7 +46,7 @@ def _make_db(*, already_sent: bool, patient):
 # ---------------------------------------------------------------------------
 
 
-def test_content_includes_reasons_and_ecoa_boilerplate():
+def test_content_includes_reasons_and_canadian_disclosures():
     content = adverse_action.build_notice_content(
         applicant_name="Jane Doe",
         application_id="app-123",
@@ -58,15 +58,22 @@ def test_content_includes_reasons_and_ecoa_boilerplate():
     assert "minimum requirement" in html
     assert "identity verification" in html  # verification_failed:identity line
 
-    # ECOA non-discrimination boilerplate.
-    assert "Equal Credit Opportunity Act" in html
-    assert "race, color, religion, national origin, sex, marital status" in html
-    assert "Consumer Financial Protection Bureau" in html
+    # Canadian non-discrimination notice (human rights regime, not US ECOA).
+    assert "Canadian Human Rights Act" in html
+    assert "human rights" in html.lower()
 
-    # FCRA consumer rights — free report within 60 days + dispute.
-    assert "60 days" in html
+    # Canadian consumer-report rights (PIPEDA + provincial), with dispute right.
+    assert "PIPEDA" in html or "Personal Information Protection" in html
     assert "dispute" in html
-    assert "Fair Credit Reporting Act" in html
+
+    # Guard: NO US statutes / regulators leak into a Canadian-only notice.
+    for us_term in (
+        "Equal Credit Opportunity Act",
+        "Fair Credit Reporting Act",
+        "Consumer Financial Protection Bureau",
+        "Washington",
+    ):
+        assert us_term not in html, f"US reference leaked: {us_term}"
 
 
 def test_unknown_reason_code_falls_back_safely():
@@ -123,7 +130,8 @@ def test_sends_to_patient_email_and_records_event():
     dispatcher.send_email.assert_called_once()
     kwargs = dispatcher.send_email.call_args.kwargs
     assert kwargs["to"] == "patient@example.com"
-    assert "Equal Credit Opportunity Act" in kwargs["html_content"]
+    assert "Canadian Human Rights Act" in kwargs["html_content"]
+    assert "Equal Credit Opportunity Act" not in kwargs["html_content"]
     assert "minimum requirement" in kwargs["html_content"]
 
     # An audit event was added + flushed.

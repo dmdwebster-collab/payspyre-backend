@@ -58,11 +58,20 @@ def _wired(*, loan, verifier, verify_ok: bool = True):
     adapter = MagicMock(name="zumrails_adapter")
     adapter.verify_webhook.return_value = verify_ok
 
+    # Default: collection settlement reports "not ours" so a disbursement-unknown
+    # txn falls through to orphaned. Collection tests flip these via
+    # payments.loan_payments.on_collection_*.return_value inside the with-block.
+    lp = MagicMock(name="loan_payments")
+    lp.on_collection_complete.return_value = False
+    lp.on_collection_failed.return_value = False
+
     app.dependency_overrides[get_db] = lambda: db
     app.dependency_overrides[get_signature_verifier] = lambda: verifier
     with patch.object(payments, "_build_adapter", return_value=adapter), patch.object(
         payments, "loan_lifecycle"
-    ) as lifecycle, patch(
+    ) as lifecycle, patch.object(
+        payments, "loan_payments", lp
+    ), patch(
         "app.services.observability.posthog_bridge.capture_event", MagicMock()
     ):
         try:
@@ -192,3 +201,33 @@ def test_missing_transaction_id_returns_400(tc):
 
     assert r.status_code == 400
     lifecycle.on_disbursement_complete.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Collection (Pay Now) settlement — loan not found by disbursement_ref, but the
+# txn is a borrower payment resolved via the loan_payment_initiated event log.
+# ---------------------------------------------------------------------------
+
+
+def test_collection_completed_settles(tc):
+    verifier = _make_verifier()
+    with _wired(loan=None, verifier=verifier) as (db, adapter, lifecycle):
+        lp = payments.loan_payments  # the patched mock (real module after the block)
+        lp.on_collection_complete.return_value = True
+        r = tc.post(_PATH, content=_body("Completed"))
+        assert r.status_code == 200
+        assert r.json()["status"] == "accepted"
+        lp.on_collection_complete.assert_called_once_with(db, _TXN_ID)
+        lifecycle.on_disbursement_complete.assert_not_called()
+
+
+def test_collection_failed_settles(tc):
+    verifier = _make_verifier()
+    with _wired(loan=None, verifier=verifier) as (db, adapter, lifecycle):
+        lp = payments.loan_payments
+        lp.on_collection_failed.return_value = True
+        r = tc.post(_PATH, content=_body("Failed"))
+        assert r.status_code == 200
+        assert r.json()["status"] == "accepted"
+        lp.on_collection_failed.assert_called_once_with(db, _TXN_ID)
+        lifecycle.on_disbursement_failed.assert_not_called()

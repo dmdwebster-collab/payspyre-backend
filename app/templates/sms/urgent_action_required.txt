@@ -1,1 +1,1 @@
-URGENT PaySpyre: {{ alert_title }}. Action required by {{ deadline }}. {{ time_remaining }} remaining. Details: {{ action_url }} Call 1-800-PAYSPYRE immediately.
+URGENT PaySpyre: {{ alert_title }}. Action required by {{ deadline }}. {{ time_remaining }} remaining. Details: {{ action_url }} Contact us at support@payspyre.com immediately.

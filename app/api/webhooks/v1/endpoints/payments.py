@@ -39,7 +39,7 @@ from app.core.logging import get_logger
 from app.db.base import get_db
 from app.models.platform.event import PlatformEvent
 from app.models.platform.loan import PlatformLoan
-from app.services import integration_settings, loan_lifecycle
+from app.services import integration_settings, loan_lifecycle, loan_payments
 from app.services.payments.zumrails_adapter import (
     PermanentZumrailsError,
     TransactionStatus,
@@ -207,6 +207,22 @@ async def receive_zumrails_transaction(
         .first()
     )
     if loan is None:
+        # Not a disbursement — it may be a borrower payment (collection), which is
+        # resolved from the loan_payment_initiated event log rather than a column.
+        if txn_status == TransactionStatus.COMPLETED:
+            if loan_payments.on_collection_complete(db, txn_id):
+                logger.info("zumrails_collection_settled", transaction_id=txn_id)
+                return {"status": "accepted"}
+        elif txn_status == TransactionStatus.FAILED:
+            if loan_payments.on_collection_failed(db, txn_id):
+                logger.info("zumrails_collection_failed", transaction_id=txn_id)
+                return {"status": "accepted"}
+        else:
+            db.commit()  # non-terminal collection update — ack, nonce persisted
+            return JSONResponse(
+                status_code=status.HTTP_202_ACCEPTED,
+                content={"status": "ignored"},
+            )
         logger.info("zumrails_webhook_orphaned", transaction_id=txn_id, status=txn_status.value)
         db.commit()  # persist the nonce claim so a retry of the same unknown no-ops
         return JSONResponse(

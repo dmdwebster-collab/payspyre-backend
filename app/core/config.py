@@ -101,6 +101,11 @@ class Settings(BaseSettings):
     # before the vendor call. Disable only for tests that need to bypass it.
     USE_SUPPRESSION_CHECK: bool = True
 
+    # Borrower-facing portal base URL — used by the notification processor (WS2)
+    # to build agreement / payment / account links in transactional + dunning
+    # emails. Override per-env; no trailing slash.
+    BORROWER_PORTAL_BASE_URL: str = "https://app.payspyre.com"
+
     # Observability — P8.0 PostHog bridge. Default disabled; flip per-env via
     # OBSERVABILITY_ENABLED=true once POSTHOG_API_KEY is set. The allowlist is
     # a CSV of platform_events event_type values; everything else is dropped

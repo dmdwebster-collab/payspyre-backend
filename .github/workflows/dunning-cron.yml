@@ -1,0 +1,31 @@
+name: Dunning scan (nightly)
+
+# Emits payment reminder / overdue events for installments hitting a milestone
+# today (3 days before due; +1/+7/+14 past due — see DunningPolicy). The
+# notification processor (notifications-cron.yml) then delivers them.
+# Idempotent; safe to re-run. Requires:
+#   secret PROD_DATABASE_URL — the production DB connection string.
+#
+# PARKED like the other crons until a real DB secret is wired. When enabling,
+# schedule this a little BEFORE the notification processor run so emitted events
+# get picked up the same morning. Send-time / quiet-hours (policy Q5) is governed
+# by WHEN this + the processor run — default target 09:00 local; the cron below
+# is 15:00 UTC ≈ 08:00 Pacific (adjust for DST / chosen timezone when enabling).
+on:
+  # schedule:
+  #   - cron: "0 15 * * *"   # ~08:00 Pacific — re-enable when a DB secret is wired
+  workflow_dispatch: {}
+
+jobs:
+  dun:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e .
+      - name: Run dunning scan
+        env:
+          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+        run: python -m app.jobs.dunning
