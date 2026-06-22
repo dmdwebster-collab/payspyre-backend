@@ -20,6 +20,7 @@ from app.models.platform.marketplace import (
 from app.models.platform.profile_change_request import (
     PlatformVendorProfileChangeRequest,
 )
+from app.models.platform.notification_outbox import PlatformNotificationOutbox
 
 __all__ = [
     "PlatformPatient",
@@ -38,4 +39,5 @@ __all__ = [
     "PlatformMarketplaceListing",
     "PlatformMarketplaceVendorInterest",
     "PlatformVendorProfileChangeRequest",
+    "PlatformNotificationOutbox",
 ]

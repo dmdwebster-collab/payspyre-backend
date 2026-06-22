@@ -338,8 +338,14 @@ class RealNotificationDispatcher:
         contact_method: Literal["sms", "email"],
         token: str,
         ttl_seconds: int = 900,
+        enqueue_on_failure: bool = True,
     ) -> int:
-        """Persist the magic-link event, send via vendor, persist the audit, return event id."""
+        """Persist the magic-link event, send via vendor, persist the audit, return event id.
+
+        ``enqueue_on_failure`` (default True) controls whether a transient failure
+        enqueues a durable retry row. The outbox WORKER passes False — it is already
+        the retry, and re-enqueueing from it would fork a duplicate queue row.
+        """
         recipient = self._resolve_recipient(patient_id, contact_method)
         self._check_suppression(contact_method, recipient)
         issued_event = self._record_issued_event(
@@ -349,9 +355,25 @@ class RealNotificationDispatcher:
         sender = self._build_sender(contact_method)
         try:
             outcome = self._send(sender, contact_method, recipient, token, ttl_seconds)
-        except NotificationError:
+        except TransientNotificationError as exc:
             # The caller never commits → session rollback clears the issued
-            # event. Re-raise so PatientAuthService → FastAPI surface a 500.
+            # event. Before re-raising, optionally enqueue a durable retry so an
+            # out-of-band worker can re-drive the send (P7.4c). Enqueue happens
+            # on its OWN session/transaction so it survives the request rollback,
+            # and never blocks the request on the backoff delays. Inert unless
+            # settings.NOTIFICATION_OUTBOX_ENABLED is flipped on.
+            if enqueue_on_failure:
+                self._maybe_enqueue_retry(
+                    patient_id=patient_id,
+                    application_id=application_id,
+                    contact_method=contact_method,
+                    ttl_seconds=ttl_seconds,
+                    exc=exc,
+                )
+            raise
+        except NotificationError:
+            # Permanent failure (bad recipient, opted out, …) — retrying will
+            # not help, so never enqueue. Re-raise so the 500 surfaces.
             raise
 
         self._record_sent_event(
@@ -365,6 +387,56 @@ class RealNotificationDispatcher:
         return issued_event.id
 
     # -- internals ----------------------------------------------------------
+
+    def _maybe_enqueue_retry(
+        self,
+        *,
+        patient_id: UUID,
+        application_id: UUID,
+        contact_method: str,
+        ttl_seconds: int,
+        exc: TransientNotificationError,
+    ) -> None:
+        """Persist a durable retry row on its OWN session so it survives the
+        request-scoped rollback. Best-effort: a failure to enqueue must NEVER
+        mask the original send failure (we still re-raise that), so this is
+        wrapped defensively and only runs when the feature flag is on.
+
+        Lazy imports keep the cold-import cost out of the hot send path and
+        avoid a circular import (the outbox repo imports from this module).
+        """
+        if not settings.NOTIFICATION_OUTBOX_ENABLED:
+            return
+        try:
+            from app.db.base import SessionLocal
+            from app.repositories.notification_outbox import NotificationOutboxRepo
+            from app.services.notification_retry import (
+                next_attempt_at,
+                parse_retry_delays,
+            )
+
+            delays = parse_retry_delays(settings.NOTIFICATION_RETRY_DELAYS)
+            now = datetime.now(timezone.utc)
+            ttl_expires_at = now + timedelta(seconds=ttl_seconds)
+            outbox_db = SessionLocal()
+            try:
+                NotificationOutboxRepo(outbox_db).enqueue(
+                    patient_id=patient_id,
+                    application_id=application_id,
+                    contact_method=contact_method,
+                    ttl_expires_at=ttl_expires_at,
+                    # The inline send was attempt 1; the first worker retry is
+                    # attempt 2 — schedule it via the first backoff delay.
+                    attempts=1,
+                    next_attempt_at=next_attempt_at(2, delays, now=now),
+                    last_error_class=type(exc).__name__,
+                    last_error_redacted=_redact_pii(str(exc)),
+                )
+                outbox_db.commit()
+            finally:
+                outbox_db.close()
+        except Exception:  # pragma: no cover - never let enqueue mask the send error
+            logger.warning("notification outbox enqueue failed", exc_info=True)
 
     def _check_suppression(self, contact_method: str, recipient: str) -> None:
         """P7.4b — block sends to recipients on the suppression list before any
