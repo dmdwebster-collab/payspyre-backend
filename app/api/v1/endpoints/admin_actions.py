@@ -29,7 +29,7 @@ from app.db.base import get_db
 from app.models.platform.credit_application import PlatformCreditApplication
 from app.models.platform.event import PlatformEvent
 from app.models.platform.loan import PlatformLoan, PlatformLoanPayment
-from app.services import loan_servicing
+from app.services import loan_lifecycle, loan_servicing
 from app.services.adverse_action import send_adverse_action_notice
 
 router = APIRouter()
@@ -119,9 +119,13 @@ def decide(
     if body.outcome == "approved":
         db.flush()
         try:
-            loan = loan_servicing.create_loan_from_application(db, app)
+            # Delegate to the hardened lifecycle entry point: idempotent (returns
+            # the existing loan if already booked), race-safe, and emits the
+            # `loan_booked` money event — none of which the inline
+            # create_loan_from_application call did.
+            loan = loan_lifecycle.book_loan(db, app)
             loan_id = str(loan.id)
-        except Exception as exc:  # e.g. a loan already booked for this application
+        except Exception as exc:  # pricing/validation failure booking the loan
             db.rollback()
             raise HTTPException(status_code=409, detail=f"Could not book loan: {exc}")
     elif body.outcome == "declined":
@@ -322,22 +326,50 @@ def approve_action(request_event_id: int, db: Session = Depends(get_db),
 
     action = payload["action"]
     loan = _get_loan(db, UUID(payload["loan_id"]))
-    if action == "charge_off":
-        loan.status = "charged_off"
-        result = {"loan_status": "charged_off"}
-    elif action == "disburse":
-        # Kick off funding. Actual Zumrails payout completes via the inbound
-        # webhook (loan_lifecycle.on_disbursement_complete); here we move the
-        # disbursement lifecycle forward and record the approved intent.
-        loan.disbursement_status = "in_progress"
-        result = {"disbursement_status": "in_progress"}
-    else:
-        raise HTTPException(status_code=422, detail=f"Unknown action '{action}'")
 
+    # Validate + precondition-check BEFORE recording the approval, so a rejected
+    # precondition can't leave an orphan approval event.
+    if action not in ("charge_off", "disburse"):
+        raise HTTPException(status_code=422, detail=f"Unknown action '{action}'")
+    if action == "disburse":
+        # The admin "release disbursement" action funds an already-SIGNED loan that
+        # hasn't started disbursing — it does not bypass e-sign. (Audit H1/L4.)
+        if loan.agreement_status != "signed":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Loan agreement is not signed (agreement_status="
+                       f"{loan.agreement_status!r}); cannot disburse.",
+            )
+        if loan.disbursement_status != "not_started":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Disbursement already {loan.disbursement_status!r}.",
+            )
+
+    # Record the approval FIRST (within the request-row lock), THEN execute via the
+    # hardened lifecycle entry point. The entry point commits — which commits this
+    # flushed approval event too, so a concurrent approver (blocked on the lock)
+    # re-reads, sees the terminal event, and 409s. Migration 039's unique index
+    # backstops the approval event itself. No state column is written inline here.
     _audit(db, event_type="admin_action_approved", actor=actor,
            payload={"request_event_id": request_event_id, "action": action,
                     "loan_id": payload["loan_id"], "approved_by": actor})
-    db.commit()
+    db.flush()
+
+    try:
+        if action == "charge_off":
+            loan = loan_lifecycle.charge_off_loan(
+                db, loan, reason_code=payload.get("reason_code"), actor=actor)
+            result = {"loan_status": loan.status}
+        else:  # disburse
+            loan = loan_lifecycle.initiate_disbursement(db, loan)
+            result = {"disbursement_status": loan.disbursement_status,
+                      "disbursement_ref": loan.disbursement_ref}
+    except ValueError as exc:  # business-rule rejection (e.g. charging off a paid loan)
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+
+    db.commit()  # belt — the entry point already committed; a no-op flushes nothing new
     return {"request_event_id": request_event_id, "action": action, "executed": True, **result}
 
 
