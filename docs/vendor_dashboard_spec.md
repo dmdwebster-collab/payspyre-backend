@@ -162,7 +162,7 @@ interface ProfileChangeRequest {
 - `POST /api/v1/admin/vendor-profile-change-requests/{id}/approve` — applies the **whitelisted** `requested_changes` to the `vendors` row (the ONLY write path), stamps `reviewed_by`/`reviewed_at`/`review_note`. Whitelist re-enforced at apply time (admin-only keys skipped). Pending-only → 409 if already decided.
 - `POST /api/v1/admin/vendor-profile-change-requests/{id}/reject` — marks rejected, stamps review audit, does NOT mutate `vendors`.
 
-Guarded by `require_roles("admin")`. Review audit columns added in **migration 035**. The clinic-facing API itself still exposes no mutation of `vendors`.
+Guarded by `require_roles("admin")`. Review audit columns added in **migration 037** (the change-requests table is **migration 036**; renumbered from 034/035 to chain cleanly after the turnkey migration that landed on main). The clinic-facing API itself still exposes no mutation of `vendors`.
 
 ---
 

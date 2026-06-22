@@ -1,7 +1,7 @@
 """Create platform_vendor_profile_change_requests (spec §3.6)
 
-Revision ID: 034_vendor_profile_change_requests
-Revises: 033_payment_idempotency_and_event_index
+Revision ID: 036_vendor_profile_change_requests
+Revises: 035_turnkey_migration_fields
 Create Date: 2026-06-22
 
 Phase 4 (account self-service). Vendors CANNOT edit their profile directly — the
@@ -23,8 +23,8 @@ from sqlalchemy.dialects import postgresql
 
 
 # revision identifiers, used by Alembic.
-revision: str = "034_vendor_profile_change_requests"
-down_revision: Union[str, None] = "033_payment_idempotency_and_event_index"
+revision: str = "036_vendor_profile_change_requests"
+down_revision: Union[str, None] = "035_turnkey_migration_fields"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

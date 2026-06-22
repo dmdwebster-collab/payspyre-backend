@@ -1,7 +1,7 @@
 """Add admin-review audit columns to platform_vendor_profile_change_requests
 
-Revision ID: 035_vendor_profile_change_review_cols
-Revises: 034_vendor_profile_change_requests
+Revision ID: 037_vendor_profile_change_review_cols
+Revises: 036_vendor_profile_change_requests
 Create Date: 2026-06-22
 
 Admin-side approval flow (spec §3.6). When an admin approves/rejects a vendor
@@ -19,8 +19,8 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = "035_vendor_profile_change_review_cols"
-down_revision: Union[str, None] = "034_vendor_profile_change_requests"
+revision: str = "037_vendor_profile_change_review_cols"
+down_revision: Union[str, None] = "036_vendor_profile_change_requests"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

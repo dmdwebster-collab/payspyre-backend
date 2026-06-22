@@ -49,7 +49,7 @@ class PlatformVendorProfileChangeRequest(Base):
     # Free-text reason supplied by the vendor (optional).
     note = Column(Text, nullable=True)
 
-    # Admin-review audit (migration 035). NULL until an admin approves/rejects.
+    # Admin-review audit (migration 037). NULL until an admin approves/rejects.
     # ``reviewed_by`` is the deciding admin (stringified user id); ``review_note``
     # is the admin's decision note (distinct from the vendor's ``note``).
     reviewed_by = Column(String, nullable=True)
