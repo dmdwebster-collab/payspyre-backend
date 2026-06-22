@@ -572,12 +572,15 @@ def reconcile_stuck_disbursements(
         if txn.status == TransactionStatus.COMPLETED:
             on_disbursement_complete(db, loan, ref=loan.disbursement_ref)
             result.loans_completed.append(str(loan.id))
-        elif txn.status in (TransactionStatus.FAILED, TransactionStatus.CANCELLED):
+        elif txn.status == TransactionStatus.FAILED:
             on_disbursement_failed(db, loan, ref=loan.disbursement_ref)
             result.loans_failed.append(str(loan.id))
         else:
-            # PENDING / IN_PROGRESS / UNKNOWN — genuinely still settling. Leave it
-            # in_progress; the next sweep will check again.
+            # PENDING / IN_PROGRESS / CANCELLED / UNKNOWN — non-terminal. We treat
+            # these EXACTLY as the live Zumrails webhook does (payments.py: only
+            # COMPLETED/FAILED write; everything else is ignored) so the same vendor
+            # status never produces a different money outcome by arrival path. Leave
+            # the loan in_progress; the next sweep (or a terminal webhook) decides it.
             logger.info(
                 "loan_disbursement_reconcile_still_pending",
                 loan_id=str(loan.id),

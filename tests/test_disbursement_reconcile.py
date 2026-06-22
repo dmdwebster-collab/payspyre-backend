@@ -160,15 +160,19 @@ def test_reconcile_fails_loan_when_vendor_failed():
     assert result.loans_failed == ["loan-1"]
 
 
-def test_reconcile_cancelled_marks_failed():
+def test_reconcile_cancelled_is_non_terminal_like_the_webhook():
+    # CANCELLED is non-terminal here, EXACTLY as the live Zumrails webhook treats
+    # it (payments.py only writes on COMPLETED/FAILED). The loan is left in_progress
+    # so the same vendor status can't yield a different money outcome by arrival path.
     loan = _Loan(disbursement_ref="zr_cancel")
     db = _ReconcileSession([loan])
     zr = _MockZumrails({"zr_cancel": TransactionStatus.CANCELLED})
 
     result = loan_lifecycle.reconcile_stuck_disbursements(db, zumrails=zr)
 
-    assert loan.disbursement_status == "failed"
-    assert result.loans_failed == ["loan-1"]
+    assert loan.disbursement_status == "in_progress"
+    assert result.loans_failed == []
+    assert result.still_pending == 1
 
 
 def test_reconcile_leaves_still_pending_untouched():
