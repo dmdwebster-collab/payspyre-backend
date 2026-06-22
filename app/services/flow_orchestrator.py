@@ -888,7 +888,7 @@ class FlowOrchestrator:
                     loan_lifecycle.send_agreement(self.db, loan)
 
                 self._pending_outbound.append(("send_agreement", _send_agreement))
-        # P9.x — ECOA/FCRA: on a decline, send the adverse-action notice (audit §7).
+        # P9.x — on a decline, send the Canadian notice of decision (audit §7).
         # The notice is an OUTBOUND email (SendGrid HTTP) + its own DB event write, so
         # it is deferred to post-commit for the same lock/latency reason as the e-sign
         # invite above. It is internally DEFENSIVE + idempotent (dedupes on its own

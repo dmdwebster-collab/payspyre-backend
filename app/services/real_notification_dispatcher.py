@@ -259,6 +259,26 @@ class ResendEmailSender:
             )
         return SendOutcome(vendor="resend", vendor_message_id=str(message_id), status="sent")
 
+    def send_message(self, *, to_email: str, subject: str, html: str) -> SendOutcome:
+        """Generic email send (WS1) — same vendor/error contract as
+        ``send_magic_link``, but subject + body are supplied by the caller
+        (rendered from a template) rather than the hardcoded magic-link copy."""
+        resend.api_key = self._api_key
+        params: dict = {
+            "from": self._from_email,
+            "to": to_email,
+            "subject": subject,
+            "html": html,
+        }
+        try:
+            result = resend.Emails.send(params)
+        except Exception as exc:  # SDK has no typed exception hierarchy yet
+            raise _classify_resend_error(exc) from exc
+        message_id = (result or {}).get("id", "") or ""
+        if not message_id:
+            raise TransientNotificationError("Resend ack did not include an email id")
+        return SendOutcome(vendor="resend", vendor_message_id=str(message_id), status="sent")
+
 
 class TwilioSmsSender:
     """Wraps ``twilio.rest.Client.messages.create`` for magic-link SMS.
@@ -311,6 +331,28 @@ class TwilioSmsSender:
         # Twilio statuses 'sent' / 'accepted' / 'scheduled' are reported as
         # "queued" in the event log — the inbound StatusCallback (P7.4b) will
         # upgrade to 'sent' / 'delivered' / 'failed'.
+        normalized: Literal["queued", "sent"] = "sent" if status_raw == "sent" else "queued"
+        return SendOutcome(vendor="twilio", vendor_message_id=str(sid), status=normalized)
+
+    def send_message(self, *, to_phone: str, body: str) -> SendOutcome:
+        """Generic SMS send (WS1) — same vendor/error + StatusCallback contract
+        as ``send_magic_link``, with a caller-supplied body."""
+        create_kwargs = {"to": to_phone, "from_": self._from_number, "body": body}
+        base = settings.WEBHOOK_PUBLIC_BASE_URL.rstrip("/")
+        if base:
+            create_kwargs["status_callback"] = f"{base}/api/webhooks/v1/notifications/twilio"
+        try:
+            message = self._client.messages.create(**create_kwargs)
+        except Exception as exc:
+            raise _classify_twilio_error(exc) from exc
+        status_raw = getattr(message, "status", "queued") or "queued"
+        if status_raw in ("failed", "undelivered"):
+            raise PermanentNotificationError(f"Twilio sync status {status_raw}")
+        if status_raw not in self._ACCEPTED_SYNC_STATUSES:
+            raise TransientNotificationError(f"Unexpected Twilio sync status {status_raw}")
+        sid = getattr(message, "sid", "") or ""
+        if not sid:
+            raise TransientNotificationError("Twilio ack did not include a message sid")
         normalized: Literal["queued", "sent"] = "sent" if status_raw == "sent" else "queued"
         return SendOutcome(vendor="twilio", vendor_message_id=str(sid), status=normalized)
 
@@ -385,6 +427,57 @@ class RealNotificationDispatcher:
             magic_link_event_id=issued_event.id,
         )
         return issued_event.id
+
+    def send_notification(
+        self,
+        *,
+        patient_id: UUID,
+        notification_type: str,
+        contact_method: Literal["sms", "email"],
+        context: dict,
+        application_id: Optional[UUID] = None,
+        loan_id: Optional[str] = None,
+        correlation_id: Optional[UUID] = None,
+        source_event_id: Optional[int] = None,
+    ) -> int:
+        """Render ``notification_type`` against ``context`` and send it (WS1).
+
+        Mirrors ``send_magic_link``'s suppression + vendor + audit path, but the
+        body comes from ``notification_render`` and the audit event carries
+        ``notification_type`` / ``source_event_id`` instead of a magic-link id.
+
+        Returns the ``notification_sent`` event id. Raises ``NotificationError``
+        on vendor failure (the WS2 processor catches it to decide retry); no
+        ``notification_sent`` event lands on failure, matching the magic-link
+        rollback semantics.
+        """
+        from app.services import notification_render
+
+        recipient = self._resolve_recipient(patient_id, contact_method)
+        self._check_suppression(contact_method, recipient)
+
+        if contact_method == "email":
+            subject, html = notification_render.render_email(notification_type, context)
+        else:
+            body = notification_render.render_sms(notification_type, context)
+
+        sender = self._build_sender(contact_method)
+        if contact_method == "email":
+            outcome = sender.send_message(to_email=recipient, subject=subject, html=html)
+        else:
+            outcome = sender.send_message(to_phone=recipient, body=body)
+
+        return self._record_notification_sent(
+            patient_id=patient_id,
+            application_id=application_id,
+            contact_method=contact_method,
+            recipient=recipient,
+            outcome=outcome,
+            notification_type=notification_type,
+            loan_id=loan_id,
+            correlation_id=correlation_id,
+            source_event_id=source_event_id,
+        )
 
     # -- internals ----------------------------------------------------------
 
@@ -610,6 +703,54 @@ class RealNotificationDispatcher:
         # P8.0 — fan-out (notification_sent is on the default allowlist).
         from app.services.observability.posthog_bridge import capture_event
         capture_event(event)
+
+    def _record_notification_sent(
+        self,
+        *,
+        patient_id: UUID,
+        application_id: Optional[UUID],
+        contact_method: str,
+        recipient: str,
+        outcome: SendOutcome,
+        notification_type: str,
+        loan_id: Optional[str],
+        correlation_id: Optional[UUID],
+        source_event_id: Optional[int],
+    ) -> int:
+        """Audit row for a generic notification (WS1). Same ``notification_sent``
+        event_type as the magic-link path so the existing Twilio/Resend status
+        webhooks reconcile delivery by (vendor, vendor_message_id) for free; the
+        differentiator is ``notification_type`` + ``source_event_id``."""
+        payload = {
+            "v": 1,
+            "actor": {"type": "system", "id": "system"},
+            "application_id": str(application_id) if application_id else None,
+            "patient_id": str(patient_id),
+            "channel": contact_method,
+            "vendor": outcome.vendor,
+            "vendor_message_id": outcome.vendor_message_id,
+            "status": outcome.status,
+            "recipient_redacted": _hash_recipient(contact_method, recipient),
+            "notification_type": notification_type,
+            "loan_id": loan_id,
+            "source_event_id": source_event_id,
+            "attempted_at": datetime.now(timezone.utc).isoformat(),
+            "error_class": None,
+            "error_message_redacted": None,
+        }
+        event = PlatformEvent(
+            event_type="notification_sent",
+            actor="system",
+            patient_id=patient_id,
+            application_id=application_id,
+            payload=payload,
+            correlation_id=correlation_id,
+        )
+        self.db.add(event)
+        self.db.flush()
+        from app.services.observability.posthog_bridge import capture_event
+        capture_event(event)
+        return event.id
 
     # -- mock parity: tests that assert dispatcher._sent introspection patterns
     # remain on MockNotificationDispatcher. The real dispatcher has no

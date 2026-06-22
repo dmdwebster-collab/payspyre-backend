@@ -68,21 +68,6 @@ def validate_canadian_postal_code(postal_code: str) -> str:
     return postal_code
 
 
-def validate_ssn(ssn: str) -> str:
-    """Validate SSN format."""
-    ssn = sanitize_string(ssn, max_length=11)
-
-    ssn = re.sub(r"[^\d]", "", ssn)
-
-    if len(ssn) != 9:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid SSN format",
-        )
-
-    return f"***-**-{ssn[-4:]}"
-
-
 def validate_sin(sin: str) -> str:
     """Validate Canadian Social Insurance Number format.
 

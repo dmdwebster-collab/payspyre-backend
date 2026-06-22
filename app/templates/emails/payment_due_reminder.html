@@ -3,18 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Application Approved</title>
+    <title>Payment Reminder</title>
     <style>
         body { font-family: 'Work Sans', Arial, sans-serif; line-height: 1.6; color: #1a1a1a; max-width: 600px; margin: 0 auto; padding: 20px; }
         .header { background: #84D1D1; color: #1a1a1a; padding: 28px; text-align: center; border-radius: 20px 20px 0 0; }
         .header h1 { margin: 0; font-size: 24px; }
-        .header p { margin: 6px 0 0; }
         .content { background: #faf9f6; padding: 30px; border-radius: 0 0 20px 20px; }
-        .badge { background: #1a1a1a; color: #fff; padding: 6px 16px; border-radius: 20px; font-weight: 600; font-size: 13px; display: inline-block; margin-bottom: 20px; letter-spacing: 0.04em; }
         .info-box { background: #fff; border-left: 4px solid #84D1D1; padding: 16px; margin: 20px 0; border-radius: 8px; }
-        .info-box strong { color: #0F6E56; }
         .button { display: inline-block; background: #84D1D1; color: #1a1a1a; padding: 14px 28px; text-decoration: none; border-radius: 12px; margin: 16px 0; font-weight: 600; }
-        .note { background: #fff; border: 1px solid #e6e3da; padding: 15px; border-radius: 8px; margin-top: 20px; font-size: 14px; }
         .footer { text-align: center; margin-top: 28px; color: #666; font-size: 12px; }
     </style>
 </head>
@@ -24,39 +20,22 @@
         <span style="font-size:18px; font-weight:600; color:#1a1a1a; vertical-align:middle; margin-left:8px;">PaySpyre</span>
     </div>
     <div class="header">
-        <h1>You're approved</h1>
-        <p>Your loan application has been approved</p>
+        <h1>Your payment is coming up</h1>
     </div>
-
     <div class="content">
-        <div class="badge">APPROVED</div>
-
         <p>Hi {{ borrower_name }},</p>
-
-        <p>Great news — your loan application for <strong>{{ amount }}</strong> has been approved.</p>
+        <p>This is a friendly reminder that your next loan payment is due in {{ days_until_due }} day(s).</p>
 
         <div class="info-box">
-            <p><strong>Application:</strong> {{ application_id }}</p>
-            <p><strong>Approved amount:</strong> {{ amount }}</p>
-            <p><strong>Interest rate:</strong> {{ interest_rate }}</p>
-            <p><strong>Term:</strong> {{ term }}</p>
-            <p><strong>Monthly payment:</strong> {{ monthly_payment }}</p>
+            <p><strong>Amount due:</strong> {{ payment_amount }}</p>
+            <p><strong>Due date:</strong> {{ due_date }}</p>
+            <p><strong>Loan:</strong> {{ loan_id }}</p>
         </div>
 
-        <p>To finalize your loan:</p>
-        <ul>
-            <li>Review and sign your loan agreement</li>
-            <li>Set up your payment method</li>
-            <li>Confirm your bank account for disbursement</li>
-        </ul>
+        <a href="{{ payment_url }}" class="button">View your account</a>
 
-        <a href="{{ agreement_url }}" class="button">Review &amp; sign agreement</a>
-
-        <div class="note">
-            <strong>Please note:</strong> this approval is subject to final verification. Funds are disbursed within 1–2 business days after all documents are signed and verified.
-        </div>
-
-        <p>Questions? Contact us at support@payspyre.com.</p>
+        <p>If you've already arranged this payment, thank you — you can disregard this message.</p>
+        <p>Questions? Manage your account any time at <a href="{{ account_url }}">{{ account_url }}</a>.</p>
 
         <div class="footer">
             <p>PaySpyre Financial | Kelowna, BC</p>
