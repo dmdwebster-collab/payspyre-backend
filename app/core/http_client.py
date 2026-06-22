@@ -6,9 +6,10 @@ strings, or any secret material (only ``provider``, ``op``, ``method``, host+pat
 status, and latency_ms). Adapters historically rolled their own ``httpx.Client``
 with ad-hoc single-float timeouts and (Didit/Flinks) zero logging.
 
-This does NOT retry — outbound *create*/charge calls must not be blindly retried.
-A caller that wants bounded retries for an idempotent GET/auth call should layer
-that explicitly.
+``request()`` does NOT retry — outbound *create*/charge calls must not be blindly
+retried. For an idempotent GET/status call, ``request_with_retry()`` layers a
+small, bounded retry-with-backoff on top (transport errors + 5xx only); callers
+must opt in and must never use it for non-idempotent POSTs.
 """
 from __future__ import annotations
 
@@ -79,3 +80,58 @@ def request(
         latency_ms=round((time.monotonic() - start) * 1000, 1),
     )
     return resp
+
+
+# Small + bounded so a flaky vendor doesn't pin a worker: 3 total attempts with
+# 0.2s, 0.4s backoff between them => at most ~0.6s of sleeping on top of the
+# per-attempt timeouts. Tune via args, not by raising these defaults blindly.
+_DEFAULT_MAX_ATTEMPTS = 3
+_DEFAULT_BACKOFF_BASE = 0.2
+
+
+def request_with_retry(
+    method: str,
+    url: str,
+    *,
+    provider: str,
+    op: str = "",
+    client: httpx.Client | None = None,
+    max_attempts: int = _DEFAULT_MAX_ATTEMPTS,
+    backoff_base: float = _DEFAULT_BACKOFF_BASE,
+    sleep=time.sleep,
+    **kwargs,
+) -> httpx.Response:
+    """Like :func:`request`, but with a bounded retry for *idempotent* calls only.
+
+    ONLY use this for safe-to-repeat reads (GET/status). Retrying a non-idempotent
+    POST could double-create at the vendor — use plain :func:`request` for those.
+
+    Retries on transport errors (timeouts / connection resets, surfaced as
+    ``httpx.HTTPError``) and on 5xx responses, with linear backoff
+    (``backoff_base * attempt``). 4xx responses are returned immediately (they
+    won't get better on retry). After ``max_attempts``, the last error is raised
+    or the last 5xx response is returned so the caller handles it as before.
+    """
+    last_exc: httpx.HTTPError | None = None
+    resp: httpx.Response | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            resp = request(
+                method, url, provider=provider, op=op, client=client, **kwargs
+            )
+        except httpx.HTTPError as exc:
+            last_exc = exc
+            resp = None
+            if attempt == max_attempts:
+                raise
+        else:
+            if resp.status_code < 500 or attempt == max_attempts:
+                return resp
+        # transient failure with attempts left — back off then retry
+        sleep(backoff_base * attempt)
+    # Unreachable in practice (loop returns/raises on the final attempt), but keep
+    # mypy + the type checker happy.
+    if resp is not None:
+        return resp
+    assert last_exc is not None
+    raise last_exc
