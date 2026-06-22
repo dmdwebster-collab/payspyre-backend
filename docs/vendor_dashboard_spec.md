@@ -154,7 +154,15 @@ interface ProfileChangeRequest {
   created_at: string;
 }
 ```
-**Whitelist (vendor-requestable):** `contact_name`, `email`, `phone`, `address_line1`, `address_line2`, `city`, `province`, `postal_code`. **Never requestable:** `business_name`, `dba_name`, `business_type`, `status`, `compliance_score`, `license_*` — these are admin-only and any such key in the body is rejected (422). Admin approval/mutation endpoints are out of scope for this clinic-facing API (separate admin surface).
+**Whitelist (vendor-requestable):** `contact_name`, `email`, `phone`, `address_line1`, `address_line2`, `city`, `province`, `postal_code`. **Never requestable:** `business_name`, `dba_name`, `business_type`, `status`, `compliance_score`, `license_*` — these are admin-only and any such key in the body is rejected (422).
+
+**Admin counterpart (BUILT — on the main `/api/v1`, admin-role-gated, NOT the clinic API):**
+- `GET  /api/v1/admin/vendor-profile-change-requests?status=&vendor_id=&limit=` — review queue across all vendors
+- `GET  /api/v1/admin/vendor-profile-change-requests/{id}` — detail
+- `POST /api/v1/admin/vendor-profile-change-requests/{id}/approve` — applies the **whitelisted** `requested_changes` to the `vendors` row (the ONLY write path), stamps `reviewed_by`/`reviewed_at`/`review_note`. Whitelist re-enforced at apply time (admin-only keys skipped). Pending-only → 409 if already decided.
+- `POST /api/v1/admin/vendor-profile-change-requests/{id}/reject` — marks rejected, stamps review audit, does NOT mutate `vendors`.
+
+Guarded by `require_roles("admin")`. Review audit columns added in **migration 035**. The clinic-facing API itself still exposes no mutation of `vendors`.
 
 ---
 

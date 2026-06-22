@@ -14,7 +14,7 @@ appear here. The whitelist is enforced server-side, not trusted from the client.
 """
 from uuid import uuid4
 
-from sqlalchemy import Column, DateTime, ForeignKey, Text, func
+from sqlalchemy import Column, DateTime, ForeignKey, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID, JSONB, ENUM
 from sqlalchemy.orm import relationship
 
@@ -48,6 +48,13 @@ class PlatformVendorProfileChangeRequest(Base):
 
     # Free-text reason supplied by the vendor (optional).
     note = Column(Text, nullable=True)
+
+    # Admin-review audit (migration 035). NULL until an admin approves/rejects.
+    # ``reviewed_by`` is the deciding admin (stringified user id); ``review_note``
+    # is the admin's decision note (distinct from the vendor's ``note``).
+    reviewed_by = Column(String, nullable=True)
+    reviewed_at = Column(DateTime(timezone=True), nullable=True)
+    review_note = Column(Text, nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(

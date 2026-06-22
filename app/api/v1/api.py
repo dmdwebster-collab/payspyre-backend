@@ -1,12 +1,25 @@
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import auth, credit_products, health, integration_settings
+from app.api.v1.endpoints import (
+    admin_vendor_changes,
+    auth,
+    credit_products,
+    health,
+    integration_settings,
+)
 
 api_router = APIRouter()
 api_router.include_router(health.router, tags=["health"])
 api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
 api_router.include_router(credit_products.router, prefix="/credit-products", tags=["credit-products"])
 api_router.include_router(integration_settings.router, prefix="/integration-settings", tags=["integration-settings"])
+# Admin review of vendor profile change requests (spec §3.6). Admin-only; the
+# approve route is the only path that writes vendor-requested changes onto vendors.
+api_router.include_router(
+    admin_vendor_changes.router,
+    prefix="/admin/vendor-profile-change-requests",
+    tags=["admin-vendor-changes"],
+)
 # V1 `patients` router UN-MOUNTED 2026-06-20 (audit): its endpoints were a broken
 # access-control surface — GET/PATCH /patients/{id} were gated only by a valid staff
 # JWT (no role, no object scope) → any authenticated user could read/write ANY
