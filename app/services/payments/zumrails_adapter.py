@@ -87,6 +87,7 @@ from typing import Any, Literal, Optional
 
 import httpx
 
+from app.core import http_client
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -111,7 +112,10 @@ _TYPE_COLLECTION = "AddToAccount"
 
 _SIGNATURE_HEADER = "X-Zumrails-Signature"
 
-_DEFAULT_TIMEOUT = 15.0
+#: Standardized on the shared split connect/read timeout (app.core.http_client)
+#: rather than the old ad-hoc single 15.0s float, so a slow read can't share the
+#: short connect budget and neither hangs a worker indefinitely.
+_DEFAULT_TIMEOUT = http_client.DEFAULT_TIMEOUT
 
 
 # ---------------------------------------------------------------------------
@@ -225,7 +229,7 @@ class ZumrailsAdapter:
         funding_source_id: Optional[str] = None,
         currency: str = "CAD",
         auth_mode: Literal["oauth", "static_bearer"] = "oauth",
-        timeout: float = _DEFAULT_TIMEOUT,
+        timeout: httpx.Timeout | float = _DEFAULT_TIMEOUT,
     ) -> None:
         self._api_key = api_key
         self._api_secret = api_secret
@@ -300,9 +304,18 @@ class ZumrailsAdapter:
         token = self._get_token()
         path = _TRANSACTION_BY_ID_PATH.format(id=transaction_id)
         url = f"{self._base_url}{path}"
+        # Routed through the shared HTTP helper for consistent connect/read
+        # timeouts + status/latency logging (no PII/keys logged).
         try:
             with httpx.Client(timeout=self._timeout) as client:
-                response = client.get(url, headers=self._auth_headers(token))
+                response = http_client.request(
+                    "GET",
+                    url,
+                    provider="zumrails",
+                    op="get_transaction",
+                    client=client,
+                    headers=self._auth_headers(token),
+                )
         except httpx.HTTPError as exc:
             raise TransientZumrailsError(
                 f"Zumrails get-transaction network error: {type(exc).__name__}"
@@ -381,11 +394,18 @@ class ZumrailsAdapter:
 
         url = f"{self._base_url}{_TRANSACTION_PATH}"
         # No retries: a retried push could double-disburse. The servicing layer
-        # owns idempotency via ClientTransactionId.
+        # owns idempotency via ClientTransactionId. Routed through the shared HTTP
+        # helper for consistent connect/read timeouts + status/latency logging.
         try:
             with httpx.Client(timeout=self._timeout) as client:
-                response = client.post(
-                    url, headers=self._auth_headers(token), json=body
+                response = http_client.request(
+                    "POST",
+                    url,
+                    provider="zumrails",
+                    op="create_transaction",
+                    client=client,
+                    headers=self._auth_headers(token),
+                    json=body,
                 )
         except httpx.HTTPError as exc:
             raise TransientZumrailsError(
@@ -418,10 +438,17 @@ class ZumrailsAdapter:
             return self._api_key
 
         url = f"{self._base_url}{_AUTHORIZE_PATH}"
+        # Routed through the shared HTTP helper for consistent connect/read
+        # timeouts + status/latency logging (no PII/keys logged — the credential
+        # body is never logged, only host+path/status/latency).
         try:
             with httpx.Client(timeout=self._timeout) as client:
-                response = client.post(
+                response = http_client.request(
+                    "POST",
                     url,
+                    provider="zumrails",
+                    op="authorize",
+                    client=client,
                     headers={"Content-Type": "application/json"},
                     json={"username": self._api_key, "password": self._api_secret},
                 )

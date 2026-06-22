@@ -8,11 +8,14 @@ these mocks are the place to correct alongside the adapter constants.
 import hashlib
 import hmac
 import json
+from unittest.mock import patch
 
 import httpx
 import pytest
 import respx
 
+from app.core import http_client
+from app.services.payments import zumrails_adapter as zum_mod
 from app.services.payments.zumrails_adapter import (
     PermanentZumrailsError,
     TransactionResult,
@@ -320,3 +323,44 @@ class TestWebhookVerification:
         )
         with pytest.raises(PermanentZumrailsError, match="webhook_secret"):
             adapter.verify_webhook(b"{}", "abc")
+
+
+class TestOutboundTimeoutsStandardized:
+    """The adapter standardizes on the shared split connect/read timeout and
+    routes transport through ``app.core.http_client`` (timeout + safe logging)."""
+
+    def test_default_timeout_is_shared_split_timeout(self):
+        adapter = _adapter()
+        # No ad-hoc single-float default — it's the shared split httpx.Timeout.
+        assert adapter._timeout is http_client.DEFAULT_TIMEOUT
+        assert isinstance(adapter._timeout, httpx.Timeout)
+        assert adapter._timeout.connect == 5.0
+        assert adapter._timeout.read == 15.0
+
+    def test_module_default_is_the_shared_timeout(self):
+        assert zum_mod._DEFAULT_TIMEOUT is http_client.DEFAULT_TIMEOUT
+
+    @respx.mock
+    def test_create_routes_through_shared_http_client(self):
+        # Patch the shared helper and assert the adapter calls it (so timeout +
+        # status/latency logging are applied centrally) with the right provider
+        # and a client carrying the split timeout.
+        _mock_authorize()
+        respx.post(_TRANSACTION_URL).mock(return_value=_txn_response())
+        with patch.object(
+            zum_mod.http_client, "request", wraps=http_client.request
+        ) as spy:
+            _adapter().create_disbursement(
+                recipient_id="user-recipient-1",
+                amount_cents=10050,
+                client_transaction_id="loan-42",
+            )
+        providers = {c.kwargs["provider"] for c in spy.call_args_list}
+        assert providers == {"zumrails"}
+        # The authorize + create_transaction calls both went through the helper.
+        ops = {c.kwargs["op"] for c in spy.call_args_list}
+        assert {"authorize", "create_transaction"} <= ops
+        for call in spy.call_args_list:
+            client = call.kwargs["client"]
+            assert client.timeout.connect == 5.0
+            assert client.timeout.read == 15.0

@@ -14,7 +14,7 @@ import secrets
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -28,7 +28,10 @@ router = APIRouter(prefix="/dev", tags=["clinic-dev"])
 
 
 class SeedClinicRequest(BaseModel):
-    email: Optional[str] = None
+    # EmailStr (not plain str): a caller-supplied address that won't serialize
+    # under the login RESPONSE model's EmailStr would otherwise create a user
+    # who 403s on every login. Reject it here at the request boundary (422).
+    email: Optional[EmailStr] = None
     password: Optional[str] = None
     business_name: Optional[str] = None
 

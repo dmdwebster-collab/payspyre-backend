@@ -1,4 +1,8 @@
-"""Didit identity-verification adapter.
+"""Didit identity-verification adapter (session-oriented engine wrapper).
+
+This module's ``DiditSessionVerificationAdapter`` is the P4-flow-engine wrapper
+and is distinct from the real outbound ``DiditVerificationAdapter`` in
+``app/services/adapters/didit_verification.py`` (wired into the dispatcher).
 
 The existing ``DiditClient`` (app/services/kyc_vendor.py) is *session-oriented*:
 ``create_verification_session()`` returns a verification URL the patient completes
@@ -21,7 +25,11 @@ from app.services.adapters.base import PatientProfile, VerificationAdapter, Veri
 from app.services.kyc_vendor import DiditClient
 
 
-class DiditVerificationAdapter(VerificationAdapter):
+class DiditSessionVerificationAdapter(VerificationAdapter):
+    # NB: distinct from the *real* outbound adapter in
+    # ``app/services/adapters/didit_verification.py`` (``DiditVerificationAdapter``),
+    # which is the one wired into ``VerificationDispatcher``. This class is the
+    # session-oriented engine wrapper consumed by ``run_flow`` (P4 flow engine).
     def __init__(self, client: Optional[DiditClient] = None, *, vendor: str = "didit") -> None:
         self._client = client
         self._vendor = vendor
