@@ -1,7 +1,15 @@
 """Applicant API v1 router assembly. Mounted at /api/applicant/v1 in app/main.py."""
 from fastapi import APIRouter
 
-from app.api.applicant.v1.endpoints import applications, auth, dashboard, loans, marketplace, products
+from app.api.applicant.v1.endpoints import (
+    applications,
+    auth,
+    borrower_auth,
+    dashboard,
+    loans,
+    marketplace,
+    products,
+)
 from app.core.config import settings
 
 applicant_router = APIRouter()
@@ -9,6 +17,8 @@ applicant_router.include_router(auth.router)
 applicant_router.include_router(applications.router)
 applicant_router.include_router(products.router)
 applicant_router.include_router(marketplace.router)
+# Borrower portal (docs/borrower_portal_spec.md): email login + loan servicing (reads + Pay Now).
+applicant_router.include_router(borrower_auth.router)
 applicant_router.include_router(loans.router)
 applicant_router.include_router(dashboard.router)
 

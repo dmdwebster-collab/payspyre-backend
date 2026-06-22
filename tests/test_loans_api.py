@@ -54,23 +54,9 @@ def _teardown():
 
 
 class TestReads:
-    def test_list_and_detail(self, tc, db_session):
-        p, _app_id, loan = _seed(db_session)
-        app.dependency_overrides[get_db] = lambda: db_session
-        _auth_as(p.id)
-        try:
-            r = tc.get(_BASE)
-            assert r.status_code == 200
-            body = r.json()
-            assert len(body) == 1 and body[0]["outstanding_cents"] == 101000
-            assert body[0]["next_due_cents"] == 101000
-
-            d = tc.get(f"{_BASE}/{loan.id}")
-            assert d.status_code == 200
-            assert len(d.json()["schedule"]) == 1
-        finally:
-            _teardown()
-
+    # Read-shape coverage lives in test_borrower_loans.py (the canonical borrower
+    # read API, PR #94). This file focuses on Pay Now; the ownership 404 below is
+    # kept as a cross-check that the merged endpoints stay patient-scoped.
     def test_loan_outside_scope_is_404(self, tc, db_session):
         _p, _app_id, loan = _seed(db_session)
         app.dependency_overrides[get_db] = lambda: db_session
