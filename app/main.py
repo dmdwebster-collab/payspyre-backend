@@ -69,6 +69,10 @@ if settings.CSRF_ENABLED:
 # Inside CORS so preflight is handled first; only inspects application/json bodies.
 app.add_middleware(RejectNullBytesMiddleware)
 
+# Shared with the early-return CORS helper below so a short-circuited response
+# (e.g. a 429 from the rate limiter) advertises the same exposed headers.
+_CORS_EXPOSE_HEADERS = ["X-Request-ID", "Retry-After", "X-Process-Time-ms"]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
@@ -82,9 +86,30 @@ app.add_middleware(
         "X-Didit-Signature",
         "X-Persona-Signature",
     ],
-    expose_headers=["X-Request-ID", "Retry-After", "X-Process-Time-ms"],
+    expose_headers=_CORS_EXPOSE_HEADERS,
     max_age=600,
 )
+
+
+def _early_return_cors_headers(request: Request) -> dict[str, str]:
+    """CORS headers for a response that short-circuits CORSMiddleware.
+
+    The rate limiter runs OUTSIDE CORSMiddleware in the stack, so its early 429
+    returns before CORS can attach its headers — a cross-origin browser client
+    would then see an opaque "Failed to fetch" instead of the 429. We reproduce
+    the same simple-request decision CORSMiddleware makes (mirror an allowed
+    Origin back, advertise credentials and exposed headers) so the policy is
+    identical; no allow-list is widened here.
+    """
+    origin = request.headers.get("origin")
+    if origin is None or origin not in settings.cors_origins_list:
+        return {}
+    return {
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Credentials": "true",
+        "Access-Control-Expose-Headers": ", ".join(_CORS_EXPOSE_HEADERS),
+        "Vary": "Origin",
+    }
 
 
 @app.middleware("http")
@@ -107,6 +132,10 @@ async def endpoint_rate_limiter(request: Request, call_next):
         headers = {"Retry-After": str(settings.RATE_LIMIT_AUTH_WINDOW)}
         if exc.headers:
             headers.update(exc.headers)
+        # This early return short-circuits CORSMiddleware (which sits inside us),
+        # so carry the CORS headers ourselves — otherwise a browser sees an
+        # opaque network error instead of the 429.
+        headers.update(_early_return_cors_headers(request))
         return JSONResponse(
             status_code=exc.status_code,
             content={"detail": exc.detail},
