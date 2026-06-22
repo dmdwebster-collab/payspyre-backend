@@ -1,0 +1,108 @@
+"""Admin loan book + servicing detail (read-only, Phase 1). M3.
+
+Whole-book loan list (no vendor scoping) with status/DPD, and a detail view
+reusing the existing loan-servicing status builder. Servicing WRITE actions
+(payments, reschedule, payoff) are Phase 2.
+"""
+from __future__ import annotations
+
+from datetime import date, datetime
+from typing import Optional
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status as http_status
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from app.core.auth import get_current_user, require_roles
+from app.db.base import get_db
+from app.models.loan import Vendor
+from app.models.platform.credit_application import PlatformCreditApplication
+from app.models.platform.loan import PlatformLoan, PlatformLoanScheduleItem
+from app.models.platform.patient import PlatformPatient
+from app.services.loan_servicing import get_loan_status
+
+router = APIRouter(dependencies=[Depends(require_roles("admin", "staff"))])
+
+
+class AdminLoanRow(BaseModel):
+    loan_id: UUID
+    application_id: Optional[UUID] = None
+    patient_name: str
+    vendor_name: str
+    principal_cents: int
+    principal_balance_cents: int
+    status: str
+    disbursed_at: Optional[datetime] = None
+    days_past_due: int
+
+
+def _patient_name(p) -> str:
+    if p is None:
+        return "—"
+    return " ".join(x for x in [p.legal_first_name, p.legal_last_name] if x).strip() or "—"
+
+
+def _days_past_due(db: Session, loan_id: UUID) -> int:
+    row = (
+        db.query(PlatformLoanScheduleItem.due_date)
+        .filter(
+            PlatformLoanScheduleItem.loan_id == loan_id,
+            PlatformLoanScheduleItem.status.notin_(("paid", "waived")),
+        )
+        .order_by(PlatformLoanScheduleItem.installment_number.asc())
+        .first()
+    )
+    if row is None or row[0] is None:
+        return 0
+    return max(0, (date.today() - row[0]).days)
+
+
+@router.get("", response_model=list[AdminLoanRow])
+def list_loans(
+    status_filter: Optional[str] = Query(None, alias="status"),
+    limit: int = Query(100, ge=1, le=500),
+    db: Session = Depends(get_db),
+    _user=Depends(get_current_user),
+):
+    """Whole-book loan list, newest first. Optional status filter."""
+    q = (
+        db.query(PlatformLoan, PlatformPatient, Vendor.business_name)
+        .outerjoin(
+            PlatformCreditApplication,
+            PlatformLoan.application_id == PlatformCreditApplication.id,
+        )
+        .outerjoin(PlatformPatient, PlatformCreditApplication.patient_id == PlatformPatient.id)
+        .outerjoin(Vendor, PlatformCreditApplication.vendor_id == Vendor.id)
+    )
+    if status_filter:
+        q = q.filter(PlatformLoan.status == status_filter)
+    rows = q.order_by(PlatformLoan.created_at.desc()).limit(limit).all()
+    return [
+        AdminLoanRow(
+            loan_id=loan.id,
+            application_id=loan.application_id,
+            patient_name=_patient_name(patient),
+            vendor_name=vendor_name or "—",
+            principal_cents=loan.principal_cents,
+            principal_balance_cents=loan.principal_balance_cents,
+            status=loan.status,
+            disbursed_at=loan.disbursed_at,
+            days_past_due=_days_past_due(db, loan.id),
+        )
+        for loan, patient, vendor_name in rows
+    ]
+
+
+@router.get("/{loan_id}")
+def get_loan(
+    loan_id: UUID,
+    db: Session = Depends(get_db),
+    _user=Depends(get_current_user),
+):
+    """Full servicing detail — reuses loan_servicing.get_loan_status (schedule,
+    payments, balances). 404 if the loan doesn't exist."""
+    detail = get_loan_status(db, loan_id)
+    if detail is None:
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="Loan not found")
+    return detail

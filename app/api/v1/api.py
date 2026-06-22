@@ -1,6 +1,11 @@
 from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
+    admin_applications,
+    admin_audit,
+    admin_collections,
+    admin_dashboard,
+    admin_loans,
     admin_vendor_changes,
     auth,
     credit_products,
@@ -20,6 +25,13 @@ api_router.include_router(
     prefix="/admin/vendor-profile-change-requests",
     tags=["admin-vendor-changes"],
 )
+# Lender/admin operations portal — Phase 1 read cockpit (docs/lender_admin_portal_spec.md).
+# Whole-book reads, admin/staff gated (audit is admin-only). Mounted under /admin/*.
+api_router.include_router(admin_dashboard.router, prefix="/admin/dashboard", tags=["admin-cockpit"])
+api_router.include_router(admin_applications.router, prefix="/admin/applications", tags=["admin-cockpit"])
+api_router.include_router(admin_loans.router, prefix="/admin/loans", tags=["admin-cockpit"])
+api_router.include_router(admin_collections.router, prefix="/admin/collections", tags=["admin-cockpit"])
+api_router.include_router(admin_audit.router, prefix="/admin/audit", tags=["admin-cockpit"])
 # V1 `patients` router UN-MOUNTED 2026-06-20 (audit): its endpoints were a broken
 # access-control surface — GET/PATCH /patients/{id} were gated only by a valid staff
 # JWT (no role, no object scope) → any authenticated user could read/write ANY
