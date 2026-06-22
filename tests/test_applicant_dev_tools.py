@@ -87,6 +87,65 @@ class TestApplicantDevTools:
         assert r.status_code == 200
         assert r.json()["status"] == "approved", r.text
 
+    def test_complete_without_decision_consent_is_422_not_500(
+        self, client: TestClient, db_session: Session
+    ):
+        """Regression (found in the live browser walkthrough): if the
+        automated_decision_making consent was never granted, completing the FINAL
+        verification triggers _decide -> ConsentMissingError. The dev endpoint must
+        map that to a clean 422, never a 500."""
+        resp = client.post(
+            f"{_BASE}/applications",
+            json={
+                "patient_profile": {
+                    "legal_first_name": "NoConsent",
+                    "email": f"noadm-{uuid.uuid4().hex[:8]}@example.com",
+                },
+                "credit_product_id": str(_product_id(db_session)),
+                "requested_amount_cents": 3_000_000,
+                "requested_amount_source": "patient",
+                "contact_method": "email",
+            },
+        )
+        app_id = resp.json()["application_id"]
+        code = client.get(f"{_BASE}/dev/magic-link-code", params={"application_id": app_id}).json()[
+            "code"
+        ]
+        ex = client.post(
+            f"{_BASE}/auth/magic-link/exchange", json={"application_id": app_id, "token": code}
+        )
+        headers = {"Authorization": f"Bearer {ex.json()['jwt']}"}
+
+        # Grant ONLY the verification consents — deliberately NOT automated_decision_making.
+        for p in _PURPOSES:
+            assert (
+                client.post(f"{_BASE}/applications/{app_id}/consents/{p}", headers=headers).status_code
+                == 200
+            )
+            assert (
+                client.post(
+                    f"{_BASE}/applications/{app_id}/verifications/{p}/initiate", headers=headers
+                ).status_code
+                == 200
+            )
+
+        # First three complete cleanly; the final one triggers the decision and must be
+        # a 422 (ConsentMissing), not a 500.
+        for p in _PURPOSES[:-1]:
+            assert (
+                client.post(
+                    f"{_BASE}/dev/applications/{app_id}/verifications/{p}/complete",
+                    params={"score": 720},
+                ).status_code
+                == 200
+            )
+        final = client.post(
+            f"{_BASE}/dev/applications/{app_id}/verifications/{_PURPOSES[-1]}/complete",
+            params={"score": 720},
+        )
+        assert final.status_code == 422, final.text
+        assert "automated_decision_making" in final.text
+
     def test_magic_link_code_missing_returns_404(self, client: TestClient, db_session: Session):
         resp = client.get(
             f"{_BASE}/dev/magic-link-code", params={"application_id": str(uuid.uuid4())}

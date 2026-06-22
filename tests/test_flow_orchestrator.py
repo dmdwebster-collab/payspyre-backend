@@ -197,7 +197,10 @@ class TestGetRequiredConsents:
         patient = _make_patient(db_session)
         app = _create_app(orch, patient.id, _seed_product_id(db_session))
         required = orch.get_required_consents(app.id)
-        assert set(required) == set(_REQUIRED_PURPOSES)
+        # The matrix-derived verification consents PLUS automated_decision_making
+        # (which _decide enforces; it must be surfaced so the client grants it).
+        assert set(required) == set(_REQUIRED_PURPOSES) | {"automated_decision_making"}
+        assert "automated_decision_making" in required
 
 
 # ---------------------------------------------------------------------------

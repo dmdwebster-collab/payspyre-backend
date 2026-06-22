@@ -16,7 +16,11 @@ from sqlalchemy.orm import Session
 import app.services.consent_service as consent_service
 from app.db.base import get_db
 from app.models.platform.verification import PlatformVerification
-from app.services.flow_orchestrator import CONSENT_TO_VERIFICATION_TYPE, FlowOrchestrator
+from app.services.flow_orchestrator import (
+    CONSENT_TO_VERIFICATION_TYPE,
+    FlowOrchestrator,
+    OrchestratorError,
+)
 from app.services.mock_notification_dispatcher import peek_dev_code
 from app.services.verifications.mock_dispatcher import MockVerificationDispatcher
 
@@ -76,13 +80,19 @@ def complete_verification(
     ]
 
     orchestrator = FlowOrchestrator(db, consent_service, MockVerificationDispatcher())
-    result = orchestrator.handle_verification_result(
-        application_id,
-        verification.id,
-        vendor_event_id=f"dev-{purpose}-{uuid.uuid4().hex[:8]}",
-        result="passed",
-        rich_payload=rich_payload,
-    )
+    try:
+        result = orchestrator.handle_verification_result(
+            application_id,
+            verification.id,
+            vendor_event_id=f"dev-{purpose}-{uuid.uuid4().hex[:8]}",
+            result="passed",
+            rich_payload=rich_payload,
+        )
+    except OrchestratorError as exc:
+        # e.g. ConsentMissingError when automated_decision_making wasn't granted — a
+        # domain/client condition, not a server fault. Map to 422 like the real vendor
+        # webhook path does, never a 500.
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
     return {
         "verification_type": mapped,
         "result": "passed",

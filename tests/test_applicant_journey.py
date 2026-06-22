@@ -158,10 +158,11 @@ class TestApplicantJourney:
         r = client.get(f"{_BASE}/applications/{app_id}", headers=headers)
         assert r.status_code == 200 and r.json()["status"] == "started"
 
-        # 6. required consents
+        # 6. required consents — the verification purposes PLUS automated_decision_making
+        # (surfaced so the client grants it; _decide enforces it before the decision).
         req = client.get(f"{_BASE}/applications/{app_id}/consents", headers=headers)
         assert req.status_code == 200
-        assert set(req.json()["required"]) == set(_PURPOSES)
+        assert set(req.json()["required"]) == set(_PURPOSES) | {"automated_decision_making"}
 
         # 7. grant all consents
         for p in _PURPOSES:

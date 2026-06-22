@@ -370,18 +370,22 @@ class FlowOrchestrator:
         return application
 
     def get_required_consents(self, application_id: UUID) -> list[str]:
-        """Return the consent purposes required before any verification can start.
+        """Return the consent purposes required to complete the application.
 
         Read-only. Derived from the product's verification_matrix:
         - identity.required               → id_verification
         - income with 'bank_link' method  → bank_verification
         - bureau.soft_pull_required       → soft_bureau_pull
         - bureau.hard_pull_required       → hard_bureau_pull
+        Plus ``automated_decision_making``: ``_decide`` requires explicit consent to
+        automated decisioning (PIPEDA/GDPR). It MUST be surfaced here — the client only
+        grants what this returns, so omitting it left it ungranted and every decision
+        failed with ConsentMissingError once the final verification completed.
         """
         application = self._get_application(application_id)
         product = self._get_product(application.credit_product_id)
         required = self._required_purposes_from_matrix(product.verification_matrix)
-        return [p for p in _CONSENT_ORDER if p in required]
+        return [p for p in _CONSENT_ORDER if p in required] + ["automated_decision_making"]
 
     @staticmethod
     def _required_purposes_from_matrix(matrix: Any) -> set[str]:
