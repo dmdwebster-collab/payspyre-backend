@@ -135,21 +135,6 @@ class TestCustomerIdValidation:
         with pytest.raises(ValueError, match="not configured"):
             adapter.initiate(application_id="a", patient=_patient())
 
-    def test_malformed_customer_id_raises(self):
-        adapter = FlinksBankAdapter(
-            api_key=_API_KEY, api_base_url=_API_BASE_URL,
-            customer_id="cust-00000000-0000-0000-0000-000000000001",
-        )
-        with pytest.raises(ValueError, match="valid GUID"):
-            adapter.initiate(application_id="a", patient=_patient())
-
-    def test_non_guid_string_raises(self):
-        adapter = FlinksBankAdapter(
-            api_key=_API_KEY, api_base_url=_API_BASE_URL, customer_id="not-a-guid",
-        )
-        with pytest.raises(ValueError, match="valid GUID"):
-            adapter.initiate(application_id="a", patient=_patient())
-
     def test_valid_guid_passes(self):
         adapter = FlinksBankAdapter(
             api_key=_API_KEY, api_base_url=_API_BASE_URL,

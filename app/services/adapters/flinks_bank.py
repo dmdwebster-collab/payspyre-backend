@@ -12,7 +12,6 @@ reconstruct the ``BankAccountSummary`` from the stored event payload.
 """
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import urlencode
@@ -40,12 +39,6 @@ _IFRAME_BASE = "https://toolbox-iframe.private.fin.ag"
 # the application_id is encoded in the query so post-redirect can correlate.
 # Overridable via the constructor (FLINKS_REDIRECT_URL_BASE).
 _REDIRECT_URL_BASE = "https://app.payspyre.com/flinks/callback"
-
-# Canonical GUID form (8-4-4-4-12 hex), case-insensitive, optional surrounding braces.
-_CUSTOMER_ID_RE = re.compile(
-    r"^\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
-    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}?$"
-)
 
 
 @dataclass(frozen=True)
@@ -106,17 +99,19 @@ class FlinksBankAdapter(BankAdapter):
         )
 
     def _require_valid_customer_id(self) -> None:
-        """Raise ``ValueError`` unless ``customer_id`` is a well-formed Flinks GUID."""
+        """Raise ``ValueError`` if ``customer_id`` is not configured.
+
+        We validate that a customer_id is present (an empty value would silently
+        build a broken Connect URL) but do NOT enforce a specific GUID shape: the
+        exact format of a real Flinks customer_id is not confirmed against a
+        sandbox account, so a strict format check risks hard-failing a legitimate
+        value in production. Tighten this once the real format is verified.
+        """
         cid = (self._customer_id or "").strip()
         if not cid:
             raise ValueError(
                 "Flinks customer_id is not configured "
                 "(set FLINKS_CUSTOMER_ID or the flinks settings-area config)."
-            )
-        if not _CUSTOMER_ID_RE.match(cid):
-            raise ValueError(
-                f"Flinks customer_id {cid!r} is not a valid GUID "
-                "(expected 8-4-4-4-12 hexadecimal form)."
             )
 
     async def link_account(self, patient: PatientProfile) -> BankAccountSummary:
