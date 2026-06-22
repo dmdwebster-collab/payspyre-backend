@@ -21,13 +21,14 @@ from typing import Literal
 from uuid import UUID
 
 from jose import jwt
-from sqlalchemy import text
+from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.models.platform.credit_application import PlatformCreditApplication
 from app.models.platform.event import PlatformEvent
+from app.models.platform.patient import PlatformPatient
 from app.services.mock_notification_dispatcher import MockNotificationDispatcher
 
 logger = get_logger(__name__)
@@ -217,6 +218,160 @@ class PatientAuthService:
             },
         )
         self.db.add(event)
+        self.db.commit()
+
+    # --- Borrower portal (returning-patient, email-based) login ------------
+    # Reuses the magic-link machinery: the issued event payload already carries
+    # ``patient_id``, so the borrower exchange looks it up by (token_hash,
+    # patient_id) — patient-level, not per-application. Same TTL + replay
+    # protection; lockout is keyed per-patient.
+
+    def request_borrower_login(self, email: str) -> dict:
+        """Send a borrower a magic-link sign-in by email. Patient-level.
+
+        ALWAYS returns the same generic message so the endpoint never reveals
+        whether an account exists for the email (enumeration-safe).
+        """
+        patient = self._patient_by_email(email)
+        if patient is not None:
+            # A representative application anchors the magic-link event (the event
+            # row + dispatcher carry an application_id); the exchange resolves the
+            # issued event by patient_id, so any of the patient's apps works.
+            app = (
+                self.db.query(PlatformCreditApplication)
+                .filter(PlatformCreditApplication.patient_id == patient.id)
+                .order_by(PlatformCreditApplication.created_at.desc())
+                .first()
+            )
+            if app is not None:
+                token = _generate_token()
+                self.dispatcher.send_magic_link(patient.id, app.id, "email", token)
+                self.db.commit()
+                logger.info("borrower_login_requested", patient_id=str(patient.id))
+        return {"message": "If that email matches an account, a sign-in link is on its way."}
+
+    def exchange_borrower_login(self, email: str, token: str) -> dict:
+        """Validate a borrower-login token and return a patient JWT (sub=patient_id)."""
+        patient = self._patient_by_email(email)
+        if patient is None:
+            raise InvalidMagicLinkToken("Invalid email or sign-in code")
+        self._enforce_borrower_lockout(patient.id)
+
+        token_hash = _hash_token(token)
+        issued = self.db.execute(
+            text(
+                """
+                SELECT id, payload FROM platform_events
+                WHERE event_type = 'magic_link_issued'
+                  AND payload @> :key
+                ORDER BY occurred_at DESC
+                LIMIT 1
+                """
+            ),
+            {"key": json.dumps({"token_hash": token_hash, "patient_id": str(patient.id)})},
+        ).first()
+        if issued is None:
+            self._record_borrower_failed(patient.id)
+            raise InvalidMagicLinkToken("Invalid or expired sign-in code")
+
+        issued_id, payload = issued
+        ttl_expires_at = datetime.fromisoformat(payload["ttl_expires_at"])
+        if datetime.now(timezone.utc) > ttl_expires_at:
+            raise InvalidMagicLinkToken("Sign-in code expired")
+
+        already = self.db.execute(
+            text(
+                """
+                SELECT id FROM platform_events
+                WHERE event_type = 'magic_link_consumed'
+                  AND payload @> :key
+                LIMIT 1
+                """
+            ),
+            {"key": json.dumps({"issued_event_id": issued_id})},
+        ).first()
+        if already is not None:
+            raise InvalidMagicLinkToken("Sign-in code already used")
+
+        self.db.add(
+            PlatformEvent(
+                event_type="magic_link_consumed",
+                actor="patient",
+                patient_id=patient.id,
+                application_id=UUID(payload["application_id"]),
+                payload={
+                    "v": 1,
+                    "actor": {"type": "patient", "id": str(patient.id)},
+                    "patient_id": str(patient.id),
+                    "application_id": payload["application_id"],
+                    "issued_event_id": issued_id,
+                    "via": "borrower_login",
+                },
+            )
+        )
+        self.db.commit()
+        token_str, expires_at = self._issue_jwt(patient.id)
+        logger.info("borrower_login_exchanged", patient_id=str(patient.id))
+        return {"jwt": token_str, "expires_at": expires_at.isoformat()}
+
+    def _patient_by_email(self, email: str) -> PlatformPatient | None:
+        normalized = (email or "").strip().lower()
+        if not normalized:
+            return None
+        return (
+            self.db.query(PlatformPatient)
+            .filter(func.lower(PlatformPatient.email) == normalized)
+            .first()
+        )
+
+    def _enforce_borrower_lockout(self, patient_id: UUID) -> None:
+        """Per-patient attempt lockout for borrower login (mirrors the per-app one)."""
+        since = datetime.now(timezone.utc) - timedelta(seconds=_LOCKOUT_WINDOW_SECONDS)
+        count = self.db.execute(
+            text(
+                """
+                SELECT count(*) FROM platform_events
+                WHERE event_type = 'magic_link_failed'
+                  AND payload @> :key
+                  AND occurred_at >= :since
+                """
+            ),
+            {
+                "key": json.dumps({"patient_id": str(patient_id), "reason": "borrower_login"}),
+                "since": since,
+            },
+        ).scalar()
+        if count is not None and count >= _MAX_FAILED_ATTEMPTS:
+            logger.warning("borrower_login_locked", patient_id=str(patient_id), failed_attempts=count)
+            raise MagicLinkLocked(
+                "Too many attempts. Request a new sign-in link and try again later."
+            )
+
+    def _record_borrower_failed(self, patient_id: UUID) -> None:
+        """Append a patient-keyed magic_link_failed event for the lockout counter."""
+        app = (
+            self.db.query(PlatformCreditApplication.id)
+            .filter(PlatformCreditApplication.patient_id == patient_id)
+            .order_by(PlatformCreditApplication.created_at.desc())
+            .first()
+        )
+        if app is None:
+            return
+        self.db.add(
+            PlatformEvent(
+                event_type="magic_link_failed",
+                actor="patient",
+                application_id=app[0],
+                patient_id=patient_id,
+                payload={
+                    "v": 1,
+                    "actor": {"type": "patient", "id": str(patient_id)},
+                    "application_id": str(app[0]),
+                    "patient_id": str(patient_id),
+                    "reason": "borrower_login",
+                },
+            )
+        )
         self.db.commit()
 
     def _issue_jwt(self, patient_id: UUID) -> tuple[str, datetime]:
