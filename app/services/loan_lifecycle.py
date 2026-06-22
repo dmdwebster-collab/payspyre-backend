@@ -89,6 +89,7 @@ LOAN_BOOKED_EVENT = "loan_booked"
 LOAN_DISBURSEMENT_INITIATED_EVENT = "loan_disbursement_initiated"
 LOAN_DISBURSED_EVENT = "loan_disbursed"
 LOAN_DISBURSEMENT_FAILED_EVENT = "loan_disbursement_failed"
+LOAN_CHARGED_OFF_EVENT = "loan_charged_off"
 
 
 def _record_loan_event(db: Session, loan: PlatformLoan, event_type: str, after: dict) -> None:
@@ -397,9 +398,34 @@ def on_agreement_signed(
         db.refresh(loan)
         logger.info("loan_agreement_signed", loan_id=str(loan.id))
 
+    # Disbursement is its own hardened entry point so the lender/admin cockpit can
+    # release a signed loan through the SAME locked, audited, idempotent path.
+    return initiate_disbursement(db, loan, recipient_id=recipient_id, zumrails=zumrails)
+
+
+def initiate_disbursement(
+    db: Session,
+    loan: PlatformLoan,
+    *,
+    recipient_id: Optional[str] = None,
+    zumrails=None,
+) -> PlatformLoan:
+    """Fire the Zumrails disbursement for a loan, exactly once (lifecycle entry point).
+
+    The single place that pushes a payout. Called by ``on_agreement_signed`` (the
+    SignNow callback) AND by the admin cockpit's "release disbursement" action, so
+    both go through the same row lock, idempotency, ref-setting, and money events —
+    no path writes ``disbursement_status`` inline.
+
+    Forward-only + idempotent: a row lock (``refresh(with_for_update=True)``)
+    serializes callers, and the ``disbursement_status != not_started`` check makes
+    re-entry a no-op. A retried push is additionally deduped vendor-side by
+    ``client_transaction_id == loan.id``. Graceful no-op (no commit) if no adapter
+    or recipient can be resolved, leaving the loan ``not_started`` for a later retry.
+    """
     # Serialize the disbursement decision: take a row lock on the loan so two
-    # concurrent agreement-signed webhooks can't both pass the not_started check
-    # below and double-push to Zumrails. refresh(with_for_update=True) issues a
+    # concurrent callers can't both pass the not_started check below and
+    # double-push to Zumrails. refresh(with_for_update=True) issues a
     # SELECT ... FOR UPDATE and refreshes disbursement_status to the committed value,
     # so the second caller blocks, then sees in_progress and no-ops. (The in-memory
     # check alone is not atomic.) A retried push that survives a transient timeout is
@@ -481,6 +507,46 @@ def on_agreement_signed(
         disbursement_ref=loan.disbursement_ref,
         disbursement_status=loan.disbursement_status,
     )
+    return loan
+
+
+def charge_off_loan(
+    db: Session,
+    loan: PlatformLoan,
+    *,
+    reason_code: Optional[str] = None,
+    actor: Optional[str] = None,
+) -> PlatformLoan:
+    """Write a loan off as a loss (lifecycle entry point).
+
+    The single place that flips a loan to ``charged_off`` — so the most material
+    loss event always emits a ``loan_charged_off`` money event on the WORM log
+    (the admin cockpit used to set the column inline with no money event). Row-
+    locked + idempotent: a second charge-off is a no-op; a paid-off / cancelled
+    loan cannot be charged off.
+    """
+    db.refresh(loan, with_for_update=True)
+    if loan.status == "charged_off":
+        logger.info("loan_charge_off_idempotent_skip", loan_id=str(loan.id))
+        return loan
+    if loan.status in ("paid_off", "cancelled"):
+        raise ValueError(f"cannot charge off a loan in status '{loan.status}'")
+
+    loan.status = "charged_off"
+    _record_loan_event(
+        db,
+        loan,
+        LOAN_CHARGED_OFF_EVENT,
+        {
+            "status": "charged_off",
+            "principal_balance_cents": loan.principal_balance_cents,
+            "reason_code": reason_code,
+            "actor": actor,
+        },
+    )
+    db.commit()
+    db.refresh(loan)
+    logger.info("loan_charged_off", loan_id=str(loan.id), reason_code=reason_code)
     return loan
 
 

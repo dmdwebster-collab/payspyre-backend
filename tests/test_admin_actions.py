@@ -12,6 +12,7 @@ from app.core.auth import get_current_user
 from app.db.base import get_db
 from app.models.platform.credit_application import PlatformCreditApplication
 from app.models.platform.credit_product import PlatformCreditProduct
+from app.models.platform.event import PlatformEvent
 from app.models.platform.loan import PlatformLoan, PlatformLoanScheduleItem
 from app.models.platform.patient import PlatformPatient
 
@@ -45,10 +46,12 @@ def _seed_application(db, status="under_review"):
     return app
 
 
-def _seed_loan(db, status="active", balance=1_500_000):
+def _seed_loan(db, status="active", balance=1_500_000, agreement_status="not_sent",
+               disbursement_status="not_started"):
     app = _seed_application(db, status="approved")
     loan = PlatformLoan(application_id=app.id, principal_cents=1_800_000, annual_rate_bps=1290,
-                        term_months=24, status=status, principal_balance_cents=balance, currency="CAD")
+                        term_months=24, status=status, principal_balance_cents=balance, currency="CAD",
+                        agreement_status=agreement_status, disbursement_status=disbursement_status)
     db.add(loan)
     db.commit()
     db.refresh(loan)
@@ -146,16 +149,46 @@ class TestMakerChecker:
         again = client.post(f"{_BASE}/pending-actions/{pending_id}/approve")
         assert again.status_code == 409
 
-    def test_disburse_request_then_approve(self, app_client, db_session):
+    def test_disburse_request_then_approve(self, app_client, db_session, monkeypatch):
+        """Approve disburse on a SIGNED loan → delegates to initiate_disbursement
+        (Zumrails is stubbed; the real call is exercised by loan_lifecycle tests)."""
         app, client = app_client
-        loan = _seed_loan(db_session, status="pending_disbursement", balance=1_800_000)
+        loan = _seed_loan(db_session, status="pending_disbursement", balance=1_800_000,
+                          agreement_status="signed", disbursement_status="not_started")
+
+        called = {}
+
+        def _fake_initiate(db, loan_obj, **kw):
+            called["loan_id"] = str(loan_obj.id)
+            loan_obj.disbursement_status = "in_progress"
+            loan_obj.disbursement_ref = "zr-mock-tx-1"
+            return loan_obj
+
+        import app.services.loan_lifecycle as _ll
+        monkeypatch.setattr(_ll, "initiate_disbursement", _fake_initiate)
+
         maker = _admin()
         app.dependency_overrides[get_current_user] = lambda: maker
         pid = client.post(f"{_BASE}/loans/{loan.id}/disburse", json={}).json()["pending_action_id"]
         app.dependency_overrides[get_current_user] = lambda: _admin()
         ok = client.post(f"{_BASE}/pending-actions/{pid}/approve")
         assert ok.status_code == 200, ok.text
+        assert called["loan_id"] == str(loan.id)            # delegated, not inline
         assert ok.json()["disbursement_status"] == "in_progress"
+        assert ok.json()["disbursement_ref"] == "zr-mock-tx-1"
+
+    def test_disburse_blocked_when_agreement_unsigned(self, app_client, db_session):
+        """Audit H1/L4: a manual disburse must not fund an unsigned loan."""
+        app, client = app_client
+        loan = _seed_loan(db_session, status="pending_disbursement",
+                          agreement_status="not_sent", disbursement_status="not_started")
+        maker = _admin()
+        app.dependency_overrides[get_current_user] = lambda: maker
+        pid = client.post(f"{_BASE}/loans/{loan.id}/disburse", json={}).json()["pending_action_id"]
+        app.dependency_overrides[get_current_user] = lambda: _admin()
+        r = client.post(f"{_BASE}/pending-actions/{pid}/approve")
+        assert r.status_code == 409, r.text
+        assert "not signed" in r.json()["detail"].lower()
 
     def test_reject_does_not_execute(self, app_client, db_session):
         app, client = app_client
@@ -213,3 +246,47 @@ class TestAuditFixes:
         r2 = client.post(f"{_BASE}/loans/{loan.id}/payments", json=body)
         assert r1.status_code == 200 and r2.status_code == 200
         assert r1.json()["payment_id"] != r2.json()["payment_id"]
+
+
+class TestMoneyEventDelegation:
+    """Audit H1/L5/L6: cockpit actions delegate to the hardened lifecycle entry
+    points, so the WORM log gets the proper money events (it didn't before)."""
+
+    def test_approve_emits_loan_booked(self, app_client, db_session):
+        """L5: approve → book_loan → a loan_booked money event exists."""
+        app, client = app_client
+        application = _seed_application(db_session)
+        r = client.post(f"{_BASE}/applications/{application.id}/decision",
+                        json={"outcome": "approved", "reason_codes": ["ok"]})
+        assert r.status_code == 200, r.text
+        booked = db_session.query(PlatformEvent).filter(
+            PlatformEvent.event_type == "loan_booked").all()
+        assert len(booked) >= 1
+
+    def test_charge_off_emits_loan_charged_off(self, app_client, db_session):
+        """L6: charge-off approval → charge_off_loan → a loan_charged_off event."""
+        app, client = app_client
+        loan = _seed_loan(db_session, status="active")
+        maker = _admin()
+        app.dependency_overrides[get_current_user] = lambda: maker
+        pid = client.post(f"{_BASE}/loans/{loan.id}/charge-off",
+                          json={"reason_code": "bankruptcy"}).json()["pending_action_id"]
+        app.dependency_overrides[get_current_user] = lambda: _admin()
+        ok = client.post(f"{_BASE}/pending-actions/{pid}/approve")
+        assert ok.status_code == 200, ok.text
+        db_session.refresh(loan)
+        assert loan.status == "charged_off"
+        events = db_session.query(PlatformEvent).filter(
+            PlatformEvent.event_type == "loan_charged_off").all()
+        assert len(events) >= 1  # the material loss event is now on the WORM log
+
+    def test_charge_off_paid_loan_is_409(self, app_client, db_session):
+        """A paid-off loan can't be charged off → graceful 409 (not 500)."""
+        app, client = app_client
+        loan = _seed_loan(db_session, status="paid_off")
+        maker = _admin()
+        app.dependency_overrides[get_current_user] = lambda: maker
+        pid = client.post(f"{_BASE}/loans/{loan.id}/charge-off", json={}).json()["pending_action_id"]
+        app.dependency_overrides[get_current_user] = lambda: _admin()
+        r = client.post(f"{_BASE}/pending-actions/{pid}/approve")
+        assert r.status_code == 409, r.text
