@@ -1,5 +1,7 @@
 from fastapi import APIRouter
 
+from app.core.config import settings
+
 from app.api.v1.endpoints import (
     admin_actions,
     admin_analytics,
@@ -41,6 +43,15 @@ api_router.include_router(admin_actions.router, prefix="/admin", tags=["admin-ac
 api_router.include_router(admin_analytics.router, prefix="/admin/analytics", tags=["admin-analytics"])
 # Phase 3 — config surfaces (RBAC visibility). Products reuse /credit-products. Read-only, admin.
 api_router.include_router(admin_config.router, prefix="/admin/config", tags=["admin-config"])
+# UNAUTHENTICATED dev helper: seed an admin/staff RBAC user so the cockpit can be
+# signed into on a fresh env (the clinic dev-seed only makes a clinic STAFF user).
+# Same gate as the clinic dev-seed: auto-on in dev/test, else explicit ENABLE_DEV_TOOLS
+# (mock-mode staging); NEVER in production.
+if settings.ENVIRONMENT in ("development", "test") or settings.ENABLE_DEV_TOOLS:
+    if settings.ENVIRONMENT != "production":
+        from app.api.v1.endpoints import admin_dev_tools
+
+        api_router.include_router(admin_dev_tools.router, prefix="/admin", tags=["admin-dev"])
 # V1 `patients` router UN-MOUNTED 2026-06-20 (audit): its endpoints were a broken
 # access-control surface — GET/PATCH /patients/{id} were gated only by a valid staff
 # JWT (no role, no object scope) → any authenticated user could read/write ANY
