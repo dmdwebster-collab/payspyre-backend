@@ -68,6 +68,11 @@ class Settings(BaseSettings):
     FLINKS_API_KEY: str = ""           # flinks-auth-key header
     FLINKS_API_BASE_URL: str = "https://toolbox-api.private.fin.ag"
     FLINKS_CUSTOMER_ID: str = ""       # GUID scoping Flinks calls; required for the real path
+    # Connect iframe origin (separate from the JSON API origin) + the applicant-facing
+    # redirect base. Defaults target Flinks' shared sandbox ("toolbox"); override both
+    # to point at a dedicated/prod instance.
+    FLINKS_IFRAME_BASE: str = "https://toolbox-iframe.private.fin.ag"
+    FLINKS_REDIRECT_URL_BASE: str = "https://app.payspyre.com/flinks/callback"
     USE_REAL_ADAPTERS: bool = False    # flip True in prod once Didit + Flinks creds are set
 
     # Real notification adapters + feature flag — P7.4 (outbound only; inbound

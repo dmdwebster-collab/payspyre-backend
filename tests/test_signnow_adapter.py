@@ -7,11 +7,14 @@ import base64
 import hashlib
 import hmac
 import json
+from unittest.mock import patch
 
 import httpx
 import pytest
 import respx
 
+from app.core import http_client
+from app.services.esign import signnow_adapter as sn_mod
 from app.services.esign import (
     FieldValue,
     SignerInput,
@@ -331,3 +334,38 @@ class TestWebhookVerify:
         headers = {"X-SignNow-Signature": _sign(body)}
         with pytest.raises(SignNowWebhookError, match="not valid JSON"):
             _adapter().verify_webhook(raw_body=body, headers=headers)
+
+
+# ---------------------------------------------------------------------------
+# Outbound HTTP timeouts standardized on app.core.http_client
+# ---------------------------------------------------------------------------
+
+
+class TestOutboundTimeoutsStandardized:
+    def test_default_timeout_is_shared_split_timeout(self):
+        adapter = _adapter()
+        # No ad-hoc single-float default (was 10.0) — it's the shared split
+        # connect/read httpx.Timeout from app.core.http_client.
+        assert adapter._timeout is http_client.DEFAULT_TIMEOUT
+        assert isinstance(adapter._timeout, httpx.Timeout)
+        assert adapter._timeout.connect == 5.0
+        assert adapter._timeout.read == 15.0
+
+    @respx.mock
+    def test_request_routes_through_shared_http_client(self):
+        # Patch the shared helper and assert _request goes through it (so the
+        # split timeout + status/latency logging are applied centrally) with the
+        # signnow provider and a client carrying the split timeout.
+        respx.post(_invite_url(_DOC_ID)).mock(
+            return_value=httpx.Response(200, json={"id": "inv-1"})
+        )
+        with patch.object(
+            sn_mod.http_client, "request", wraps=http_client.request
+        ) as spy:
+            _adapter().send_for_signature(signer=_signer(), document_id=_DOC_ID)
+        assert spy.called
+        for call in spy.call_args_list:
+            assert call.kwargs["provider"] == "signnow"
+            client = call.kwargs["client"]
+            assert client.timeout.connect == 5.0
+            assert client.timeout.read == 15.0
