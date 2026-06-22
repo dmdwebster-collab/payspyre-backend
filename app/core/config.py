@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     # force-pass a verification), so never enable on an environment with real PII.
     # Production can never mount them regardless of this flag.
     ENABLE_DEV_TOOLS: bool = False
+    # Shared secret guarding the admin RBAC seeder (POST /api/v1/admin/dev/seed-admin).
+    # That endpoint mints a FULL-ADMIN cockpit user, so unlike the staff/clinic seeder
+    # it is inert unless this is set AND the caller presents it in X-Dev-Seed-Token —
+    # so deploying it does not create an open admin-granting backdoor.
+    DEV_SEED_TOKEN: str = ""
     VERSION: str = "0.1.0"
 
     # Observability
