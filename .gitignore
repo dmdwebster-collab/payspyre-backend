@@ -54,3 +54,8 @@ alembic/versions/*.pyc
 # Local AI tooling
 .claude/
 recover_p3.ps1
+
+# mutation testing artifacts
+mutants/
+.mutmut-cache
+mutmut-stats.json
