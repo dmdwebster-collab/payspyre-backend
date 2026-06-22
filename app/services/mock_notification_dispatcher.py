@@ -49,8 +49,14 @@ class MockNotificationDispatcher:
         contact_method: Literal["sms", "email"],
         token: str,
         ttl_seconds: int = 900,
+        enqueue_on_failure: bool = True,
     ) -> int:
-        """Write a ``magic_link_issued`` event (hashed token) and return its id."""
+        """Write a ``magic_link_issued`` event (hashed token) and return its id.
+
+        ``enqueue_on_failure`` exists only to keep this signature interchangeable
+        with ``RealNotificationDispatcher`` (the selector duck-types them); the
+        mock never fails a send, so it is ignored here.
+        """
         token_hash = hashlib.sha256(token.encode()).hexdigest()
         ttl_expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
         payload = {
