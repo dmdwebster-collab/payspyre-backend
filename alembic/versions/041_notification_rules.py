@@ -1,7 +1,7 @@
 """System-configurable notification rules + send-window scaffolding
 
-Revision ID: 040_notification_rules
-Revises: 039_notification_cursor
+Revision ID: 041_notification_rules
+Revises: 040_notification_cursor
 Create Date: 2026-06-22
 
 Creates ``platform_notification_rules`` — the DB-backed config that replaces the
@@ -31,8 +31,8 @@ from alembic import op
 from sqlalchemy.dialects.postgresql import JSONB
 
 
-revision: str = "040_notification_rules"
-down_revision: Union[str, None] = "039_notification_cursor"
+revision: str = "041_notification_rules"
+down_revision: Union[str, None] = "040_notification_cursor"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
