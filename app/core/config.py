@@ -177,6 +177,13 @@ class Settings(BaseSettings):
     NOTIFICATION_QUEUE_PROCESSING_INTERVAL: int = 60
     NOTIFICATION_MAX_RETRIES: int = 3
     NOTIFICATION_RETRY_DELAYS: str = "5,15,30"
+    # Durable notification retry outbox (P7.4c). When True, a vendor send that
+    # fails transiently is enqueued into ``platform_notification_outbox`` for an
+    # out-of-band worker (scripts/process_notification_outbox.py) to retry,
+    # honoring NOTIFICATION_MAX_RETRIES + the NOTIFICATION_RETRY_DELAYS backoff.
+    # INERT by default: nothing is enqueued and no worker runs until flipped, so
+    # existing send semantics (rollback on failure) are unchanged out of the box.
+    NOTIFICATION_OUTBOX_ENABLED: bool = False
 
     # Webhooks
     WEBHOOK_TIMEOUT_SECONDS: int = 30
