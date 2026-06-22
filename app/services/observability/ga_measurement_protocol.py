@@ -45,21 +45,28 @@ _GA_COLLECT_URL = "https://www.google-analytics.com/mp/collect"
 _TIMEOUT_SECONDS = 5.0
 
 
-def _ga_config() -> tuple[bool, str, str]:
+def _ga_config(db: object = None) -> tuple[bool, str, str]:
     """Return ``(enabled, measurement_id, api_secret)`` from settings.
 
     Read through this indirection (and via ``getattr`` with defaults) so the GA
-    keys can live wherever the team wires them — directly on ``Settings`` once
-    ``GA_MEASUREMENT_ID`` / ``GA_API_SECRET`` are declared (see WIRING NEEDED),
-    or in ``PlatformIntegrationSettings`` (provider="google_analytics"). Tests
-    patch this function rather than the frozen pydantic ``Settings`` model.
+    keys can live wherever the team wires them: the enabled settings-area row
+    (``PlatformIntegrationSettings``, provider="google_analytics") is preferred,
+    with the env ``Settings`` (``GA_MEASUREMENT_ID`` / ``GA_API_SECRET``) as the
+    fallback per field. ``db=None`` skips the settings-area lookup (env only),
+    keeping call sites without a session working. ``OBSERVABILITY_ENABLED`` is
+    always read from env. Tests patch this function rather than the frozen
+    pydantic ``Settings`` model.
     """
     from app.core.config import settings
+    from app.services.integration_creds import resolve
 
     enabled = bool(getattr(settings, "OBSERVABILITY_ENABLED", False))
-    measurement_id = getattr(settings, "GA_MEASUREMENT_ID", "") or ""
-    api_secret = getattr(settings, "GA_API_SECRET", "") or ""
-    return enabled, measurement_id, api_secret
+    creds = resolve(
+        db, "google_analytics",
+        config_keys=["measurement_id", "api_secret"],
+        env={"measurement_id": "GA_MEASUREMENT_ID", "api_secret": "GA_API_SECRET"},
+    )
+    return enabled, creds["measurement_id"], creds["api_secret"]
 
 
 def _hashed_client_id(raw_id: object) -> str:
@@ -94,6 +101,7 @@ def send_ga_event(
     raw_client_id: object,
     params: Optional[dict[str, Any]] = None,
     client: Optional[httpx.Client] = None,
+    db: object = None,
 ) -> bool:
     """Send a single event to GA4 via the Measurement Protocol.
 
@@ -102,10 +110,11 @@ def send_ga_event(
 
     ``raw_client_id`` is hashed before transmission; ``params`` are scrubbed to
     scalars. Pass an ``httpx.Client`` to reuse a connection pool (and for tests
-    to mount a respx transport).
+    to mount a respx transport). Pass ``db`` to resolve GA creds from the
+    settings area; ``db=None`` falls back to env-only.
     """
     try:
-        enabled, measurement_id, api_secret = _ga_config()
+        enabled, measurement_id, api_secret = _ga_config(db)
 
         if not enabled:
             return False

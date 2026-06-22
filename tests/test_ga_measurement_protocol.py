@@ -21,7 +21,9 @@ _COLLECT_URL = "https://www.google-analytics.com/mp/collect"
 
 
 def _configure(monkeypatch, *, enabled=True, mid="G-TEST123", secret="s3cr3t"):
-    monkeypatch.setattr(ga, "_ga_config", lambda: (enabled, mid, secret))
+    # _ga_config now accepts an optional db arg (settings-area resolution);
+    # accept and ignore it so the patched stub matches the real signature.
+    monkeypatch.setattr(ga, "_ga_config", lambda db=None: (enabled, mid, secret))
 
 
 # ---------------------------------------------------------------------------
@@ -163,3 +165,43 @@ def test_safe_params_drops_non_scalars():
         }
     )
     assert out == {"s": "x", "i": 3, "f": 1.5, "b": False}
+
+
+# ---------------------------------------------------------------------------
+# Test 7 — _ga_config resolves GA creds: settings-area row wins over env
+# ---------------------------------------------------------------------------
+
+from types import SimpleNamespace  # noqa: E402
+
+from app.services import integration_creds as ic  # noqa: E402
+
+
+def _row(config=None, enabled=True):
+    return SimpleNamespace(secrets={}, config=config or {}, enabled=enabled)
+
+
+def test_ga_config_prefers_settings_area_row(monkeypatch):
+    monkeypatch.setattr(
+        ic.integration_settings, "get",
+        lambda db, p: _row(config={"measurement_id": "G-FROMSETTINGS", "api_secret": "sec_settings"}),
+    )
+    monkeypatch.setattr(ic.settings, "GA_MEASUREMENT_ID", "G-FROMENV", raising=False)
+    monkeypatch.setattr(ic.settings, "GA_API_SECRET", "sec_env", raising=False)
+    # _ga_config reads OBSERVABILITY_ENABLED from the same settings singleton.
+    monkeypatch.setattr(ic.settings, "OBSERVABILITY_ENABLED", True, raising=False)
+
+    enabled, mid, secret = ga._ga_config(db=object())
+    assert enabled is True
+    assert mid == "G-FROMSETTINGS"
+    assert secret == "sec_settings"
+
+
+def test_ga_config_falls_back_to_env(monkeypatch):
+    monkeypatch.setattr(ic.integration_settings, "get", lambda db, p: None)
+    monkeypatch.setattr(ic.settings, "GA_MEASUREMENT_ID", "G-FROMENV", raising=False)
+    monkeypatch.setattr(ic.settings, "GA_API_SECRET", "sec_env", raising=False)
+
+    # db=None skips the settings-area lookup entirely -> env only.
+    _, mid, secret = ga._ga_config(db=None)
+    assert mid == "G-FROMENV"
+    assert secret == "sec_env"

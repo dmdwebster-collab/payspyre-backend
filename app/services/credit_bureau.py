@@ -5,7 +5,6 @@ from typing import Any
 from uuid import uuid4
 
 import httpx
-from app.core.config import settings
 
 
 class CreditBureauClient:
@@ -412,9 +411,25 @@ class TransUnionClient(CreditBureauClient):
 class CreditBureauService:
     """Service for orchestrating credit bureau queries."""
 
-    def __init__(self):
-        self.equifax_client = EquifaxClient(settings.EQUIFAX_API_KEY) if settings.EQUIFAX_API_KEY else None
-        self.transunion_client = TransUnionClient(settings.TRANSUNION_API_KEY) if settings.TRANSUNION_API_KEY else None
+    def __init__(self, db=None):
+        # Prefer creds from the settings area (Dave's mandate); env fallback.
+        # db=None (e.g. unit tests / call sites without a session) -> env only,
+        # preserving prior behavior. Bureau is mock-only today, so this stays
+        # graceful: an unconfigured bureau simply yields a None client.
+        from app.services.integration_creds import resolve
+
+        eq = resolve(
+            db, "equifax",
+            secret_keys=["api_key"],
+            env={"api_key": "EQUIFAX_API_KEY"},
+        )
+        tu = resolve(
+            db, "transunion",
+            secret_keys=["api_key"],
+            env={"api_key": "TRANSUNION_API_KEY"},
+        )
+        self.equifax_client = EquifaxClient(eq["api_key"]) if eq["api_key"] else None
+        self.transunion_client = TransUnionClient(tu["api_key"]) if tu["api_key"] else None
 
     def _get_bureau_clients(self) -> list[CreditBureauClient]:
         """Return list of configured and enabled bureau clients."""
