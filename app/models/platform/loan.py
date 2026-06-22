@@ -1,15 +1,18 @@
 from uuid import uuid4
 
 from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
     Column,
     Date,
     DateTime,
-    String,
-    Integer,
-    BigInteger,
     ForeignKey,
+    Index,
+    Integer,
+    String,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID, ENUM
 from sqlalchemy.orm import relationship
@@ -28,16 +31,39 @@ class PlatformLoan(Base):
     __tablename__ = "platform_loans"
     # One loan per application (enforced in the DB by migration 032). Makes
     # book_loan's idempotency race-safe — duplicate booking → IntegrityError.
+    # (application_id is NULL only for migrated loans, source='turnkey_migration';
+    # Postgres treats NULLs as distinct so the unique constraint still allows many.)
     __table_args__ = (
         UniqueConstraint("application_id", name="uq_platform_loans_application"),
+        # A normally-originated loan MUST have an application; only a migrated loan
+        # may have a NULL application_id (migration 035).
+        CheckConstraint(
+            "source = 'turnkey_migration' OR application_id IS NOT NULL",
+            name="ck_platform_loans_application_or_migration",
+        ),
+        # Idempotent re-import: a legacy account maps to at most one loan.
+        Index(
+            "uq_platform_loans_legacy_acct",
+            "legacy_account_number",
+            unique=True,
+            postgresql_where=text("legacy_account_number IS NOT NULL"),
+        ),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    # NULL only for loans migrated from a legacy LMS (no PaySpyre application exists).
     application_id = Column(
         UUID(as_uuid=True),
         ForeignKey("platform_credit_applications.id"),
-        nullable=False,
+        nullable=True,
     )
+
+    # Provenance: 'application' (default — originated through the PaySpyre flow) or
+    # 'turnkey_migration' (imported from the legacy Turnkey book).
+    source = Column(String, nullable=False, server_default="application")
+    # The legacy Turnkey account number, for tracing + idempotent re-import. NULL for
+    # natively-originated loans; uniquely indexed when present (migration 035).
+    legacy_account_number = Column(String, nullable=True)
 
     principal_cents = Column(BigInteger, nullable=False)
     annual_rate_bps = Column(Integer, nullable=False)
