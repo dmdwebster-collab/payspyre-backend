@@ -1,0 +1,37 @@
+name: Load test (L6 / k6)
+
+# SLO/load validation of the public read surface against staging. Read-only and
+# rate-limited (≈1 req/s per VU), so it's safe to run on a schedule. Weekly +
+# on-demand; a threshold breach (error budget or p95 latency) fails the run.
+
+on:
+  schedule:
+    - cron: "0 8 * * 1"  # Mondays 08:00 UTC
+  workflow_dispatch:
+    inputs:
+      vus:
+        description: "Peak virtual users"
+        required: false
+        default: "20"
+      p95_ms:
+        description: "p95 latency SLO (ms)"
+        required: false
+        default: "1500"
+      api_base:
+        description: "API base URL"
+        required: false
+        default: "https://payspyre-api-staging-5cflx.ondigitalocean.app/api"
+
+jobs:
+  k6:
+    runs-on: ubuntu-latest
+    env:
+      API_BASE: ${{ github.event.inputs.api_base || 'https://payspyre-api-staging-5cflx.ondigitalocean.app/api' }}
+      LOAD_VUS: ${{ github.event.inputs.vus || '20' }}
+      P95_MS: ${{ github.event.inputs.p95_ms || '1500' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install k6
+        uses: grafana/setup-k6-action@v1
+      - name: Run load test (fails on SLO breach)
+        run: k6 run scripts/load/products_load.js
