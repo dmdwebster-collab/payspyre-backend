@@ -54,6 +54,14 @@ ASSUMPTION: amounts are sent as decimal **dollars** (e.g. 100.50), NOT cents.
 We accept ``amount_cents`` at the boundary (the codebase's money unit) and
 convert. Flip ``AMOUNT_IN_CENTS = True`` if Zumrails actually wants minor units.
 
+MONEY UNIT CONTRACT: amounts are **integer cents** everywhere internally. The
+cents→dollars conversion happens at exactly one place (``_format_amount``) and
+is done in ``Decimal`` — never float arithmetic — so it is exact. The vendor
+wire format requires a JSON number and ``json.dumps`` cannot serialize a
+``Decimal``, so the final value is emitted as a float, but only after proving it
+round-trips back to the exact 2dp ``Decimal`` (true for every loan amount below
+~$90T); otherwise we raise rather than risk a wrong-amount disbursement.
+
 RESPONSE SHAPE: ``{"isError": false, "result": {"Id": "<uuid>",
 "TransactionStatus": "Pending" | "InProgress" | "Completed" | "Failed" |
 "Cancelled", ...}}``. We normalize ``TransactionStatus`` to our own
@@ -79,6 +87,7 @@ from typing import Any, Literal, Optional
 
 import httpx
 
+from app.core import http_client
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -103,7 +112,10 @@ _TYPE_COLLECTION = "AddToAccount"
 
 _SIGNATURE_HEADER = "X-Zumrails-Signature"
 
-_DEFAULT_TIMEOUT = 15.0
+#: Standardized on the shared split connect/read timeout (app.core.http_client)
+#: rather than the old ad-hoc single 15.0s float, so a slow read can't share the
+#: short connect budget and neither hangs a worker indefinitely.
+_DEFAULT_TIMEOUT = http_client.DEFAULT_TIMEOUT
 
 
 # ---------------------------------------------------------------------------
@@ -217,7 +229,7 @@ class ZumrailsAdapter:
         funding_source_id: Optional[str] = None,
         currency: str = "CAD",
         auth_mode: Literal["oauth", "static_bearer"] = "oauth",
-        timeout: float = _DEFAULT_TIMEOUT,
+        timeout: httpx.Timeout | float = _DEFAULT_TIMEOUT,
     ) -> None:
         self._api_key = api_key
         self._api_secret = api_secret
@@ -292,9 +304,18 @@ class ZumrailsAdapter:
         token = self._get_token()
         path = _TRANSACTION_BY_ID_PATH.format(id=transaction_id)
         url = f"{self._base_url}{path}"
+        # Routed through the shared HTTP helper for consistent connect/read
+        # timeouts + status/latency logging (no PII/keys logged).
         try:
             with httpx.Client(timeout=self._timeout) as client:
-                response = client.get(url, headers=self._auth_headers(token))
+                response = http_client.request(
+                    "GET",
+                    url,
+                    provider="zumrails",
+                    op="get_transaction",
+                    client=client,
+                    headers=self._auth_headers(token),
+                )
         except httpx.HTTPError as exc:
             raise TransientZumrailsError(
                 f"Zumrails get-transaction network error: {type(exc).__name__}"
@@ -373,11 +394,18 @@ class ZumrailsAdapter:
 
         url = f"{self._base_url}{_TRANSACTION_PATH}"
         # No retries: a retried push could double-disburse. The servicing layer
-        # owns idempotency via ClientTransactionId.
+        # owns idempotency via ClientTransactionId. Routed through the shared HTTP
+        # helper for consistent connect/read timeouts + status/latency logging.
         try:
             with httpx.Client(timeout=self._timeout) as client:
-                response = client.post(
-                    url, headers=self._auth_headers(token), json=body
+                response = http_client.request(
+                    "POST",
+                    url,
+                    provider="zumrails",
+                    op="create_transaction",
+                    client=client,
+                    headers=self._auth_headers(token),
+                    json=body,
                 )
         except httpx.HTTPError as exc:
             raise TransientZumrailsError(
@@ -410,10 +438,17 @@ class ZumrailsAdapter:
             return self._api_key
 
         url = f"{self._base_url}{_AUTHORIZE_PATH}"
+        # Routed through the shared HTTP helper for consistent connect/read
+        # timeouts + status/latency logging (no PII/keys logged — the credential
+        # body is never logged, only host+path/status/latency).
         try:
             with httpx.Client(timeout=self._timeout) as client:
-                response = client.post(
+                response = http_client.request(
+                    "POST",
                     url,
+                    provider="zumrails",
+                    op="authorize",
+                    client=client,
                     headers={"Content-Type": "application/json"},
                     json={"username": self._api_key, "password": self._api_secret},
                 )
@@ -437,13 +472,31 @@ class ZumrailsAdapter:
         }
 
     def _format_amount(self, amount_cents: int) -> Any:
+        # Money is integer cents everywhere internally; we only convert to the
+        # vendor's wire unit at this single boundary. The conversion is done in
+        # ``Decimal`` (never float arithmetic) so cents → dollars is exact.
+        if not isinstance(amount_cents, int) or isinstance(amount_cents, bool):
+            # Guard the money-out path against a float/str sneaking in upstream:
+            # any non-int amount here is a programming error, not a vendor one.
+            raise PermanentZumrailsError("amount_cents must be an int (minor units)")
         if AMOUNT_IN_CENTS:
             return amount_cents
-        # Decimal dollars, 2dp, no float artifacts.
+        # Exact decimal dollars, 2dp. We must hand httpx (``json.dumps``) a
+        # JSON-encodable number, and json.dumps cannot serialize Decimal, so we
+        # emit a float — but ONLY after proving the float round-trips back to the
+        # exact 2dp value. For every realistic loan amount this holds (Python's
+        # shortest-repr recovers any value below ~2**53 cents ≈ $90T exactly);
+        # the guard turns the theoretical large-amount FP-drift case into a hard
+        # failure on the MONEY OUT path instead of a silent wrong-amount push.
         dollars = (Decimal(amount_cents) / Decimal(100)).quantize(
             Decimal("0.01"), rounding=ROUND_HALF_UP
         )
-        return float(dollars)
+        wire = float(dollars)
+        if Decimal(str(wire)) != dollars:
+            raise PermanentZumrailsError(
+                "amount_cents too large to represent losslessly as a wire amount"
+            )
+        return wire
 
     def _parse_response(self, response: httpx.Response, op: str) -> dict[str, Any]:
         """Classify HTTP status → transient/permanent, then return parsed JSON.

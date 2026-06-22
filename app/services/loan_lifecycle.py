@@ -44,7 +44,8 @@ testable). For tests, adapters can be injected directly via ``signnow=`` /
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from sqlalchemy.exc import IntegrityError
@@ -52,11 +53,15 @@ from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
 from app.models.platform.credit_application import PlatformCreditApplication
+from app.models.platform.event import PlatformEvent
 from app.models.platform.loan import PlatformLoan
 from app.services import integration_settings
 from app.services import loan_servicing
 from app.services.esign.signnow_adapter import SignerInput
-from app.services.payments.zumrails_adapter import TransactionStatus
+from app.services.payments.zumrails_adapter import (
+    TransactionStatus,
+    ZumrailsError,
+)
 
 logger = get_logger(__name__)
 
@@ -64,6 +69,64 @@ logger = get_logger(__name__)
 # Provider slugs in platform_integration_settings (see KNOWN_PROVIDERS).
 _SIGNNOW_PROVIDER = "signnow"
 _ZUMRAILS_PROVIDER = "zumrails"
+
+# How long a disbursement may sit in ``in_progress`` before reconciliation will
+# poll Zumrails for it. Tuned conservatively: EFT settlement and the terminal
+# webhook normally land well inside a day, so anything older is "stuck" and
+# worth an active status check rather than waiting forever on a webhook.
+_DEFAULT_RECONCILE_AFTER = timedelta(hours=6)
+
+
+# ---------------------------------------------------------------------------
+# Money-movement audit trail
+# ---------------------------------------------------------------------------
+# Until now only the decision + adverse-action flows wrote PlatformEvent rows, so
+# the LMS money path (book → disburse) left no auditable history. These event
+# types record each money-moving lifecycle transition. Names mirror the structlog
+# events for grep-ability; the rows carry only ids + amounts (cents) + status —
+# never PII.
+LOAN_BOOKED_EVENT = "loan_booked"
+LOAN_DISBURSEMENT_INITIATED_EVENT = "loan_disbursement_initiated"
+LOAN_DISBURSED_EVENT = "loan_disbursed"
+LOAN_DISBURSEMENT_FAILED_EVENT = "loan_disbursement_failed"
+
+
+def _record_loan_event(db: Session, loan: PlatformLoan, event_type: str, after: dict) -> None:
+    """Append a money-movement audit row for a loan lifecycle transition.
+
+    Added to the session (NOT flushed/committed here) so it shares the caller's
+    transaction and is persisted atomically with the state change by the same
+    ``db.commit()``. Query-free and flush-free, so it is safe under the unit
+    tests' in-memory fake session. No PII: only loan/application ids, amounts in
+    cents, and lifecycle status.
+    """
+    db.add(
+        PlatformEvent(
+            event_type=event_type,
+            actor="system",
+            application_id=getattr(loan, "application_id", None),
+            payload={
+                "v": 1,
+                "actor": {"type": "system", "id": "system"},
+                "loan_id": str(loan.id),
+                "application_id": (
+                    str(loan.application_id) if getattr(loan, "application_id", None) else None
+                ),
+                "after": after,
+            },
+        )
+    )
+
+
+def _disbursed_after(loan: PlatformLoan) -> dict:
+    """The ``after`` payload for a ``loan_disbursed`` (funds released) event."""
+    return {
+        "status": loan.status,
+        "disbursement_status": loan.disbursement_status,
+        "amount_cents": loan.principal_cents,
+        "disbursement_ref": loan.disbursement_ref,
+        "disbursed_at": loan.disbursed_at.isoformat() if loan.disbursed_at else None,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -210,6 +273,18 @@ def book_loan(
             )
             return existing
         raise
+    _record_loan_event(
+        db,
+        loan,
+        LOAN_BOOKED_EVENT,
+        {
+            "status": loan.status,
+            "principal_cents": loan.principal_cents,
+            "term_months": loan.term_months,
+            "annual_rate_bps": loan.annual_rate_bps,
+        },
+    )
+    db.commit()
     logger.info(
         "loan_booked",
         application_id=str(application.id),
@@ -376,6 +451,28 @@ def on_agreement_signed(
     elif result.status == TransactionStatus.FAILED:
         loan.disbursement_status = "failed"
 
+    _record_loan_event(
+        db,
+        loan,
+        LOAN_DISBURSEMENT_INITIATED_EVENT,
+        {
+            "amount_cents": loan.principal_cents,
+            "disbursement_status": loan.disbursement_status,
+            "disbursement_ref": loan.disbursement_ref,
+        },
+    )
+    # A synchronous terminal result won't be followed by a webhook, so record the
+    # terminal money event here too rather than leaving the trail incomplete.
+    if loan.status == "active" and loan.disbursement_status == "completed":
+        _record_loan_event(db, loan, LOAN_DISBURSED_EVENT, _disbursed_after(loan))
+    elif loan.disbursement_status == "failed":
+        _record_loan_event(
+            db,
+            loan,
+            LOAN_DISBURSEMENT_FAILED_EVENT,
+            {"amount_cents": loan.principal_cents, "disbursement_ref": loan.disbursement_ref},
+        )
+
     db.commit()
     db.refresh(loan)
     logger.info(
@@ -417,6 +514,7 @@ def on_disbursement_complete(
         return loan
 
     _mark_active(loan)
+    _record_loan_event(db, loan, LOAN_DISBURSED_EVENT, _disbursed_after(loan))
     db.commit()
     db.refresh(loan)
     logger.info(
@@ -441,10 +539,151 @@ def on_disbursement_failed(
     if loan.disbursement_status == "completed":
         return loan
     loan.disbursement_status = "failed"
+    _record_loan_event(
+        db,
+        loan,
+        LOAN_DISBURSEMENT_FAILED_EVENT,
+        {"amount_cents": loan.principal_cents, "disbursement_ref": loan.disbursement_ref or ref},
+    )
     db.commit()
     db.refresh(loan)
     logger.warning("loan_disbursement_failed", loan_id=str(loan.id), ref=ref)
     return loan
+
+
+# ---------------------------------------------------------------------------
+# Reconciliation — advance disbursements stuck in_progress with no webhook
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ReconcileResult:
+    """Summary of a ``reconcile_stuck_disbursements`` sweep (no PII).
+
+    Counters are mutually exclusive per loan examined: each stuck loan lands in
+    exactly one bucket. ``loans_completed`` / ``loans_failed`` are the loan ids
+    advanced to a terminal state via the existing lifecycle entry points.
+    """
+
+    examined: int = 0
+    loans_completed: list[str] = field(default_factory=list)
+    loans_failed: list[str] = field(default_factory=list)
+    still_pending: int = 0  # vendor status still non-terminal — left in_progress
+    skipped_no_ref: int = 0  # in_progress but no disbursement_ref to poll
+    errors: int = 0  # adapter/poll error — left untouched for the next sweep
+    provider_disabled: bool = False  # adapter couldn't be built — whole sweep no-op'd
+
+    def __str__(self) -> str:  # pragma: no cover - logging convenience
+        return (
+            f"examined={self.examined} completed={len(self.loans_completed)} "
+            f"failed={len(self.loans_failed)} still_pending={self.still_pending} "
+            f"skipped_no_ref={self.skipped_no_ref} errors={self.errors} "
+            f"provider_disabled={self.provider_disabled}"
+        )
+
+
+def reconcile_stuck_disbursements(
+    db: Session,
+    *,
+    stuck_for: timedelta = _DEFAULT_RECONCILE_AFTER,
+    now: Optional[datetime] = None,
+    zumrails=None,
+    limit: int = 200,
+) -> ReconcileResult:
+    """Find loans wedged at ``disbursement_status=in_progress`` and resolve them.
+
+    A disbursement is left ``in_progress`` forever if Zumrails returns a
+    non-terminal status (PENDING/IN_PROGRESS/UNKNOWN) at push time and no
+    terminal webhook ever arrives. This sweep is the safety net: for each such
+    loan older than ``stuck_for`` it polls the Zumrails adapter for the
+    transaction's *current* status and advances it via the existing
+    ``on_disbursement_complete`` / ``on_disbursement_failed`` entry points —
+    which own all the state logic and are idempotent + forward-only. This
+    function deliberately contains **no** state transitions of its own.
+
+    Graceful no-op: if no Zumrails adapter can be built (provider disabled /
+    unconfigured) the sweep returns immediately with ``provider_disabled=True``
+    and touches nothing. Per-loan adapter errors are swallowed (logged + counted)
+    so one bad transaction can't abort the batch; that loan is retried next sweep.
+
+    Tests inject ``zumrails=`` to bypass credential lookup, and ``now=`` to make
+    the staleness cutoff deterministic.
+    """
+    result = ReconcileResult()
+
+    adapter = zumrails if zumrails is not None else _build_zumrails_adapter(db)
+    if adapter is None:
+        logger.warning(
+            "loan_disbursement_reconcile_noop_provider_disabled",
+            provider=_ZUMRAILS_PROVIDER,
+        )
+        result.provider_disabled = True
+        return result
+
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - stuck_for
+
+    # Stuck = still in_progress and not touched since the cutoff. updated_at flips
+    # on every state change (onupdate=func.now()), so it's the freshest "this loan
+    # hasn't moved" signal we have without adding a column.
+    stuck = (
+        db.query(PlatformLoan)
+        .filter(
+            PlatformLoan.disbursement_status == "in_progress",
+            PlatformLoan.updated_at <= cutoff,
+        )
+        .order_by(PlatformLoan.updated_at.asc())
+        .limit(limit)
+        .all()
+    )
+
+    for loan in stuck:
+        result.examined += 1
+        if not loan.disbursement_ref:
+            # In_progress with no vendor id to poll — can't reconcile here; an
+            # operator must investigate. (Shouldn't happen: the ref is set in the
+            # same commit as in_progress.)
+            logger.warning(
+                "loan_disbursement_reconcile_no_ref", loan_id=str(loan.id)
+            )
+            result.skipped_no_ref += 1
+            continue
+
+        try:
+            txn = adapter.get_transaction_status(loan.disbursement_ref)
+        except ZumrailsError as exc:
+            # Transient/permanent both: leave the loan in_progress and move on —
+            # do not guess a terminal state from a failed poll.
+            logger.warning(
+                "loan_disbursement_reconcile_poll_failed",
+                loan_id=str(loan.id),
+                disbursement_ref=loan.disbursement_ref,
+                error=type(exc).__name__,
+            )
+            result.errors += 1
+            continue
+
+        if txn.status == TransactionStatus.COMPLETED:
+            on_disbursement_complete(db, loan, ref=loan.disbursement_ref)
+            result.loans_completed.append(str(loan.id))
+        elif txn.status == TransactionStatus.FAILED:
+            on_disbursement_failed(db, loan, ref=loan.disbursement_ref)
+            result.loans_failed.append(str(loan.id))
+        else:
+            # PENDING / IN_PROGRESS / CANCELLED / UNKNOWN — non-terminal. We treat
+            # these EXACTLY as the live Zumrails webhook does (payments.py: only
+            # COMPLETED/FAILED write; everything else is ignored) so the same vendor
+            # status never produces a different money outcome by arrival path. Leave
+            # the loan in_progress; the next sweep (or a terminal webhook) decides it.
+            logger.info(
+                "loan_disbursement_reconcile_still_pending",
+                loan_id=str(loan.id),
+                vendor_status=txn.status.value,
+            )
+            result.still_pending += 1
+
+    logger.info("loan_disbursement_reconcile_complete", result=str(result))
+    return result
 
 
 def on_agreement_declined(db: Session, loan: PlatformLoan) -> PlatformLoan:

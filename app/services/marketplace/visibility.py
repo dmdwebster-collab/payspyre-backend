@@ -35,6 +35,21 @@ def is_visible_to_vendors(lead_state: str) -> bool:
     return bool(rules.get("visible_to_clinics", False))
 
 
+def visible_lead_states() -> tuple[str, ...]:
+    """Lead-state values that are visible to vendors/clinics.
+
+    Returned as a tuple so the lead query can push the visibility rule into SQL
+    (``lead_state IN (...)``) instead of fetching everything and filtering in
+    Python. Equivalent to the set of states for which ``is_visible_to_vendors``
+    is True.
+    """
+    return tuple(
+        state
+        for state, rules in _DEFAULT_VISIBILITY.items()
+        if isinstance(rules, dict) and rules.get("visible_to_clinics", False)
+    )
+
+
 def _fsa(postal_code: str | None) -> str:
     """Return the forward sortation area (first 3 chars), uppercased, spaces stripped."""
     if not postal_code:

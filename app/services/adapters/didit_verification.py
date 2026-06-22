@@ -35,6 +35,13 @@ class DiditInitiationResult:
     cost_cents: int = 0
 
 
+@dataclass(frozen=True)
+class DiditSessionStatus:
+    session_id: str
+    status: str       # Didit session status, e.g. "Approved"/"Declined"/"In Review"
+    raw: dict[str, Any]  # full decoded payload for the caller to normalize
+
+
 class DiditVerificationAdapter(VerificationAdapter):
     """Wraps Didit's ``POST /v3/session/`` (x-api-key auth) to start a session."""
 
@@ -87,6 +94,36 @@ class DiditVerificationAdapter(VerificationAdapter):
             session_id=str(payload["session_id"]),
             url=str(payload["url"]),
             cost_cents=cost_cents,
+        )
+
+    def retrieve_session(self, session_id: str) -> DiditSessionStatus:
+        """Fetch the current state of a Didit session (``GET /v3/session/{id}/``).
+
+        This is the read/reconciliation path used when a webhook is delayed or
+        missed. Because a GET is idempotent and safe to repeat, it goes through
+        the shared helper's *bounded* retry-with-backoff so a transient vendor
+        5xx/timeout doesn't fail the lookup outright (the create POST does NOT
+        get this treatment). Raises ``DiditAPIError`` on a non-2xx that survives
+        the retries.
+        """
+        from app.core import http_client
+
+        response = http_client.request_with_retry(
+            "GET",
+            f"{self._api_base_url}{self._SESSION_PATH}{session_id}/",
+            provider="didit",
+            op="retrieve_session",
+            headers={"x-api-key": self._api_key},
+        )
+        if response.status_code // 100 != 2:
+            raise DiditAPIError(
+                f"Didit retrieve-session failed: HTTP {response.status_code} {response.text[:200]}"
+            )
+        payload = response.json()
+        return DiditSessionStatus(
+            session_id=str(payload.get("session_id", session_id)),
+            status=str(payload.get("status", "")),
+            raw=payload,
         )
 
     async def verify_identity(self, patient: PatientProfile, method: str) -> VerificationResult:

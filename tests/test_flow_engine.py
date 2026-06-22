@@ -28,7 +28,7 @@ from app.services.adapters import (
     PatientProfile,
 )
 from app.services.adapters.base import BankAdapter, BureauAdapter
-from app.services.adapters.didit import DiditVerificationAdapter
+from app.services.adapters.didit import DiditSessionVerificationAdapter
 from app.services.flow_engine import ApplicantInput, FlowDecision, run_flow
 
 # Matches the seeded dental_full_arch_v1 verification_matrix (migration 022).
@@ -155,7 +155,7 @@ async def test_engine_adapter_agnostic():
             return_value=SimpleNamespace(kyc_session_id=uuid4(), verification_url="https://x", expires_at="z")
         )
     )
-    didit_adapters = FlowAdapters(DiditVerificationAdapter(client=fake_client), bureau, MockBankAdapter())
+    didit_adapters = FlowAdapters(DiditSessionVerificationAdapter(client=fake_client), bureau, MockBankAdapter())
     didit_decision = await run_flow(make_application(), make_product(), make_patient(), didit_adapters)
 
     assert isinstance(mock_decision, FlowDecision)

@@ -106,10 +106,14 @@ class _Loan:
         status="pending_disbursement",
         agreement_status="not_sent",
         disbursement_status="not_started",
+        term_months=12,
+        annual_rate_bps=0,
     ):
         self.id = "loan-1"
         self.application_id = "app-1"
         self.principal_cents = principal_cents
+        self.term_months = term_months
+        self.annual_rate_bps = annual_rate_bps
         self.principal_balance_cents = principal_balance_cents
         self.status = status
         self.agreement_status = agreement_status
@@ -386,6 +390,77 @@ def test_book_loan_creates_when_absent(monkeypatch):
     app = type("App", (), {"id": "app-1"})()
     out = loan_lifecycle.book_loan(db, app)
     assert out is created
+
+
+# ===========================================================================
+# Money-movement audit events
+# ===========================================================================
+
+
+def _events(db, event_type=None):
+    """PlatformEvent rows added to the fake session (optionally by type)."""
+    evs = [o for o in db.added if hasattr(o, "event_type") and hasattr(o, "payload")]
+    return [e for e in evs if event_type is None or e.event_type == event_type]
+
+
+def test_book_loan_emits_booked_event(monkeypatch):
+    db = _FakeSession(query_results={"first": None})
+    created = _Loan(principal_cents=450_000)
+    monkeypatch.setattr(
+        loan_lifecycle.loan_servicing,
+        "create_loan_from_application",
+        lambda *a, **k: created,
+    )
+    app = type("App", (), {"id": "app-1"})()
+    loan_lifecycle.book_loan(db, app)
+
+    evs = _events(db, loan_lifecycle.LOAN_BOOKED_EVENT)
+    assert len(evs) == 1
+    assert evs[0].actor == "system"
+    assert evs[0].payload["loan_id"] == str(created.id)
+    assert evs[0].payload["after"]["principal_cents"] == 450_000
+
+
+def test_signed_emits_disbursement_initiated_event():
+    db = _FakeSession()
+    loan = _Loan(agreement_status="sent")
+    loan_lifecycle.on_agreement_signed(
+        db, loan, recipient_id="rcpt_1", zumrails=_MockZumrails()  # IN_PROGRESS
+    )
+    evs = _events(db, loan_lifecycle.LOAN_DISBURSEMENT_INITIATED_EVENT)
+    assert len(evs) == 1
+    assert evs[0].payload["after"]["amount_cents"] == loan.principal_cents
+    # Non-terminal → no terminal money event yet.
+    assert _events(db, loan_lifecycle.LOAN_DISBURSED_EVENT) == []
+
+
+def test_disbursement_complete_emits_disbursed_event():
+    db = _FakeSession()
+    loan = _Loan(status="pending_disbursement", disbursement_status="in_progress")
+    loan.disbursement_ref = "zr_tx_1"
+    loan_lifecycle.on_disbursement_complete(db, loan, ref="zr_tx_1")
+
+    evs = _events(db, loan_lifecycle.LOAN_DISBURSED_EVENT)
+    assert len(evs) == 1
+    assert evs[0].payload["after"]["status"] == "active"
+    assert evs[0].payload["after"]["amount_cents"] == loan.principal_cents
+    assert evs[0].payload["after"]["disbursement_ref"] == "zr_tx_1"
+
+
+def test_disbursement_complete_idempotent_emits_no_event():
+    db = _FakeSession()
+    loan = _Loan(status="active", disbursement_status="completed")
+    loan_lifecycle.on_disbursement_complete(db, loan, ref="zr_tx_1")
+    assert _events(db) == []  # replay is a pure no-op, no audit row
+
+
+def test_disbursement_failed_emits_failed_event():
+    db = _FakeSession()
+    loan = _Loan(status="pending_disbursement", disbursement_status="in_progress")
+    loan_lifecycle.on_disbursement_failed(db, loan, ref="zr_tx_9")
+    evs = _events(db, loan_lifecycle.LOAN_DISBURSEMENT_FAILED_EVENT)
+    assert len(evs) == 1
+    assert evs[0].payload["after"]["disbursement_ref"] == "zr_tx_9"
 
 
 # ===========================================================================

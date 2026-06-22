@@ -18,6 +18,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
+from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.clinic.v1.deps import ClinicPrincipal, get_current_clinic_user
@@ -89,11 +90,34 @@ def to_clinic_application(row: PlatformCreditApplication) -> ClinicApplication:
     )
 
 
-def build_summary(rows: list[PlatformCreditApplication]) -> ClinicDashboardSummary:
+def _summary_from_status_counts(pairs) -> ClinicDashboardSummary:
+    """Fold ``(platform_status, count)`` pairs into the 4 clinic buckets.
+
+    Pure (no DB) so the bucketing — and the fact that it counts *all* rows, not a
+    capped slice — is unit-testable.
+    """
     counts = {"started": 0, "approved": 0, "declined": 0, "manual_review": 0}
-    for row in rows:
-        counts[to_clinic_status(row.status)] += 1
-    return ClinicDashboardSummary(total=len(rows), **counts)
+    total = 0
+    for status, n in pairs:
+        total += n
+        counts[to_clinic_status(status)] += n
+    return ClinicDashboardSummary(total=total, **counts)
+
+
+def summarize_applications(db: Session, vendor_id: UUID) -> ClinicDashboardSummary:
+    """Status-bucket counts for ONE clinic via a SQL ``GROUP BY``.
+
+    Counts every application for the clinic regardless of volume. (The previous
+    path counted a 200-row capped fetch, so a busy clinic's dashboard cards
+    silently undercounted past 200.) Clinic-scoped to ``vendor_id``.
+    """
+    pairs = (
+        db.query(PlatformCreditApplication.status, func.count().label("n"))
+        .filter(PlatformCreditApplication.vendor_id == vendor_id)
+        .group_by(PlatformCreditApplication.status)
+        .all()
+    )
+    return _summary_from_status_counts(pairs)
 
 
 # --- routes ----------------------------------------------------------------
@@ -113,5 +137,4 @@ def dashboard_summary(
     db: Session = Depends(get_db),
     principal: ClinicPrincipal = Depends(get_current_clinic_user),
 ):
-    rows = query_applications(db, principal.vendor_id)
-    return build_summary(rows)
+    return summarize_applications(db, principal.vendor_id)
