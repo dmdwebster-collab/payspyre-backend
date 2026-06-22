@@ -10,7 +10,7 @@ from app.services.adapters.base import (
     VerificationOutcome,
     VerificationResult,
 )
-from app.services.adapters.didit import DiditVerificationAdapter
+from app.services.adapters.didit import DiditSessionVerificationAdapter
 from app.services.adapters.mock_bank import MockBankAdapter
 from app.services.adapters.mock_bureau import MockBureauAdapter
 from app.services.adapters.mock_verification import MockVerificationAdapter
@@ -20,7 +20,7 @@ __all__ = [
     "BankAdapter",
     "BureauAdapter",
     "BureauResult",
-    "DiditVerificationAdapter",
+    "DiditSessionVerificationAdapter",
     "FlowAdapters",
     "MockBankAdapter",
     "MockBureauAdapter",

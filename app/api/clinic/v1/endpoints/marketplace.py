@@ -15,7 +15,7 @@ from __future__ import annotations
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.clinic.v1.deps import ClinicPrincipal, get_current_clinic_user
@@ -31,15 +31,22 @@ def list_leads(
     treatment_category: Optional[str] = None,
     max_distance_km: Optional[int] = None,
     min_verification: Optional[str] = None,
+    limit: int = Query(200, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
     principal: ClinicPrincipal = Depends(get_current_clinic_user),
 ) -> list[dict]:
-    """Browse live, de-identified leads (PII-free vendor_view projections)."""
+    """Browse live, de-identified leads (PII-free vendor_view projections).
+
+    Newest-first, paginated via ``limit`` (1–500, default 200) + ``offset``.
+    """
     return listings_service.list_leads_for_vendor(
         db,
         treatment_category=treatment_category,
         max_distance_km=max_distance_km,
         min_verification=min_verification,
+        limit=limit,
+        offset=offset,
     )
 
 

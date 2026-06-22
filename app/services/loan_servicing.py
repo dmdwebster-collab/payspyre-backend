@@ -28,12 +28,19 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.models.platform.credit_application import PlatformCreditApplication
+from app.models.platform.event import PlatformEvent
 from app.models.platform.loan import (
     PlatformLoan,
     PlatformLoanPayment,
     PlatformLoanScheduleItem,
     PlatformLoanStatement,
 )
+
+
+# Money-IN audit event. Mirrors the money-OUT events emitted by
+# ``loan_lifecycle`` (loan_booked / loan_disbursed) so the LMS cash path leaves a
+# complete auditable history. Rows carry only ids + amounts (cents) — never PII.
+LOAN_PAYMENT_RECORDED_EVENT = "loan_payment_recorded"
 
 
 # ---------------------------------------------------------------------------
@@ -503,6 +510,33 @@ def record_payment(
         )
         if not has_overdue_unpaid:
             loan.status = "active"
+
+    # Money-IN audit row, added to the SAME transaction so it persists atomically
+    # with the applied payment via the commit below (only reached on a real applied
+    # payment — the idempotent-replay path returned the original receipt above).
+    # db.add only (no flush/commit/query) keeps this safe under the DB-free fakes;
+    # application_id is read straight off the loan (no patient_id lookup).
+    application_id = getattr(loan, "application_id", None)
+    db.add(
+        PlatformEvent(
+            event_type=LOAN_PAYMENT_RECORDED_EVENT,
+            actor="system",
+            application_id=application_id,
+            payload={
+                "v": 1,
+                "actor": {"type": "system", "id": "system"},
+                "loan_id": str(loan.id),
+                "application_id": str(application_id) if application_id else None,
+                "after": {
+                    "amount_cents": amount_cents,
+                    "external_ref": external_ref,
+                    "method": method,
+                    "loan_status": loan.status,
+                    "principal_balance_cents": loan.principal_balance_cents,
+                },
+            },
+        )
+    )
 
     db.commit()
     db.refresh(payment)

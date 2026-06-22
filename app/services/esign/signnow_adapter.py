@@ -83,6 +83,8 @@ from typing import Any, Optional
 
 import httpx
 
+from app.core import http_client
+
 logger = logging.getLogger(__name__)
 
 # Knobs isolated so the documented webhook assumption is trivial to correct.
@@ -216,7 +218,10 @@ class SignNowAdapter:
         api_key: str,
         base_url: str,
         webhook_secret: Optional[str] = None,
-        timeout: float = 10.0,
+        # Defaults to the shared split connect/read timeout (app.core.http_client)
+        # rather than a single 10.0s float, so a slow vendor read can't share the
+        # short connect budget and neither hangs a worker indefinitely.
+        timeout: httpx.Timeout | float = http_client.DEFAULT_TIMEOUT,
     ) -> None:
         self._access_token = api_key
         self._base_url = base_url.rstrip("/")
@@ -428,7 +433,9 @@ class SignNowAdapter:
         """Issue a request with Bearer auth and classify failures.
 
         No PII ever enters the raised message — only HTTP status and a short,
-        non-PII slice of the response text.
+        non-PII slice of the response text. Routed through the shared HTTP helper
+        for consistent connect/read timeouts + status/latency logging (no
+        PII/keys logged).
         """
         url = f"{self._base_url}{path}"
         headers = {
@@ -437,7 +444,15 @@ class SignNowAdapter:
             "Accept": "application/json",
         }
         try:
-            response = client.request(method, url, headers=headers, json=json)
+            response = http_client.request(
+                method,
+                url,
+                provider="signnow",
+                op="request",
+                client=client,
+                headers=headers,
+                json=json,
+            )
         except httpx.TimeoutException as exc:
             raise SignNowTransientError(f"SignNow request timed out: {method} {path}") from exc
         except httpx.HTTPError as exc:
