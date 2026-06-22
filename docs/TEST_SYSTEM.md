@@ -58,6 +58,25 @@ React + TS + Vite / DigitalOcean App Platform).
 5. **L4 Frontend**: Vitest + Testing Library component tests + a Playwright E2E.
 6. **L6 k6 load** + **L1 mutation** + **L7 chaos** as hardening rounds.
 
+## Mutation testing (L1 hardening — "test the tests")
+
+`mutmut` scores whether the loan money-math tests actually *catch* bugs, by mutating
+`app/services/loan_servicing.py` and checking the suite kills each mutant.
+
+Run: `mutmut run` (config in `setup.cfg`), then `mutmut results` / `mutmut show <id>`.
+
+- Target test: `test_loan_mutation.py` — a SELF-CONTAINED suite at the repo root (NOT
+  under `tests/`, so `tests/conftest.py`'s autouse DB/app-init fixtures don't apply;
+  mutmut runs it in its isolated `mutants/` copy with zero DB/FastAPI setup).
+- `setup.cfg` uses `source_paths=app` + `only_mutate=app/services/loan_servicing.py`
+  (the whole app is copied so imports resolve; only the money module is mutated).
+- Score on the covered amortization + payment code: **73%** (212 killed / 80 survived;
+  442 mutants are in other loan_servicing functions this focused target doesn't cover).
+  It surfaced real gaps — due dates never crossing a year boundary, untested validation
+  boundaries/messages, imprecise partial-payment assertions — all since closed. Remaining
+  survivors are cosmetic (error-message text) or extreme boundaries.
+- Not a blocking gate (slow + score < 100%); run it as a periodic hardening pass.
+
 ## Continuous "always-on" loop
 A scheduled runner executes L5 + L8 against staging on a cron, records pass/fail +
 latency, and (per the error-budget policy) alerts when the SLO is breached. Combined
