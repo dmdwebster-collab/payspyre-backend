@@ -10,6 +10,7 @@ from app.services.adapters.base import PatientProfile
 from app.services.adapters.didit_verification import (
     DiditAPIError,
     DiditInitiationResult,
+    DiditSessionStatus,
     DiditVerificationAdapter,
 )
 
@@ -102,6 +103,71 @@ class TestInitiateResponse:
         respx.post(_SESSION_URL).mock(return_value=httpx.Response(500))
         with pytest.raises(DiditAPIError, match="500"):
             _adapter().initiate(application_id="a", patient=_patient())
+
+
+_SESSION_ID = "abc-session-1234"
+_RETRIEVE_URL = f"{_BASE_URL}/v3/session/{_SESSION_ID}/"
+
+
+@pytest.fixture(autouse=True)
+def _no_sleep(monkeypatch):
+    # Keep retry/backoff tests fast: never actually sleep between attempts.
+    monkeypatch.setattr("time.sleep", lambda *_a, **_k: None)
+
+
+class TestRetrieveSession:
+    @respx.mock
+    def test_gets_correct_url_and_auth(self):
+        route = respx.get(_RETRIEVE_URL).mock(
+            return_value=httpx.Response(200, json={"session_id": _SESSION_ID, "status": "Approved"})
+        )
+        result = _adapter().retrieve_session(_SESSION_ID)
+        assert route.called
+        assert route.calls.last.request.headers["x-api-key"] == _API_KEY
+        assert isinstance(result, DiditSessionStatus)
+        assert result.session_id == _SESSION_ID
+        assert result.status == "Approved"
+        assert result.raw["status"] == "Approved"
+
+    @respx.mock
+    def test_retries_on_5xx_then_succeeds(self):
+        route = respx.get(_RETRIEVE_URL).mock(
+            side_effect=[
+                httpx.Response(503),
+                httpx.Response(200, json={"session_id": _SESSION_ID, "status": "In Review"}),
+            ]
+        )
+        result = _adapter().retrieve_session(_SESSION_ID)
+        assert route.call_count == 2  # retried once, then ok
+        assert result.status == "In Review"
+
+    @respx.mock
+    def test_retries_on_transport_error_then_succeeds(self):
+        route = respx.get(_RETRIEVE_URL).mock(
+            side_effect=[
+                httpx.ConnectTimeout("transient"),
+                httpx.Response(200, json={"session_id": _SESSION_ID, "status": "Approved"}),
+            ]
+        )
+        result = _adapter().retrieve_session(_SESSION_ID)
+        assert route.call_count == 2
+        assert result.status == "Approved"
+
+    @respx.mock
+    def test_gives_up_after_cap_and_raises(self):
+        route = respx.get(_RETRIEVE_URL).mock(return_value=httpx.Response(500))
+        with pytest.raises(DiditAPIError, match="500"):
+            _adapter().retrieve_session(_SESSION_ID)
+        assert route.call_count == 3  # default max_attempts, no infinite loop
+
+    @respx.mock
+    def test_does_not_retry_on_4xx(self):
+        route = respx.get(_RETRIEVE_URL).mock(
+            return_value=httpx.Response(404, json={"detail": "no such session"})
+        )
+        with pytest.raises(DiditAPIError, match="404"):
+            _adapter().retrieve_session(_SESSION_ID)
+        assert route.call_count == 1  # 4xx is terminal, not retried
 
 
 class TestVerifyIdentityNotImplemented:

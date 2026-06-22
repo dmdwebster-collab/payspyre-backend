@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     # force-pass a verification), so never enable on an environment with real PII.
     # Production can never mount them regardless of this flag.
     ENABLE_DEV_TOOLS: bool = False
+    # Shared secret guarding the admin RBAC seeder (POST /api/v1/admin/dev/seed-admin).
+    # That endpoint mints a FULL-ADMIN cockpit user, so unlike the staff/clinic seeder
+    # it is inert unless this is set AND the caller presents it in X-Dev-Seed-Token —
+    # so deploying it does not create an open admin-granting backdoor.
+    DEV_SEED_TOKEN: str = ""
     VERSION: str = "0.1.0"
 
     # Observability
@@ -68,6 +73,11 @@ class Settings(BaseSettings):
     FLINKS_API_KEY: str = ""           # flinks-auth-key header
     FLINKS_API_BASE_URL: str = "https://toolbox-api.private.fin.ag"
     FLINKS_CUSTOMER_ID: str = ""       # GUID scoping Flinks calls; required for the real path
+    # Connect iframe origin (separate from the JSON API origin) + the applicant-facing
+    # redirect base. Defaults target Flinks' shared sandbox ("toolbox"); override both
+    # to point at a dedicated/prod instance.
+    FLINKS_IFRAME_BASE: str = "https://toolbox-iframe.private.fin.ag"
+    FLINKS_REDIRECT_URL_BASE: str = "https://app.payspyre.com/flinks/callback"
     USE_REAL_ADAPTERS: bool = False    # flip True in prod once Didit + Flinks creds are set
 
     # Real notification adapters + feature flag — P7.4 (outbound only; inbound
@@ -90,6 +100,11 @@ class Settings(BaseSettings):
     # dispatcher rejects sends to recipients already on the suppression list
     # before the vendor call. Disable only for tests that need to bypass it.
     USE_SUPPRESSION_CHECK: bool = True
+
+    # Borrower-facing portal base URL — used by the notification processor (WS2)
+    # to build agreement / payment / account links in transactional + dunning
+    # emails. Override per-env; no trailing slash.
+    BORROWER_PORTAL_BASE_URL: str = "https://app.payspyre.com"
 
     # Observability — P8.0 PostHog bridge. Default disabled; flip per-env via
     # OBSERVABILITY_ENABLED=true once POSTHOG_API_KEY is set. The allowlist is
@@ -177,6 +192,13 @@ class Settings(BaseSettings):
     NOTIFICATION_QUEUE_PROCESSING_INTERVAL: int = 60
     NOTIFICATION_MAX_RETRIES: int = 3
     NOTIFICATION_RETRY_DELAYS: str = "5,15,30"
+    # Durable notification retry outbox (P7.4c). When True, a vendor send that
+    # fails transiently is enqueued into ``platform_notification_outbox`` for an
+    # out-of-band worker (scripts/process_notification_outbox.py) to retry,
+    # honoring NOTIFICATION_MAX_RETRIES + the NOTIFICATION_RETRY_DELAYS backoff.
+    # INERT by default: nothing is enqueued and no worker runs until flipped, so
+    # existing send semantics (rollback on failure) are unchanged out of the box.
+    NOTIFICATION_OUTBOX_ENABLED: bool = False
 
     # Webhooks
     WEBHOOK_TIMEOUT_SECONDS: int = 30

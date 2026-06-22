@@ -21,7 +21,7 @@ from typing import Iterable, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.applicant.v1.deps import ApplicantClaims, get_current_applicant
@@ -34,6 +34,7 @@ from app.models.platform.loan import (
     PlatformLoanScheduleItem,
     PlatformLoanStatement,
 )
+from app.services import loan_payments
 
 router = APIRouter(tags=["borrower-loans"])
 
@@ -341,3 +342,44 @@ def get_statements(
             for s in rows
         ]
     )
+
+
+# ---------------------------------------------------------------------------
+# Pay Now — borrower-initiated payment (Zumrails collection). Merged in from the
+# notification/Pay-Now work (PR #118); shares this module's patient-scoped
+# ownership check. Settlement happens out-of-band via the Zumrails webhook.
+# ---------------------------------------------------------------------------
+
+
+class PayNowBody(BaseModel):
+    amount_cents: int = Field(..., gt=0, description="Amount to pay, in cents")
+
+
+class PayNowResponse(BaseModel):
+    transaction_id: str
+    status: str
+    amount_cents: int
+
+
+@router.post(
+    "/loans/{loan_id}/payments",
+    response_model=PayNowResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def pay_now(
+    loan_id: UUID,
+    body: PayNowBody,
+    db: Session = Depends(get_db),
+    claims: ApplicantClaims = Depends(get_current_applicant),
+) -> PayNowResponse:
+    """Initiate a borrower payment (Zumrails collection). Patient-scoped (404 if
+    not owned). The payment settles out-of-band when the Zumrails webhook
+    confirms it; this returns the in-flight transaction so the UI can poll."""
+    loan = _get_owned_loan(db, loan_id, claims.patient_id)
+    try:
+        result = loan_payments.initiate_payment(db, loan, body.amount_cents)
+    except loan_payments.PaymentValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    except loan_payments.PaymentProviderUnavailable as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
+    return PayNowResponse(**result)

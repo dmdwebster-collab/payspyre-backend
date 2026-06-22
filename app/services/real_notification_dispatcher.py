@@ -259,6 +259,26 @@ class ResendEmailSender:
             )
         return SendOutcome(vendor="resend", vendor_message_id=str(message_id), status="sent")
 
+    def send_message(self, *, to_email: str, subject: str, html: str) -> SendOutcome:
+        """Generic email send (WS1) — same vendor/error contract as
+        ``send_magic_link``, but subject + body are supplied by the caller
+        (rendered from a template) rather than the hardcoded magic-link copy."""
+        resend.api_key = self._api_key
+        params: dict = {
+            "from": self._from_email,
+            "to": to_email,
+            "subject": subject,
+            "html": html,
+        }
+        try:
+            result = resend.Emails.send(params)
+        except Exception as exc:  # SDK has no typed exception hierarchy yet
+            raise _classify_resend_error(exc) from exc
+        message_id = (result or {}).get("id", "") or ""
+        if not message_id:
+            raise TransientNotificationError("Resend ack did not include an email id")
+        return SendOutcome(vendor="resend", vendor_message_id=str(message_id), status="sent")
+
 
 class TwilioSmsSender:
     """Wraps ``twilio.rest.Client.messages.create`` for magic-link SMS.
@@ -314,6 +334,28 @@ class TwilioSmsSender:
         normalized: Literal["queued", "sent"] = "sent" if status_raw == "sent" else "queued"
         return SendOutcome(vendor="twilio", vendor_message_id=str(sid), status=normalized)
 
+    def send_message(self, *, to_phone: str, body: str) -> SendOutcome:
+        """Generic SMS send (WS1) — same vendor/error + StatusCallback contract
+        as ``send_magic_link``, with a caller-supplied body."""
+        create_kwargs = {"to": to_phone, "from_": self._from_number, "body": body}
+        base = settings.WEBHOOK_PUBLIC_BASE_URL.rstrip("/")
+        if base:
+            create_kwargs["status_callback"] = f"{base}/api/webhooks/v1/notifications/twilio"
+        try:
+            message = self._client.messages.create(**create_kwargs)
+        except Exception as exc:
+            raise _classify_twilio_error(exc) from exc
+        status_raw = getattr(message, "status", "queued") or "queued"
+        if status_raw in ("failed", "undelivered"):
+            raise PermanentNotificationError(f"Twilio sync status {status_raw}")
+        if status_raw not in self._ACCEPTED_SYNC_STATUSES:
+            raise TransientNotificationError(f"Unexpected Twilio sync status {status_raw}")
+        sid = getattr(message, "sid", "") or ""
+        if not sid:
+            raise TransientNotificationError("Twilio ack did not include a message sid")
+        normalized: Literal["queued", "sent"] = "sent" if status_raw == "sent" else "queued"
+        return SendOutcome(vendor="twilio", vendor_message_id=str(sid), status=normalized)
+
 
 # ---------------------------------------------------------------------------
 # Dispatcher
@@ -338,8 +380,14 @@ class RealNotificationDispatcher:
         contact_method: Literal["sms", "email"],
         token: str,
         ttl_seconds: int = 900,
+        enqueue_on_failure: bool = True,
     ) -> int:
-        """Persist the magic-link event, send via vendor, persist the audit, return event id."""
+        """Persist the magic-link event, send via vendor, persist the audit, return event id.
+
+        ``enqueue_on_failure`` (default True) controls whether a transient failure
+        enqueues a durable retry row. The outbox WORKER passes False — it is already
+        the retry, and re-enqueueing from it would fork a duplicate queue row.
+        """
         recipient = self._resolve_recipient(patient_id, contact_method)
         self._check_suppression(contact_method, recipient)
         issued_event = self._record_issued_event(
@@ -349,9 +397,25 @@ class RealNotificationDispatcher:
         sender = self._build_sender(contact_method)
         try:
             outcome = self._send(sender, contact_method, recipient, token, ttl_seconds)
-        except NotificationError:
+        except TransientNotificationError as exc:
             # The caller never commits → session rollback clears the issued
-            # event. Re-raise so PatientAuthService → FastAPI surface a 500.
+            # event. Before re-raising, optionally enqueue a durable retry so an
+            # out-of-band worker can re-drive the send (P7.4c). Enqueue happens
+            # on its OWN session/transaction so it survives the request rollback,
+            # and never blocks the request on the backoff delays. Inert unless
+            # settings.NOTIFICATION_OUTBOX_ENABLED is flipped on.
+            if enqueue_on_failure:
+                self._maybe_enqueue_retry(
+                    patient_id=patient_id,
+                    application_id=application_id,
+                    contact_method=contact_method,
+                    ttl_seconds=ttl_seconds,
+                    exc=exc,
+                )
+            raise
+        except NotificationError:
+            # Permanent failure (bad recipient, opted out, …) — retrying will
+            # not help, so never enqueue. Re-raise so the 500 surfaces.
             raise
 
         self._record_sent_event(
@@ -364,7 +428,108 @@ class RealNotificationDispatcher:
         )
         return issued_event.id
 
+    def send_notification(
+        self,
+        *,
+        patient_id: UUID,
+        notification_type: str,
+        contact_method: Literal["sms", "email"],
+        context: dict,
+        application_id: Optional[UUID] = None,
+        loan_id: Optional[str] = None,
+        correlation_id: Optional[UUID] = None,
+        source_event_id: Optional[int] = None,
+    ) -> int:
+        """Render ``notification_type`` against ``context`` and send it (WS1).
+
+        Mirrors ``send_magic_link``'s suppression + vendor + audit path, but the
+        body comes from ``notification_render`` and the audit event carries
+        ``notification_type`` / ``source_event_id`` instead of a magic-link id.
+
+        Returns the ``notification_sent`` event id. Raises ``NotificationError``
+        on vendor failure (the WS2 processor catches it to decide retry); no
+        ``notification_sent`` event lands on failure, matching the magic-link
+        rollback semantics.
+        """
+        from app.services import notification_render
+
+        recipient = self._resolve_recipient(patient_id, contact_method)
+        self._check_suppression(contact_method, recipient)
+
+        if contact_method == "email":
+            subject, html = notification_render.render_email(notification_type, context)
+        else:
+            body = notification_render.render_sms(notification_type, context)
+
+        sender = self._build_sender(contact_method)
+        if contact_method == "email":
+            outcome = sender.send_message(to_email=recipient, subject=subject, html=html)
+        else:
+            outcome = sender.send_message(to_phone=recipient, body=body)
+
+        return self._record_notification_sent(
+            patient_id=patient_id,
+            application_id=application_id,
+            contact_method=contact_method,
+            recipient=recipient,
+            outcome=outcome,
+            notification_type=notification_type,
+            loan_id=loan_id,
+            correlation_id=correlation_id,
+            source_event_id=source_event_id,
+        )
+
     # -- internals ----------------------------------------------------------
+
+    def _maybe_enqueue_retry(
+        self,
+        *,
+        patient_id: UUID,
+        application_id: UUID,
+        contact_method: str,
+        ttl_seconds: int,
+        exc: TransientNotificationError,
+    ) -> None:
+        """Persist a durable retry row on its OWN session so it survives the
+        request-scoped rollback. Best-effort: a failure to enqueue must NEVER
+        mask the original send failure (we still re-raise that), so this is
+        wrapped defensively and only runs when the feature flag is on.
+
+        Lazy imports keep the cold-import cost out of the hot send path and
+        avoid a circular import (the outbox repo imports from this module).
+        """
+        if not settings.NOTIFICATION_OUTBOX_ENABLED:
+            return
+        try:
+            from app.db.base import SessionLocal
+            from app.repositories.notification_outbox import NotificationOutboxRepo
+            from app.services.notification_retry import (
+                next_attempt_at,
+                parse_retry_delays,
+            )
+
+            delays = parse_retry_delays(settings.NOTIFICATION_RETRY_DELAYS)
+            now = datetime.now(timezone.utc)
+            ttl_expires_at = now + timedelta(seconds=ttl_seconds)
+            outbox_db = SessionLocal()
+            try:
+                NotificationOutboxRepo(outbox_db).enqueue(
+                    patient_id=patient_id,
+                    application_id=application_id,
+                    contact_method=contact_method,
+                    ttl_expires_at=ttl_expires_at,
+                    # The inline send was attempt 1; the first worker retry is
+                    # attempt 2 — schedule it via the first backoff delay.
+                    attempts=1,
+                    next_attempt_at=next_attempt_at(2, delays, now=now),
+                    last_error_class=type(exc).__name__,
+                    last_error_redacted=_redact_pii(str(exc)),
+                )
+                outbox_db.commit()
+            finally:
+                outbox_db.close()
+        except Exception:  # pragma: no cover - never let enqueue mask the send error
+            logger.warning("notification outbox enqueue failed", exc_info=True)
 
     def _check_suppression(self, contact_method: str, recipient: str) -> None:
         """P7.4b — block sends to recipients on the suppression list before any
@@ -538,6 +703,54 @@ class RealNotificationDispatcher:
         # P8.0 — fan-out (notification_sent is on the default allowlist).
         from app.services.observability.posthog_bridge import capture_event
         capture_event(event)
+
+    def _record_notification_sent(
+        self,
+        *,
+        patient_id: UUID,
+        application_id: Optional[UUID],
+        contact_method: str,
+        recipient: str,
+        outcome: SendOutcome,
+        notification_type: str,
+        loan_id: Optional[str],
+        correlation_id: Optional[UUID],
+        source_event_id: Optional[int],
+    ) -> int:
+        """Audit row for a generic notification (WS1). Same ``notification_sent``
+        event_type as the magic-link path so the existing Twilio/Resend status
+        webhooks reconcile delivery by (vendor, vendor_message_id) for free; the
+        differentiator is ``notification_type`` + ``source_event_id``."""
+        payload = {
+            "v": 1,
+            "actor": {"type": "system", "id": "system"},
+            "application_id": str(application_id) if application_id else None,
+            "patient_id": str(patient_id),
+            "channel": contact_method,
+            "vendor": outcome.vendor,
+            "vendor_message_id": outcome.vendor_message_id,
+            "status": outcome.status,
+            "recipient_redacted": _hash_recipient(contact_method, recipient),
+            "notification_type": notification_type,
+            "loan_id": loan_id,
+            "source_event_id": source_event_id,
+            "attempted_at": datetime.now(timezone.utc).isoformat(),
+            "error_class": None,
+            "error_message_redacted": None,
+        }
+        event = PlatformEvent(
+            event_type="notification_sent",
+            actor="system",
+            patient_id=patient_id,
+            application_id=application_id,
+            payload=payload,
+            correlation_id=correlation_id,
+        )
+        self.db.add(event)
+        self.db.flush()
+        from app.services.observability.posthog_bridge import capture_event
+        capture_event(event)
+        return event.id
 
     # -- mock parity: tests that assert dispatcher._sent introspection patterns
     # remain on MockNotificationDispatcher. The real dispatcher has no

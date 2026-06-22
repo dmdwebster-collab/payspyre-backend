@@ -49,8 +49,14 @@ class MockNotificationDispatcher:
         contact_method: Literal["sms", "email"],
         token: str,
         ttl_seconds: int = 900,
+        enqueue_on_failure: bool = True,
     ) -> int:
-        """Write a ``magic_link_issued`` event (hashed token) and return its id."""
+        """Write a ``magic_link_issued`` event (hashed token) and return its id.
+
+        ``enqueue_on_failure`` exists only to keep this signature interchangeable
+        with ``RealNotificationDispatcher`` (the selector duck-types them); the
+        mock never fails a send, so it is ignored here.
+        """
         token_hash = hashlib.sha256(token.encode()).hexdigest()
         ttl_expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
         payload = {
@@ -86,6 +92,73 @@ class MockNotificationDispatcher:
             {
                 "contact_method": contact_method,
                 "token": token,  # plaintext — test introspection only
+                "patient_id": patient_id,
+                "application_id": application_id,
+                "event_id": event.id,
+            }
+        )
+        return event.id
+
+    def send_notification(
+        self,
+        *,
+        patient_id: UUID,
+        notification_type: str,
+        contact_method: Literal["sms", "email"],
+        context: dict,
+        application_id: UUID | None = None,
+        loan_id: str | None = None,
+        correlation_id: UUID | None = None,
+        source_event_id: int | None = None,
+    ) -> int:
+        """Mock parity for ``RealNotificationDispatcher.send_notification`` (WS1).
+
+        Renders the template (so a missing template / missing context key fails
+        in dev + tests exactly as it would in prod), then records a
+        ``notification_sent`` event with the rendered subject/preview for
+        introspection instead of calling a vendor.
+        """
+        from app.services import notification_render
+
+        if contact_method == "email":
+            subject, body = notification_render.render_email(notification_type, context)
+        else:
+            subject, body = None, notification_render.render_sms(notification_type, context)
+
+        payload = {
+            "v": 1,
+            "actor": {"type": "system", "id": "system"},
+            "application_id": str(application_id) if application_id else None,
+            "patient_id": str(patient_id),
+            "channel": contact_method,
+            "vendor": "mock",
+            "vendor_message_id": "mock",
+            "status": "sent",
+            "notification_type": notification_type,
+            "loan_id": loan_id,
+            "source_event_id": source_event_id,
+            "attempted_at": datetime.now(timezone.utc).isoformat(),
+            "error_class": None,
+            "error_message_redacted": None,
+        }
+        event = PlatformEvent(
+            event_type="notification_sent",
+            actor="system",
+            patient_id=patient_id,
+            application_id=application_id,
+            payload=payload,
+            correlation_id=correlation_id,
+        )
+        self.db.add(event)
+        self.db.flush()
+        from app.services.observability.posthog_bridge import capture_event
+        capture_event(event)
+        self._sent.append(
+            {
+                "notification_type": notification_type,
+                "contact_method": contact_method,
+                "subject": subject,
+                "body": body,  # rendered preview — test introspection only
                 "patient_id": patient_id,
                 "application_id": application_id,
                 "event_id": event.id,

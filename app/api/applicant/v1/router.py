@@ -5,6 +5,7 @@ from app.api.applicant.v1.endpoints import (
     applications,
     auth,
     borrower_auth,
+    dashboard,
     loans,
     marketplace,
     products,
@@ -16,9 +17,10 @@ applicant_router.include_router(auth.router)
 applicant_router.include_router(applications.router)
 applicant_router.include_router(products.router)
 applicant_router.include_router(marketplace.router)
-# Borrower portal (docs/borrower_portal_spec.md): email login + read-only loan servicing.
+# Borrower portal (docs/borrower_portal_spec.md): email login + loan servicing (reads + Pay Now).
 applicant_router.include_router(borrower_auth.router)
 applicant_router.include_router(loans.router)
+applicant_router.include_router(dashboard.router)
 
 # UNAUTHENTICATED dev helpers (surface the mock magic-link code; simulate verification
 # results). Auto-on in development/test; elsewhere requires an EXPLICIT ENABLE_DEV_TOOLS

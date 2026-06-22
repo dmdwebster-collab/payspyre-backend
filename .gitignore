@@ -59,3 +59,5 @@ recover_p3.ps1
 mutants/
 .mutmut-cache
 mutmut-stats.json
+node_modules/
+.DS_Store

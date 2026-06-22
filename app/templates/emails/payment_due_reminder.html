@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Payment Reminder</title>
+    <style>
+        body { font-family: 'Work Sans', Arial, sans-serif; line-height: 1.6; color: #1a1a1a; max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background: #84D1D1; color: #1a1a1a; padding: 28px; text-align: center; border-radius: 20px 20px 0 0; }
+        .header h1 { margin: 0; font-size: 24px; }
+        .content { background: #faf9f6; padding: 30px; border-radius: 0 0 20px 20px; }
+        .info-box { background: #fff; border-left: 4px solid #84D1D1; padding: 16px; margin: 20px 0; border-radius: 8px; }
+        .button { display: inline-block; background: #84D1D1; color: #1a1a1a; padding: 14px 28px; text-decoration: none; border-radius: 12px; margin: 16px 0; font-weight: 600; }
+        .footer { text-align: center; margin-top: 28px; color: #666; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <div style="padding:16px 0 10px; text-align:center;">
+        <svg width="24" height="24" viewBox="99.5 71.5 48 48.2" xmlns="http://www.w3.org/2000/svg" style="vertical-align:middle;" role="img" aria-label="PaySpyre"><path fill="#84d1d1" fill-opacity="0.4" d="M128.074 72C128.074 87.082 140.66 90.852 146.953 90.852L146.953 100.277C131.852 100.277 118.637 90.852 128.074 72Z"/><path fill="#84d1d1" fill-opacity="0.4" d="M118.879 119.215C118.879 104.133 106.293 100.363 100 100.363L100 90.938C115.105 90.938 128.32 100.363 118.879 119.215Z"/><path fill="#84d1d1" d="M100 90.879C115.082 90.879 118.852 78.293 118.852 72L128.277 72C128.277 87.105 118.852 100.32 100 90.879Z"/><path fill="#84d1d1" d="M146.953 100.336C131.871 100.336 128.102 112.922 128.102 119.215L118.676 119.215C118.676 104.109 128.102 90.895 146.953 100.336Z"/></svg>
+        <span style="font-size:18px; font-weight:600; color:#1a1a1a; vertical-align:middle; margin-left:8px;">PaySpyre</span>
+    </div>
+    <div class="header">
+        <h1>Your payment is coming up</h1>
+    </div>
+    <div class="content">
+        <p>Hi {{ borrower_name }},</p>
+        <p>This is a friendly reminder that your next loan payment is due in {{ days_until_due }} day(s).</p>
+
+        <div class="info-box">
+            <p><strong>Amount due:</strong> {{ payment_amount }}</p>
+            <p><strong>Due date:</strong> {{ due_date }}</p>
+            <p><strong>Loan:</strong> {{ loan_id }}</p>
+        </div>
+
+        <a href="{{ payment_url }}" class="button">View your account</a>
+
+        <p>If you've already arranged this payment, thank you — you can disregard this message.</p>
+        <p>Questions? Manage your account any time at <a href="{{ account_url }}">{{ account_url }}</a>.</p>
+
+        <div class="footer">
+            <p>PaySpyre Financial | Kelowna, BC</p>
+            <p>This is an automated message. Please do not reply to this email.</p>
+        </div>
+    </div>
+</body>
+</html>

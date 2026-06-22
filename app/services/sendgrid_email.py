@@ -185,6 +185,44 @@ class SendGridEmailSender:
             status="sent",
         )
 
+    def send_message(self, *, to_email: str, subject: str, html: str) -> SendOutcome:
+        """Generic email send (WS1) — same vendor/error + X-Message-Id contract
+        as ``send_magic_link`` with a caller-supplied subject + body."""
+        from sendgrid import SendGridAPIClient
+        from sendgrid.helpers.mail import Mail
+
+        message = Mail(
+            from_email=self._from_email,
+            to_emails=to_email,
+            subject=subject,
+            html_content=html,
+        )
+        client = SendGridAPIClient(self._api_key)
+        try:
+            response = client.send(message)
+        except Exception as exc:  # python_http_client.exceptions.HTTPError + net
+            raise _classify_sendgrid_error(exc) from exc
+
+        status_code = getattr(response, "status_code", None)
+        if isinstance(status_code, int) and not (200 <= status_code < 300):
+            raise _classify_sendgrid_error(
+                _SendGridStatusError(status_code, getattr(response, "body", b""))
+            )
+
+        headers = getattr(response, "headers", None) or {}
+        message_id = ""
+        try:
+            message_id = headers.get("X-Message-Id") or headers.get("x-message-id") or ""
+        except AttributeError:
+            message_id = ""
+        if not message_id:
+            raise TransientNotificationError("SendGrid ack did not include an X-Message-Id")
+        return SendOutcome(
+            vendor="sendgrid",  # type: ignore[arg-type]  # accurate audit label
+            vendor_message_id=str(message_id),
+            status="sent",
+        )
+
 
 class _SendGridStatusError(Exception):
     """Synthetic carrier so a non-2xx *response* (not an SDK exception) can flow

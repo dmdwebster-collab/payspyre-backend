@@ -35,7 +35,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from typing import Any, Iterator, Literal, Optional, Protocol
+from typing import Any, Callable, Iterator, Literal, Optional, Protocol
 from uuid import UUID
 
 from sqlalchemy import text
@@ -185,6 +185,12 @@ class FlowOrchestrator:
         self.db = db
         self.consent_service = consent_service
         self.dispatcher = verification_dispatcher
+        # Outbound side effects (e-sign invite, adverse-action email — any non-DB
+        # vendor HTTP) registered by ``_decide`` to run AFTER the decision
+        # transaction commits, so a slow/hanging vendor can never hold the
+        # application row lock or roll back the persisted decision. Drained by
+        # ``_run_pending_outbound`` once the unit-of-work has committed.
+        self._pending_outbound: list[tuple[str, Callable[[], None]]] = []
 
     # -- transaction helper -------------------------------------------------
 
@@ -200,6 +206,43 @@ class FlowOrchestrator:
         except Exception:
             self.db.rollback()
             raise
+
+    def _run_pending_outbound(self) -> None:
+        """Run the outbound side effects ``_decide`` deferred, AFTER the decision
+        transaction has committed and the application row lock is released.
+
+        Each action is independent and defensive: a vendor failure here can NOT
+        roll back the already-committed decision (we are outside the unit-of-work)
+        and must NOT block the others — every action is wrapped in its own
+        try/except, mirroring the inline ``except Exception`` the LMS/adverse-action
+        hooks used to carry. The queue is drained even on failure so a retried
+        public call does not re-fire a stale action.
+
+        Some actions flush their own follow-up DB writes (the adverse-action audit
+        event) without committing — previously the decision unit-of-work committed
+        those. Since we now run outside that unit-of-work, we commit once at the end
+        so those writes persist. ``send_agreement`` already commits internally; the
+        trailing commit is a harmless no-op when there is nothing pending.
+        """
+        pending, self._pending_outbound = self._pending_outbound, []
+        if not pending:
+            return
+        for label, action in pending:
+            try:
+                action()
+            except Exception as exc:  # noqa: BLE001 — decision integrity over side effect
+                logger.error(
+                    "decision_outbound_failed",
+                    outbound=label,
+                    error=str(exc),
+                )
+        # Persist any follow-up writes the actions flushed (e.g. the adverse-action
+        # audit event). The committed decision is untouched by this.
+        try:
+            self.db.commit()
+        except Exception as exc:  # noqa: BLE001 — never surface to the decided caller
+            logger.error("decision_outbound_commit_failed", error=str(exc))
+            self.db.rollback()
 
     # -- loaders ------------------------------------------------------------
 
@@ -612,6 +655,10 @@ class FlowOrchestrator:
             if self._ready_to_decide(application):
                 decision_dict = self._decide(application)
         if not _in_external_txn:
+            # Transaction is committed and the row lock is released; only now run the
+            # vendor-facing side effects ``_decide`` deferred (e-sign / adverse-action).
+            # When _in_external_txn, the caller owns the commit and must drain.
+            self._run_pending_outbound()
             self.db.refresh(application)
         return HandleResult(
             verification_id=verification_id,
@@ -642,6 +689,8 @@ class FlowOrchestrator:
             application = self._get_application(application_id, lock=True)
             decision_dict = self._decide(application)
         if not _in_external_txn:
+            # Post-commit, lock released: fire the deferred outbound side effects.
+            self._run_pending_outbound()
             self.db.refresh(application)
         return SubmitResult(
             application_id=application_id,
@@ -810,37 +859,47 @@ class FlowOrchestrator:
         from app.services.metrics.platform_metrics import record_decision
 
         record_decision(product.code, flow_decision.decision)
-        # P9.x — LMS hand-off: when approved, book the loan + send its agreement for
-        # signature. DEFENSIVE: loan-booking must never block or fail the credit
-        # decision itself, so any error here is logged and swallowed. book_loan is
-        # idempotent; send_agreement gracefully no-ops if SignNow isn't configured.
+        # P9.x — LMS hand-off: when approved, book the loan now (DB, in-txn) but DEFER
+        # the e-sign invite. book_loan persists the loan + amortization schedule with
+        # the decision, so it stays inside this unit-of-work; it never makes a vendor
+        # call. send_agreement DOES make a SignNow HTTP call, so it must run only AFTER
+        # this transaction commits and the application row lock is released — a hanging
+        # SignNow must not pin the lock or roll back the decision. Registered as a
+        # post-commit action drained by ``_run_pending_outbound`` (book_loan is
+        # idempotent; send_agreement is forward-only + gracefully no-ops if SignNow is
+        # unconfigured). loan-booking must never fail the decision, so it is guarded.
         if application.status == "approved":
             try:
                 from app.services import loan_lifecycle
 
                 loan = loan_lifecycle.book_loan(self.db, application)
-                loan_lifecycle.send_agreement(self.db, loan)
             except Exception as exc:  # noqa: BLE001 — decision integrity over LMS hand-off
                 logger.error(
                     "loan_booking_failed",
                     application_id=str(application.id),
                     error=str(exc),
                 )
-        # P9.x — ECOA/FCRA: on a decline, send the adverse-action notice (audit §7).
-        # DEFENSIVE + idempotent + internally swallows errors; never blocks the decision.
+            else:
+                # Post-commit: SignNow invite. The loan row is committed by the
+                # unit-of-work before this closure runs.
+                def _send_agreement(loan=loan) -> None:
+                    from app.services import loan_lifecycle
+
+                    loan_lifecycle.send_agreement(self.db, loan)
+
+                self._pending_outbound.append(("send_agreement", _send_agreement))
+        # P9.x — on a decline, send the Canadian notice of decision (audit §7).
+        # The notice is an OUTBOUND email (SendGrid HTTP) + its own DB event write, so
+        # it is deferred to post-commit for the same lock/latency reason as the e-sign
+        # invite above. It is internally DEFENSIVE + idempotent (dedupes on its own
+        # event) and never raises; the post-commit runner also guards it.
         if application.status == "declined":
-            try:
+            def _send_adverse_action(reasons=flow_decision.decision_reasons) -> None:
                 from app.services import adverse_action
 
-                adverse_action.send_adverse_action_notice(
-                    self.db, application, flow_decision.decision_reasons
-                )
-            except Exception as exc:  # noqa: BLE001 — decision integrity over notice send
-                logger.error(
-                    "adverse_action_notice_failed",
-                    application_id=str(application.id),
-                    error=str(exc),
-                )
+                adverse_action.send_adverse_action_notice(self.db, application, reasons)
+
+            self._pending_outbound.append(("adverse_action_notice", _send_adverse_action))
         logger.info(
             "decision_made",
             application_id=str(application.id),

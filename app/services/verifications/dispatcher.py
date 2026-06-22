@@ -68,17 +68,22 @@ class VerificationDispatcher:
             )
             f = resolve(
                 db, "flinks",
-                secret_keys=["api_key"], config_keys=["api_base_url", "customer_id"],
+                secret_keys=["api_key"],
+                config_keys=["api_base_url", "customer_id", "iframe_base", "redirect_url_base"],
                 env={
                     "api_key": "FLINKS_API_KEY",
                     "api_base_url": "FLINKS_API_BASE_URL",
                     "customer_id": "FLINKS_CUSTOMER_ID",
+                    "iframe_base": "FLINKS_IFRAME_BASE",
+                    "redirect_url_base": "FLINKS_REDIRECT_URL_BASE",
                 },
             )
             self._flinks = FlinksBankAdapter(
                 api_key=f["api_key"],
                 api_base_url=f["api_base_url"],
                 customer_id=f["customer_id"],
+                iframe_base=f["iframe_base"],
+                redirect_url_base=f["redirect_url_base"],
             )
 
     def initiate(
