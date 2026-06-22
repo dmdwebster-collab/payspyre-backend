@@ -4,11 +4,28 @@ Endpoints (all staff-authenticated via the platform JWT):
     GET  /clinic/v1/products
     GET  /clinic/v1/applications
     GET  /clinic/v1/dashboard/summary
+    GET  /clinic/v1/dashboard/overview
+    GET  /clinic/v1/dashboard/applications/timeseries
+    GET  /clinic/v1/dashboard/loan-book
+    GET  /clinic/v1/dashboard/funnel
+    GET  /clinic/v1/dashboard/revenue
+    GET  /clinic/v1/account/profile
+    POST /clinic/v1/account/profile/change-requests
     POST /clinic/v1/financing-links
 """
 from fastapi import APIRouter
 
-from app.api.clinic.v1.endpoints import applications, financing_links, marketplace, products
+from app.api.clinic.v1.endpoints import (
+    account,
+    applications,
+    dashboard_applications,
+    dashboard_loanbook,
+    dashboard_marketplace,
+    dashboard_overview,
+    financing_links,
+    marketplace,
+    products,
+)
 from app.core.config import settings
 
 clinic_router = APIRouter()
@@ -16,6 +33,12 @@ clinic_router.include_router(products.router)
 clinic_router.include_router(applications.router)
 clinic_router.include_router(financing_links.router)
 clinic_router.include_router(marketplace.router)
+# Vendor performance dashboard (spec: docs/vendor_dashboard_spec.md).
+clinic_router.include_router(dashboard_overview.router)
+clinic_router.include_router(dashboard_applications.router)
+clinic_router.include_router(dashboard_loanbook.router)
+clinic_router.include_router(dashboard_marketplace.router)
+clinic_router.include_router(account.router)
 
 # UNAUTHENTICATED dev helper: seed a clinic (vendor + staff user + membership + JWT).
 # Auto-on in development/test; elsewhere requires an EXPLICIT ENABLE_DEV_TOOLS (e.g.

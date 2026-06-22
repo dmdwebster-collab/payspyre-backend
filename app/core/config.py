@@ -130,6 +130,13 @@ class Settings(BaseSettings):
         "magic_link_issued"
     )
 
+    # Collections / delinquency policy — vendor-dashboard KPIs (spec §4).
+    # Grace window in days: an overdue installment is "late" while
+    # 1 <= days_past_due <= GRACE_DAYS, and "delinquent" (bureau-reportable,
+    # bucketed 30/60/90/120) at days_past_due >= 30. Lives in settings so
+    # collections policy can tune the grace window without a code change.
+    GRACE_DAYS: int = 15
+
     # CORS
     CORS_ORIGINS: str = "http://localhost:3000,https://payspyre.com"
 
