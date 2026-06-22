@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
     admin_actions,
+    admin_analytics,
     admin_applications,
     admin_audit,
     admin_collections,
@@ -35,6 +36,8 @@ api_router.include_router(admin_collections.router, prefix="/admin/collections",
 api_router.include_router(admin_audit.router, prefix="/admin/audit", tags=["admin-cockpit"])
 # Phase 2 — write actions (decision/payment/payoff) + maker-checker (charge-off/disburse).
 api_router.include_router(admin_actions.router, prefix="/admin", tags=["admin-actions"])
+# Phase 4 — advanced portfolio analytics (vintage / originations / CEI). Read-only.
+api_router.include_router(admin_analytics.router, prefix="/admin/analytics", tags=["admin-analytics"])
 # V1 `patients` router UN-MOUNTED 2026-06-20 (audit): its endpoints were a broken
 # access-control surface — GET/PATCH /patients/{id} were gated only by a valid staff
 # JWT (no role, no object scope) → any authenticated user could read/write ANY
