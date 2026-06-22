@@ -18,16 +18,37 @@ from __future__ import annotations
 import secrets
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.security import create_access_token, get_password_hash
 from app.db.base import get_db
 from app.models.user import Role, User, UserRoleLink
 
 router = APIRouter(prefix="/dev", tags=["admin-dev"])
+
+
+def _require_seed_token(x_dev_seed_token: Optional[str] = Header(default=None)) -> None:
+    """Guard: the seeder is inert unless DEV_SEED_TOKEN is configured AND matched.
+
+    This is a FULL-ADMIN granter, so — unlike the clinic/staff seeder — it must not
+    be openly callable just because dev tools are enabled. A constant-time compare
+    avoids leaking the token via timing.
+    """
+    configured = settings.DEV_SEED_TOKEN or ""
+    if not configured:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin seeding is disabled (no DEV_SEED_TOKEN configured).",
+        )
+    if not x_dev_seed_token or not secrets.compare_digest(x_dev_seed_token, configured):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid or missing X-Dev-Seed-Token.",
+        )
 
 
 class SeedAdminRequest(BaseModel):
@@ -47,7 +68,8 @@ class SeedAdminResponse(BaseModel):
     jwt: str
 
 
-@router.post("/seed-admin", response_model=SeedAdminResponse)
+@router.post("/seed-admin", response_model=SeedAdminResponse,
+             dependencies=[Depends(_require_seed_token)])
 def seed_admin(body: SeedAdminRequest, db: Session = Depends(get_db)):
     """Create a user + link the given RBAC role; return login creds + a JWT.
 
