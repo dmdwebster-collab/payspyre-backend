@@ -185,6 +185,25 @@ def test_list_leads_min_verification_filter(db_session):
     assert str(l_shallow.id) not in ids
 
 
+def test_list_leads_pagination(db_session):
+    created = [
+        _create(db_session, _make_patient(db_session, lead_state="pre_approved"))
+        for _ in range(3)
+    ]
+
+    # All three are returned unbounded.
+    all_ids = {row["listing_id"] for row in svc.list_leads_for_vendor(db_session)}
+    assert all_ids == {str(l.id) for l in created}
+
+    # limit caps the page; offset walks past it. Pages are disjoint and cover all.
+    page1 = svc.list_leads_for_vendor(db_session, limit=2)
+    page2 = svc.list_leads_for_vendor(db_session, limit=2, offset=2)
+    assert len(page1) == 2
+    assert len(page2) == 1
+    seen = {r["listing_id"] for r in page1} | {r["listing_id"] for r in page2}
+    assert seen == {str(l.id) for l in created}
+
+
 # --- express_interest -------------------------------------------------------
 
 

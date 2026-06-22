@@ -52,6 +52,7 @@ from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
 from app.models.platform.credit_application import PlatformCreditApplication
+from app.models.platform.event import PlatformEvent
 from app.models.platform.loan import PlatformLoan
 from app.services import integration_settings
 from app.services import loan_servicing
@@ -64,6 +65,58 @@ logger = get_logger(__name__)
 # Provider slugs in platform_integration_settings (see KNOWN_PROVIDERS).
 _SIGNNOW_PROVIDER = "signnow"
 _ZUMRAILS_PROVIDER = "zumrails"
+
+
+# ---------------------------------------------------------------------------
+# Money-movement audit trail
+# ---------------------------------------------------------------------------
+# Until now only the decision + adverse-action flows wrote PlatformEvent rows, so
+# the LMS money path (book → disburse) left no auditable history. These event
+# types record each money-moving lifecycle transition. Names mirror the structlog
+# events for grep-ability; the rows carry only ids + amounts (cents) + status —
+# never PII.
+LOAN_BOOKED_EVENT = "loan_booked"
+LOAN_DISBURSEMENT_INITIATED_EVENT = "loan_disbursement_initiated"
+LOAN_DISBURSED_EVENT = "loan_disbursed"
+LOAN_DISBURSEMENT_FAILED_EVENT = "loan_disbursement_failed"
+
+
+def _record_loan_event(db: Session, loan: PlatformLoan, event_type: str, after: dict) -> None:
+    """Append a money-movement audit row for a loan lifecycle transition.
+
+    Added to the session (NOT flushed/committed here) so it shares the caller's
+    transaction and is persisted atomically with the state change by the same
+    ``db.commit()``. Query-free and flush-free, so it is safe under the unit
+    tests' in-memory fake session. No PII: only loan/application ids, amounts in
+    cents, and lifecycle status.
+    """
+    db.add(
+        PlatformEvent(
+            event_type=event_type,
+            actor="system",
+            application_id=getattr(loan, "application_id", None),
+            payload={
+                "v": 1,
+                "actor": {"type": "system", "id": "system"},
+                "loan_id": str(loan.id),
+                "application_id": (
+                    str(loan.application_id) if getattr(loan, "application_id", None) else None
+                ),
+                "after": after,
+            },
+        )
+    )
+
+
+def _disbursed_after(loan: PlatformLoan) -> dict:
+    """The ``after`` payload for a ``loan_disbursed`` (funds released) event."""
+    return {
+        "status": loan.status,
+        "disbursement_status": loan.disbursement_status,
+        "amount_cents": loan.principal_cents,
+        "disbursement_ref": loan.disbursement_ref,
+        "disbursed_at": loan.disbursed_at.isoformat() if loan.disbursed_at else None,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -210,6 +263,18 @@ def book_loan(
             )
             return existing
         raise
+    _record_loan_event(
+        db,
+        loan,
+        LOAN_BOOKED_EVENT,
+        {
+            "status": loan.status,
+            "principal_cents": loan.principal_cents,
+            "term_months": loan.term_months,
+            "annual_rate_bps": loan.annual_rate_bps,
+        },
+    )
+    db.commit()
     logger.info(
         "loan_booked",
         application_id=str(application.id),
@@ -376,6 +441,28 @@ def on_agreement_signed(
     elif result.status == TransactionStatus.FAILED:
         loan.disbursement_status = "failed"
 
+    _record_loan_event(
+        db,
+        loan,
+        LOAN_DISBURSEMENT_INITIATED_EVENT,
+        {
+            "amount_cents": loan.principal_cents,
+            "disbursement_status": loan.disbursement_status,
+            "disbursement_ref": loan.disbursement_ref,
+        },
+    )
+    # A synchronous terminal result won't be followed by a webhook, so record the
+    # terminal money event here too rather than leaving the trail incomplete.
+    if loan.status == "active" and loan.disbursement_status == "completed":
+        _record_loan_event(db, loan, LOAN_DISBURSED_EVENT, _disbursed_after(loan))
+    elif loan.disbursement_status == "failed":
+        _record_loan_event(
+            db,
+            loan,
+            LOAN_DISBURSEMENT_FAILED_EVENT,
+            {"amount_cents": loan.principal_cents, "disbursement_ref": loan.disbursement_ref},
+        )
+
     db.commit()
     db.refresh(loan)
     logger.info(
@@ -417,6 +504,7 @@ def on_disbursement_complete(
         return loan
 
     _mark_active(loan)
+    _record_loan_event(db, loan, LOAN_DISBURSED_EVENT, _disbursed_after(loan))
     db.commit()
     db.refresh(loan)
     logger.info(
@@ -441,6 +529,12 @@ def on_disbursement_failed(
     if loan.disbursement_status == "completed":
         return loan
     loan.disbursement_status = "failed"
+    _record_loan_event(
+        db,
+        loan,
+        LOAN_DISBURSEMENT_FAILED_EVENT,
+        {"amount_cents": loan.principal_cents, "disbursement_ref": loan.disbursement_ref or ref},
+    )
     db.commit()
     db.refresh(loan)
     logger.warning("loan_disbursement_failed", loan_id=str(loan.id), ref=ref)
