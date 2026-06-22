@@ -17,6 +17,9 @@ from app.models.platform.marketplace import (
     PlatformMarketplaceListing,
     PlatformMarketplaceVendorInterest,
 )
+from app.models.platform.profile_change_request import (
+    PlatformVendorProfileChangeRequest,
+)
 
 __all__ = [
     "PlatformPatient",
@@ -34,4 +37,5 @@ __all__ = [
     "PlatformClinicMembership",
     "PlatformMarketplaceListing",
     "PlatformMarketplaceVendorInterest",
+    "PlatformVendorProfileChangeRequest",
 ]
