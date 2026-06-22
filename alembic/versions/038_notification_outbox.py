@@ -10,10 +10,9 @@ transiently (gated by settings.NOTIFICATION_OUTBOX_ENABLED, default False) and
 drained by scripts/process_notification_outbox.py honoring NOTIFICATION_MAX_RETRIES
 + the NOTIFICATION_RETRY_DELAYS backoff.
 
-PII (Hard Rule #6): no recipient is stored — the worker re-resolves it from
-patient_id. ``token`` holds the short-lived plaintext magic-link code (the one
-piece of sensitive material needed to re-send); this is the deliberate tradeoff
-keeping the feature OFF by default. See the model docstring.
+PII (Hard Rule #6): NO sensitive material is stored — no recipient and no token.
+The worker re-resolves the recipient from patient_id and mints a fresh magic-link
+token per retry. See the model docstring.
 
 Additive only. The partial index on (status, next_attempt_at) is the worker's
 hot path: "pending rows that are due". Downgrade drops the table.
@@ -57,7 +56,6 @@ def upgrade() -> None:
             server_default="magic_link",
         ),
         sa.Column("contact_method", sa.Text(), nullable=False),
-        sa.Column("token", sa.Text(), nullable=False),
         sa.Column("ttl_expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("status", sa.Text(), nullable=False, server_default="pending"),
         sa.Column("attempts", sa.Integer(), nullable=False, server_default="1"),

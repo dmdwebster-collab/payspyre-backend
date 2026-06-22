@@ -338,8 +338,14 @@ class RealNotificationDispatcher:
         contact_method: Literal["sms", "email"],
         token: str,
         ttl_seconds: int = 900,
+        enqueue_on_failure: bool = True,
     ) -> int:
-        """Persist the magic-link event, send via vendor, persist the audit, return event id."""
+        """Persist the magic-link event, send via vendor, persist the audit, return event id.
+
+        ``enqueue_on_failure`` (default True) controls whether a transient failure
+        enqueues a durable retry row. The outbox WORKER passes False — it is already
+        the retry, and re-enqueueing from it would fork a duplicate queue row.
+        """
         recipient = self._resolve_recipient(patient_id, contact_method)
         self._check_suppression(contact_method, recipient)
         issued_event = self._record_issued_event(
@@ -356,14 +362,14 @@ class RealNotificationDispatcher:
             # on its OWN session/transaction so it survives the request rollback,
             # and never blocks the request on the backoff delays. Inert unless
             # settings.NOTIFICATION_OUTBOX_ENABLED is flipped on.
-            self._maybe_enqueue_retry(
-                patient_id=patient_id,
-                application_id=application_id,
-                contact_method=contact_method,
-                token=token,
-                ttl_seconds=ttl_seconds,
-                exc=exc,
-            )
+            if enqueue_on_failure:
+                self._maybe_enqueue_retry(
+                    patient_id=patient_id,
+                    application_id=application_id,
+                    contact_method=contact_method,
+                    ttl_seconds=ttl_seconds,
+                    exc=exc,
+                )
             raise
         except NotificationError:
             # Permanent failure (bad recipient, opted out, …) — retrying will
@@ -388,7 +394,6 @@ class RealNotificationDispatcher:
         patient_id: UUID,
         application_id: UUID,
         contact_method: str,
-        token: str,
         ttl_seconds: int,
         exc: TransientNotificationError,
     ) -> None:
@@ -419,7 +424,6 @@ class RealNotificationDispatcher:
                     patient_id=patient_id,
                     application_id=application_id,
                     contact_method=contact_method,
-                    token=token,
                     ttl_expires_at=ttl_expires_at,
                     # The inline send was attempt 1; the first worker retry is
                     # attempt 2 — schedule it via the first backoff delay.

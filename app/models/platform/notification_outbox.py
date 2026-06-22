@@ -9,14 +9,11 @@ exhausted (emitting a ``notification_retry_exhausted`` event, mirroring the
 ``adverse_action_notice_failed`` audit pattern).
 
 PII boundaries (Hard Rule #6):
-- The recipient is NOT stored here. The worker re-resolves phone/email from
-  ``patient_id`` at retry time, exactly as the dispatcher does on the inline path.
-- ``token`` is the plaintext magic-link code. It is short-lived (bounded by
-  ``ttl_expires_at`` — the worker refuses to retry an expired item) and is the
-  one piece of sensitive material the queue must hold to re-send. This is the
-  deliberate tradeoff that keeps the queue feature-flagged OFF by default and
-  flagged for human review before enablement (consider app-layer encryption of
-  this column, or re-minting a fresh token per retry, before going live).
+- NO sensitive material is stored here. The recipient is re-resolved from
+  ``patient_id`` at retry time, and the worker MINTS A FRESH magic-link token per
+  retry (recording its own ``magic_link_issued`` event), so the queue never holds
+  a token at rest — the original failed token is simply abandoned. ``ttl_expires_at``
+  bounds how long a row is retried (the worker refuses to re-send an expired item).
 - ``last_error_redacted`` is run through the dispatcher's ``_redact_pii`` before
   it lands here.
 """
@@ -52,7 +49,6 @@ class PlatformNotificationOutbox(Base):
     )
     notification_type = Column(Text, nullable=False, server_default="magic_link")
     contact_method = Column(Text, nullable=False)            # "sms" | "email"
-    token = Column(Text, nullable=False)                     # plaintext magic-link code (see PII note)
     ttl_expires_at = Column(DateTime(timezone=True), nullable=False)
 
     # Retry bookkeeping.

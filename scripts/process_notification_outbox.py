@@ -42,7 +42,6 @@ from app.services.real_notification_dispatcher import (
     NotificationError,
     PermanentNotificationError,
     RealNotificationDispatcher,
-    TransientNotificationError,
     _redact_pii,
 )
 
@@ -81,30 +80,52 @@ def _record_exhausted_event(db, row, *, error_class: str, error_redacted: str) -
 
 
 def _retry_one(db, dispatcher, row, *, delays, now: datetime) -> str:
-    """Attempt a single outbox row. Returns the resulting status for logging."""
+    """Attempt a single outbox row. Returns the resulting status for logging.
+
+    The queue stores NO token. We mint a FRESH magic-link token per retry and
+    drive the dispatcher's full ``send_magic_link`` path so the retried token gets
+    its own ``magic_link_issued`` event (otherwise the exchange endpoint could
+    never validate it). The send + mark_sent run inside a SAVEPOINT so a failed
+    attempt's flushed ``magic_link_issued`` event is rolled back while the row's
+    reschedule/fail decision still persists. ``enqueue_on_failure=False`` keeps
+    the dispatcher from forking a second outbox row from inside the worker.
+    """
+    from app.services.auth.patient_auth_service import _generate_token
+
     repo = NotificationOutboxRepo(db)
 
-    # A dead token can never be re-sent — fail terminally.
+    # Past the retry window — can't deliver a useful code any more. Fail terminally.
     ttl = row.ttl_expires_at
     if ttl is not None and ttl.tzinfo is None:
         ttl = ttl.replace(tzinfo=timezone.utc)
     if ttl is not None and ttl <= now:
-        repo.mark_failed(row, error_class="ExpiredToken", error_redacted="magic-link token expired before retry")
-        _record_exhausted_event(db, row, error_class="ExpiredToken", error_redacted="magic-link token expired before retry")
+        repo.mark_failed(row, error_class="Expired", error_redacted="magic-link retry window expired")
+        _record_exhausted_event(db, row, error_class="Expired", error_redacted="magic-link retry window expired")
         return "failed (expired)"
 
+    ttl_seconds = max(1, int((ttl - now).total_seconds())) if ttl else 900
+    savepoint = db.begin_nested()
     try:
-        recipient = dispatcher._resolve_recipient(row.patient_id, row.contact_method)
-        dispatcher._check_suppression(row.contact_method, recipient)
-        sender = dispatcher._build_sender(row.contact_method)
-        ttl_seconds = max(1, int((ttl - now).total_seconds())) if ttl else 900
-        dispatcher._send(sender, row.contact_method, recipient, row.token, ttl_seconds)
+        dispatcher.send_magic_link(
+            row.patient_id,
+            row.application_id,
+            row.contact_method,
+            _generate_token(),
+            ttl_seconds,
+            enqueue_on_failure=False,
+        )
+        repo.mark_sent(row)
+        savepoint.commit()
+        return "sent"
     except PermanentNotificationError as exc:
+        savepoint.rollback()  # discard the flushed magic_link_issued event
         redacted = _redact_pii(str(exc))
         repo.mark_failed(row, error_class=type(exc).__name__, error_redacted=redacted)
         _record_exhausted_event(db, row, error_class=type(exc).__name__, error_redacted=redacted)
         return "failed (permanent)"
-    except TransientNotificationError as exc:
+    except NotificationError as exc:
+        # Transient (or unclassified, treated conservatively as transient).
+        savepoint.rollback()  # discard the flushed magic_link_issued event
         redacted = _redact_pii(str(exc))
         # +1 because this attempt counts toward the cap before we (maybe) bump it.
         if is_exhausted(row.attempts + 1, settings.NOTIFICATION_MAX_RETRIES):
@@ -113,51 +134,45 @@ def _retry_one(db, dispatcher, row, *, delays, now: datetime) -> str:
             return "failed (exhausted)"
         repo.reschedule(row, delays=delays, error_class=type(exc).__name__, error_redacted=redacted, now=now)
         return "rescheduled"
-    except NotificationError as exc:
-        # Unclassified NotificationError — treat conservatively as transient.
-        redacted = _redact_pii(str(exc))
-        if is_exhausted(row.attempts + 1, settings.NOTIFICATION_MAX_RETRIES):
-            repo.mark_failed(row, error_class=type(exc).__name__, error_redacted=redacted)
-            _record_exhausted_event(db, row, error_class=type(exc).__name__, error_redacted=redacted)
-            return "failed (exhausted)"
-        repo.reschedule(row, delays=delays, error_class=type(exc).__name__, error_redacted=redacted, now=now)
-        return "rescheduled"
-
-    repo.mark_sent(row)
-    return "sent"
 
 
 def process_once(*, limit: int = 50) -> int:
-    """Process one batch of due rows. Returns the number of rows handled."""
+    """Process up to ``limit`` due rows, each in its OWN transaction.
+
+    Per-row commit is the duplicate-send guard. The earlier design claimed a whole
+    batch and committed once at the end, so a crash after a successful vendor send
+    but before that batch commit re-sent EVERY just-sent row on the next pass.
+    Committing immediately after each row's send narrows the window to a single row
+    (an external send can never be perfectly exactly-once — this is the standard
+    at-least-once minimization). Each iteration claims ONE due row via
+    ``FOR UPDATE SKIP LOCKED`` so concurrent workers don't collide.
+    """
     delays = parse_retry_delays(settings.NOTIFICATION_RETRY_DELAYS)
-    db = SessionLocal()
     handled = 0
-    try:
-        now = datetime.now(timezone.utc)
-        repo = NotificationOutboxRepo(db)
-        rows = repo.claim_due(now=now, limit=limit)
-        for row in rows:
+    while handled < limit:
+        db = SessionLocal()
+        try:
+            now = datetime.now(timezone.utc)
+            rows = NotificationOutboxRepo(db).claim_due(now=now, limit=1)
+            if not rows:
+                break
+            row = rows[0]
             dispatcher = RealNotificationDispatcher(db)
             try:
                 result = _retry_one(db, dispatcher, row, delays=delays, now=now)
-                handled += 1
-                logger.info(
-                    "notification_outbox row processed",
-                    outbox_id=row.id,
-                    channel=row.contact_method,
-                    attempts=row.attempts,
-                    result=result,
-                )
             except Exception:  # pragma: no cover - defensive per-row isolation
-                logger.warning(
-                    "notification_outbox row errored", outbox_id=row.id, exc_info=True
-                )
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
-    finally:
-        db.close()
+                db.rollback()
+                logger.warning("notification_outbox row errored", outbox_id=row.id, exc_info=True)
+                break  # leave the poison row pending; the next pass retries it
+            oid, channel, attempts = row.id, row.contact_method, row.attempts
+            db.commit()
+            handled += 1
+            logger.info(
+                "notification_outbox row processed",
+                outbox_id=oid, channel=channel, attempts=attempts, result=result,
+            )
+        finally:
+            db.close()
     return handled
 
 

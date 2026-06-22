@@ -3,7 +3,11 @@
 Pure functions in ``app.services.notification_retry`` — no Postgres, no network,
 safe to run alongside concurrent agents sharing the test DB.
 """
+import uuid
 from datetime import datetime, timezone
+from unittest.mock import MagicMock
+
+import pytest
 
 from app.services.notification_retry import (
     delay_seconds_for_attempt,
@@ -11,6 +15,42 @@ from app.services.notification_retry import (
     next_attempt_at,
     parse_retry_delays,
 )
+from app.services.real_notification_dispatcher import (
+    RealNotificationDispatcher,
+    TransientNotificationError,
+)
+
+
+def _dispatcher_failing_transient() -> RealNotificationDispatcher:
+    """A dispatcher whose vendor send raises transiently, with every DB/vendor
+    touch mocked out so the enqueue DECISION can be unit-tested without a DB."""
+    d = RealNotificationDispatcher(db=MagicMock())
+    d._resolve_recipient = MagicMock(return_value="dest@example.com")
+    d._check_suppression = MagicMock(return_value=None)
+    d._record_issued_event = MagicMock(return_value=MagicMock(id=1))
+    d._build_sender = MagicMock(return_value=MagicMock())
+    d._send = MagicMock(side_effect=TransientNotificationError("vendor 503"))
+    d._maybe_enqueue_retry = MagicMock()
+    return d
+
+
+class TestEnqueueOnFailureGate:
+    """The outbox worker re-drives sends itself; it must NOT re-enqueue (which
+    would fork a duplicate queue row). The inline applicant path still enqueues."""
+
+    def test_worker_path_does_not_self_enqueue(self):
+        d = _dispatcher_failing_transient()
+        with pytest.raises(TransientNotificationError):
+            d.send_magic_link(
+                uuid.uuid4(), uuid.uuid4(), "email", "TKN", enqueue_on_failure=False
+            )
+        d._maybe_enqueue_retry.assert_not_called()
+
+    def test_inline_path_enqueues_on_transient_by_default(self):
+        d = _dispatcher_failing_transient()
+        with pytest.raises(TransientNotificationError):
+            d.send_magic_link(uuid.uuid4(), uuid.uuid4(), "email", "TKN")
+        d._maybe_enqueue_retry.assert_called_once()
 
 
 class TestParseRetryDelays:
