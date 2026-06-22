@@ -6,6 +6,7 @@ from app.api.v1.endpoints import (
     admin_applications,
     admin_audit,
     admin_collections,
+    admin_config,
     admin_dashboard,
     admin_loans,
     admin_vendor_changes,
@@ -38,6 +39,8 @@ api_router.include_router(admin_audit.router, prefix="/admin/audit", tags=["admi
 api_router.include_router(admin_actions.router, prefix="/admin", tags=["admin-actions"])
 # Phase 4 — advanced portfolio analytics (vintage / originations / CEI). Read-only.
 api_router.include_router(admin_analytics.router, prefix="/admin/analytics", tags=["admin-analytics"])
+# Phase 3 — config surfaces (RBAC visibility). Products reuse /credit-products. Read-only, admin.
+api_router.include_router(admin_config.router, prefix="/admin/config", tags=["admin-config"])
 # V1 `patients` router UN-MOUNTED 2026-06-20 (audit): its endpoints were a broken
 # access-control surface — GET/PATCH /patients/{id} were gated only by a valid staff
 # JWT (no role, no object scope) → any authenticated user could read/write ANY
