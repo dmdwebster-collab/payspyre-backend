@@ -168,3 +168,48 @@ class TestMakerChecker:
         assert rej.status_code == 200
         db_session.refresh(loan)
         assert loan.status != "charged_off"
+
+
+class TestAuditFixes:
+    def test_override_to_declined_blocked_when_loan_booked(self, app_client, db_session):
+        """Audit #2: overriding an APPROVED app (with a booked loan) away from
+        approved would orphan the loan — block it."""
+        app, client = app_client
+        loan = _seed_loan(db_session, status="pending_disbursement", balance=1_800_000)
+        r = client.post(f"{_BASE}/applications/{loan.application_id}/decision",
+                        json={"outcome": "declined", "override": True})
+        assert r.status_code == 409, r.text
+        assert "booked loan" in r.json()["detail"].lower()
+
+    def test_override_declined_app_without_loan_still_works(self, app_client, db_session):
+        """The guard must only fire for APPROVED-with-loan, not block normal overrides."""
+        app, client = app_client
+        application = _seed_application(db_session, status="declined")
+        r = client.post(f"{_BASE}/applications/{application.id}/decision",
+                        json={"outcome": "refer", "override": True})
+        assert r.status_code == 200, r.text
+        assert r.json()["status"] == "under_review"
+
+    def test_payment_idempotent_on_external_ref(self, app_client, db_session):
+        """Audit #3: a retry with the same external_ref must not double-post."""
+        app, client = app_client
+        loan = _seed_loan(db_session)
+        body = {"amount_cents": 50000, "method": "manual", "external_ref": "ext-abc-123"}
+        r1 = client.post(f"{_BASE}/loans/{loan.id}/payments", json=body)
+        assert r1.status_code == 200, r1.text
+        bal_after_first = r1.json()["principal_balance_cents"]
+        r2 = client.post(f"{_BASE}/loans/{loan.id}/payments", json=body)
+        assert r2.status_code == 200, r2.text
+        assert r2.json().get("idempotent_replay") is True
+        assert r2.json()["payment_id"] == r1.json()["payment_id"]  # same receipt
+        assert r2.json()["principal_balance_cents"] == bal_after_first  # not double-reduced
+
+    def test_payment_without_external_ref_not_deduped(self, app_client, db_session):
+        """No external_ref → caller owns idempotency; two posts are two receipts."""
+        app, client = app_client
+        loan = _seed_loan(db_session)
+        body = {"amount_cents": 10000, "method": "manual"}
+        r1 = client.post(f"{_BASE}/loans/{loan.id}/payments", json=body)
+        r2 = client.post(f"{_BASE}/loans/{loan.id}/payments", json=body)
+        assert r1.status_code == 200 and r2.status_code == 200
+        assert r1.json()["payment_id"] != r2.json()["payment_id"]
