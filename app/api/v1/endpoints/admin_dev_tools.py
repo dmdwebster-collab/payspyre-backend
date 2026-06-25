@@ -27,8 +27,31 @@ from app.core.config import settings
 from app.core.security import create_access_token, get_password_hash
 from app.db.base import get_db
 from app.models.user import Role, User, UserRoleLink
+from app.services import demo_simulation
 
 router = APIRouter(prefix="/dev", tags=["admin-dev"])
+
+
+class RunDemoBody(BaseModel):
+    score: int = 720          # 720 approves, 640 → manual review, 550 declines
+    amount_cents: int = 2_500_000
+    post_payment: bool = True
+
+
+@router.post("/run-demo-application")
+def run_demo_application(body: RunDemoBody, db: Session = Depends(get_db)):
+    """Run one fully-simulated application end to end and return the step trace.
+
+    Drives the real engine (orchestrator + loan_servicing) on mock adapters, so
+    the whole lifecycle — decision, booked loan, amortization, payment, statement,
+    payoff — is produced with real numbers and zero integration creds.
+    """
+    try:
+        return demo_simulation.run_demo_application(
+            db, score=body.score, amount_cents=body.amount_cents, post_payment=body.post_payment
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
 
 
 def _require_seed_token(x_dev_seed_token: Optional[str] = Header(default=None)) -> None:

@@ -18,7 +18,12 @@ from app.core.auth import get_current_user, require_roles
 from app.db.base import get_db
 from app.models.loan import Vendor
 from app.models.platform.credit_application import PlatformCreditApplication
-from app.models.platform.loan import PlatformLoan, PlatformLoanScheduleItem
+from app.models.platform.loan import (
+    PlatformLoan,
+    PlatformLoanPayment,
+    PlatformLoanScheduleItem,
+    PlatformLoanStatement,
+)
 from app.models.platform.patient import PlatformPatient
 from app.services.loan_servicing import get_loan_status
 
@@ -106,3 +111,70 @@ def get_loan(
     if detail is None:
         raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="Loan not found")
     return detail
+
+
+def _require_loan(db: Session, loan_id: UUID) -> None:
+    if db.query(PlatformLoan.id).filter(PlatformLoan.id == loan_id).first() is None:
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="Loan not found")
+
+
+class ScheduleRow(BaseModel):
+    installment_number: int
+    due_date: date
+    principal_cents: int
+    interest_cents: int
+    total_cents: int
+    paid_cents: int
+    status: str
+
+
+class PaymentRow(BaseModel):
+    amount_cents: int
+    received_at: datetime
+    method: str
+    external_ref: Optional[str] = None
+
+
+class StatementRow(BaseModel):
+    period_start: date
+    period_end: date
+    opening_balance_cents: int
+    principal_paid_cents: int
+    interest_paid_cents: int
+    closing_balance_cents: int
+
+
+@router.get("/{loan_id}/schedule", response_model=list[ScheduleRow])
+def loan_schedule(loan_id: UUID, db: Session = Depends(get_db), _user=Depends(get_current_user)):
+    """The full amortization schedule — the calculation engine made visible."""
+    _require_loan(db, loan_id)
+    return (
+        db.query(PlatformLoanScheduleItem)
+        .filter(PlatformLoanScheduleItem.loan_id == loan_id)
+        .order_by(PlatformLoanScheduleItem.installment_number)
+        .all()
+    )
+
+
+@router.get("/{loan_id}/payments", response_model=list[PaymentRow])
+def loan_payments(loan_id: UUID, db: Session = Depends(get_db), _user=Depends(get_current_user)):
+    """The payment ledger (cash receipts), newest first."""
+    _require_loan(db, loan_id)
+    return (
+        db.query(PlatformLoanPayment)
+        .filter(PlatformLoanPayment.loan_id == loan_id)
+        .order_by(PlatformLoanPayment.received_at.desc())
+        .all()
+    )
+
+
+@router.get("/{loan_id}/statements", response_model=list[StatementRow])
+def loan_statements(loan_id: UUID, db: Session = Depends(get_db), _user=Depends(get_current_user)):
+    """Billing statements (opening/closing balance + principal/interest split)."""
+    _require_loan(db, loan_id)
+    return (
+        db.query(PlatformLoanStatement)
+        .filter(PlatformLoanStatement.loan_id == loan_id)
+        .order_by(PlatformLoanStatement.period_start.desc())
+        .all()
+    )
