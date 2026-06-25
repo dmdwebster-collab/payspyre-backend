@@ -40,8 +40,14 @@ class TestSimulationService:
         assert loan["monthly_payment_cents"] > 0
         assert loan["total_interest_cents"] > 0  # interest actually accrues
         assert loan["total_repayment_cents"] > loan["principal_cents"]
+        # the demo funds the loan (so the portfolio book reflects it)
+        assert loan["status"] == "active"
         # a payment was posted and the balance moved
         assert trace["payment"]["balance_after_cents"] < loan["principal_cents"]
+        # the loan card's current balance is consistent with the payment/statement
+        # (snapshot taken AFTER the payment — no stale pre-payment balance)
+        assert loan["principal_balance_cents"] == trace["payment"]["balance_after_cents"]
+        assert loan["principal_balance_cents"] == trace["statement"]["closing_balance_cents"]
         # a statement + payoff were produced
         assert "statement" in trace and "payoff" in trace
         assert trace["payoff"]["payoff_cents"] > 0
