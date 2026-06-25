@@ -1,7 +1,7 @@
 """Pydantic request/response models for the applicant API (P6.5)."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal, Optional
 from uuid import UUID
 
@@ -88,6 +88,26 @@ class ConsentGrantResponse(BaseModel):
     granted: bool
 
 
+class AcceptAllConsentsBody(BaseModel):
+    """Body for the consolidated disclosure acceptance.
+
+    All fields optional: a bare ``{}`` (or no body) is a valid acceptance. The
+    explicit ``accepted`` flag lets a client signal a deliberate decline; the
+    optional ``disclosure_version`` records which consolidated disclosure
+    document the patient saw.
+    """
+
+    accepted: bool = True
+    disclosure_version: Optional[str] = None
+
+
+class AcceptAllConsentsResponse(BaseModel):
+    application_id: UUID
+    accepted: bool
+    granted_purposes: list[str]
+    disclosure_version: Optional[str] = None
+
+
 class InitiateVerificationResponse(BaseModel):
     verification_id: UUID
     verification_type: str
@@ -105,6 +125,34 @@ class SubmitResponse(BaseModel):
     status: str
     decision: Optional[dict[str, Any]] = None
     already_decided: bool
+
+
+# --- manual application path -----------------------------------------------
+
+
+class ManualApplicationBody(BaseModel):
+    """Fields normally pulled from integrations (Didit/Flinks), entered manually.
+
+    The fallback when an integration fails: the borrower supplies the data by
+    hand and the application is routed to manual review. All fields are required
+    — a manual application is incomplete without them (a missing one → 422).
+    Monetary fields are cents (integers, ``>= 0``) to match the rest of the
+    platform's money handling.
+    """
+
+    legal_name: str = Field(..., min_length=1)
+    date_of_birth: date
+    address: str = Field(..., min_length=1)
+    employer_name: str = Field(..., min_length=1)
+    monthly_income_cents: int = Field(..., ge=0)
+    monthly_shelter_cents: int = Field(..., ge=0)
+    monthly_non_discretionary_expenses_cents: int = Field(..., ge=0)
+
+
+class ManualApplicationResponse(BaseModel):
+    application_id: UUID
+    status: str
+    manual_application: bool
 
 
 # --- products (applicant-facing catalogue) ---------------------------------

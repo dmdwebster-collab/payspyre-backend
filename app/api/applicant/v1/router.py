@@ -6,7 +6,9 @@ from app.api.applicant.v1.endpoints import (
     auth,
     borrower_auth,
     dashboard,
+    disclosure,
     loans,
+    manual_application,
     marketplace,
     products,
 )
@@ -14,6 +16,12 @@ from app.core.config import settings
 
 applicant_router = APIRouter()
 applicant_router.include_router(auth.router)
+# Consolidated disclosure (accept-all) + manual application MUST register BEFORE
+# applications.router: applications has a catch-all POST /consents/{purpose} that
+# would otherwise swallow the literal /consents/accept-all path (FastAPI matches
+# in registration order).
+applicant_router.include_router(disclosure.router)
+applicant_router.include_router(manual_application.router)
 applicant_router.include_router(applications.router)
 applicant_router.include_router(products.router)
 applicant_router.include_router(marketplace.router)
