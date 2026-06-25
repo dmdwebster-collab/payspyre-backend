@@ -6,13 +6,21 @@ product's parameters, and we compute the regulated disclosure figures:
   * Installment payment per the chosen frequency (Monthly / Bi-weekly / …)
   * Total of Payments
   * Cost of Borrowing
-  * APR — DEFERRED (a regulated Canadian Cost-of-Borrowing figure that differs
-    from the annual interest rate and folds in fees). The engine carries the
-    fee + apr hooks but leaves apr_bps None until Dave confirms the fee schedule
-    and APR method — we do NOT invent a legal disclosure number.
+  * APR — the standard actuarial Annual Percentage Rate (the Canadian
+    Cost-of-Borrowing definition): the annual rate ``r`` such that the present
+    value of the installment schedule, discounted at ``r / payments_per_year``,
+    equals the amount advanced MINUS any upfront fees. With no fees this equals
+    the contract interest rate; fees push it above the contract rate.
 
 This is purely a calculator (no PII, no application yet). The actual booking
 schedule lives in loan_servicing; this mirrors its math across frequencies.
+
+NOTE (pending Dave / compliance confirmation): the FEE SCHEDULE — i.e. exactly
+which charges count toward the cost of borrowing and therefore enter the APR —
+plus the final APR rounding convention and day-count basis are not yet legally
+locked. The method implemented here is the standard actuarial APR; ``fees_cents``
+defaults to 0 from ``pricing_config["fees_cents"]`` until that schedule is
+confirmed, so today's disclosed APR equals the contract rate.
 """
 from __future__ import annotations
 
@@ -38,6 +46,116 @@ def num_payments(term_months: int, frequency: str) -> int:
         return term_months * 2
     # weekly / bi-weekly don't divide months evenly — scale by the year fraction.
     return max(1, round(term_months * per_year / 12))
+
+
+def _regular_installment(amount_cents: int, period_rate: float, n: int) -> int:
+    """The regular instalment: zero-rate splits evenly, else the annuity payment."""
+    if period_rate == 0:
+        return -(-amount_cents // n)  # ceil so the schedule fully amortizes
+    raw = amount_cents * period_rate / (1 - (1 + period_rate) ** -n)
+    return round(raw)
+
+
+def _amortize(amount_cents: int, period_rate: float, n: int) -> list[int]:
+    """Amortize at ``period_rate`` and return the actual per-period payment amounts
+    (the last entry absorbs rounding / clears the balance). The cent-rounded
+    schedule produced here is the EXACT cashflow we later discount for the APR, so
+    APR is computed against the same payments the borrower actually makes.
+    """
+    regular = _regular_installment(amount_cents, period_rate, n)
+    balance = amount_cents
+    payments: list[int] = []
+    for i in range(1, n + 1):
+        interest = round(balance * period_rate)
+        principal_portion = regular - interest
+        if i == n or principal_portion >= balance:
+            principal_portion = balance
+            payment = interest + principal_portion
+        else:
+            payment = regular
+        balance -= principal_portion
+        payments.append(payment)
+        if balance <= 0:
+            break
+    return payments
+
+
+def compute_apr_bps(
+    amount_cents: int,
+    annual_rate_bps: int,
+    term_months: int,
+    frequency: str,
+    fees_cents: int = 0,
+) -> int:
+    """Standard actuarial APR for a quote, in basis points.
+
+    Builds the cent-exact installment schedule at the CONTRACT rate (reusing the
+    same amortize logic as ``quote_loan``), then solves for the periodic rate ``i``
+    such that the present value of that schedule, discounted at ``i``, equals the
+    NET advance (``amount_cents - fees_cents``). Annualizing ``i`` by the number of
+    payments per year and converting to bps gives the APR.
+
+    Invariant: ``fees_cents == 0`` -> APR == ``annual_rate_bps`` (an installment
+    loan with no fees discloses its contract rate); ``fees_cents > 0`` -> APR >
+    ``annual_rate_bps`` (the borrower receives less but repays the same schedule).
+    """
+    if frequency not in FREQUENCIES:
+        raise ValueError(f"Unknown payment frequency '{frequency}'")
+    if amount_cents <= 0:
+        raise ValueError("amount_cents must be positive")
+
+    per_year = FREQUENCIES[frequency]["per_year"]
+    n = num_payments(term_months, frequency)
+    contract_period_rate = annual_rate_bps / 10_000.0 / per_year
+
+    payments = _amortize(amount_cents, contract_period_rate, n)
+    net_advance = amount_cents - fees_cents
+    if net_advance <= 0:
+        raise ValueError("amount_cents must exceed fees_cents")
+
+    def pv_minus_advance(i: float) -> float:
+        """PV of the payment schedule discounted at periodic rate ``i``, minus the
+        net advance. Monotonically DECREASING in ``i`` (higher discount -> lower PV).
+        """
+        pv = 0.0
+        for k, pay in enumerate(payments, start=1):
+            pv += pay / (1 + i) ** k
+        return pv - net_advance
+
+    # With no fees the PV at the contract rate equals the advance (to rounding),
+    # so the contract period rate is already the root — return the contract rate
+    # exactly rather than letting cent-rounding nudge it by a bp.
+    if fees_cents == 0:
+        return annual_rate_bps
+
+    # Bracket the root. f is decreasing in i; fees>0 means f(contract_rate) > 0,
+    # so the APR's periodic rate is ABOVE the contract rate. Grow the upper bound
+    # until f goes negative.
+    lo = contract_period_rate
+    hi = max(contract_period_rate, 0.0) + 1e-9
+    f_hi = pv_minus_advance(hi)
+    grow_guard = 0
+    while f_hi > 0 and grow_guard < 200:
+        hi *= 2
+        if hi < 1e-6:
+            hi = 1e-6
+        f_hi = pv_minus_advance(hi)
+        grow_guard += 1
+
+    # Bisection on the periodic rate (robust; the function is smooth & monotone).
+    for _ in range(200):
+        mid = (lo + hi) / 2
+        f_mid = pv_minus_advance(mid)
+        if abs(f_mid) < 1e-9 or (hi - lo) < 1e-15:
+            break
+        if f_mid > 0:
+            lo = mid
+        else:
+            hi = mid
+    periodic = (lo + hi) / 2
+
+    apr = periodic * per_year * 10_000.0
+    return round(apr)
 
 
 @dataclass
@@ -83,11 +201,7 @@ def quote_loan(
     period_rate = annual_rate_bps / 10_000.0 / FREQUENCIES[frequency]["per_year"]
 
     # Regular installment: zero-rate splits evenly; else the standard annuity payment.
-    if period_rate == 0:
-        regular = -(-amount_cents // n)  # ceil so the schedule fully amortizes
-    else:
-        raw = amount_cents * period_rate / (1 - (1 + period_rate) ** -n)
-        regular = round(raw)
+    regular = _regular_installment(amount_cents, period_rate, n)
 
     # Amortize to get the exact total + a clean final payment.
     balance = amount_cents
@@ -116,6 +230,7 @@ def quote_loan(
             break
 
     cost_of_borrowing = total - amount_cents + fees_cents
+    apr_bps = compute_apr_bps(amount_cents, annual_rate_bps, term_months, frequency, fees_cents)
 
     return Quote(
         amount_cents=amount_cents,
@@ -129,7 +244,7 @@ def quote_loan(
         total_of_payments_cents=total + fees_cents,
         cost_of_borrowing_cents=cost_of_borrowing,
         fees_cents=fees_cents,
-        apr_bps=None,
+        apr_bps=apr_bps,
         schedule_preview=schedule,
     )
 

@@ -45,9 +45,14 @@ class TestQuoteMath:
         q = loan_quote.quote_loan(1_000_000, 0, 12, "monthly", fees_cents=5_000)
         assert q.cost_of_borrowing_cents == 5_000  # 0 interest + 5000 fees
 
-    def test_apr_is_deferred(self):
-        # we do NOT invent the regulated APR figure
-        assert loan_quote.quote_loan(1_000_000, 1290, 12, "monthly").apr_bps is None
+    def test_apr_equals_contract_rate_when_no_fees(self):
+        # an installment loan with no fees discloses its contract rate as the APR
+        q = loan_quote.quote_loan(1_000_000, 1290, 12, "monthly")
+        assert q.apr_bps == 1290
+
+    def test_apr_exceeds_contract_rate_with_fees(self):
+        q = loan_quote.quote_loan(1_000_000, 1290, 12, "monthly", fees_cents=20_000)
+        assert q.apr_bps > 1290
 
     def test_product_terms_defaults(self):
         params = loan_quote.product_terms({"apr_bps": 999, "term_options": [12, 24]})
