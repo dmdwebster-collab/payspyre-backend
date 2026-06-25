@@ -175,6 +175,18 @@ _PRE_DECISION_STATUSES = ("started", "verifying")
 _DECISION_STATUSES = ("approved", "declined", "under_review")
 
 
+def mark_manual_review(application: PlatformCreditApplication) -> None:
+    """Transition an application into manual review (status='under_review').
+
+    The status-transition RULE for the manual-application path lives here, in the
+    orchestrator module, because application status transitions are owned by the
+    orchestrator (spec §4.3 — enforced by tests/test_application_status_writes.py).
+    The caller (the manual-application endpoint) owns persisting the manually
+    captured fields + the event; this owns only the status decision.
+    """
+    application.status = "under_review"
+
+
 class FlowOrchestrator:
     def __init__(
         self,

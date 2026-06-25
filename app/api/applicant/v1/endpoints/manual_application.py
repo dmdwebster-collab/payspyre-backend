@@ -41,6 +41,7 @@ from app.api.applicant.v1.schemas import (
 from app.core.logging import get_logger
 from app.db.base import get_db
 from app.models.platform.credit_application import PlatformCreditApplication
+from app.services.flow_orchestrator import mark_manual_review
 from app.models.platform.event import PlatformEvent
 
 logger = get_logger(__name__)
@@ -128,7 +129,9 @@ def submit_manual_application(
     application.flow_state = flow_state
 
     before_status = application.status
-    application.status = "under_review"
+    # Status transitions are owned by the orchestrator (spec §4.3) — delegate the
+    # under_review move there rather than writing application.status inline.
+    mark_manual_review(application)
     application.status_updated_at = now
 
     event = PlatformEvent(
