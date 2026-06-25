@@ -128,28 +128,25 @@ def run_demo_application(
 
     loan = db.query(PlatformLoan).filter(PlatformLoan.application_id == app_id).first()
     if loan is not None:
+        # Simulate funding so the demo produces a LIVE, active loan — the dashboard's
+        # active book then reflects it. This is a LABELLED simulation; real
+        # disbursement (SignNow agreement + Zumrails payout) is not exercised in
+        # mock mode, so we advance the lifecycle directly.
+        loan.status = "active"
+        loan.disbursement_status = "completed"
+        loan.disbursed_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(loan)
+
         schedule = (
             db.query(PlatformLoanScheduleItem)
             .filter(PlatformLoanScheduleItem.loan_id == loan.id)
             .order_by(PlatformLoanScheduleItem.installment_number)
             .all()
         )
-        total_repayment = sum(s.total_cents for s in schedule)
-        trace["loan"] = {
-            "loan_id": str(loan.id),
-            "status": loan.status,
-            "principal_cents": loan.principal_cents,
-            "annual_rate_bps": loan.annual_rate_bps,
-            "term_months": loan.term_months,
-            "principal_balance_cents": loan.principal_balance_cents,
-            "installments": len(schedule),
-            "monthly_payment_cents": schedule[0].total_cents if schedule else None,
-            "total_repayment_cents": total_repayment,
-            "total_interest_cents": total_repayment - loan.principal_cents,
-        }
         steps.append({"step": "loan_booked",
-                      "detail": f"{loan.term_months}-month loan, {_dollars(schedule[0].total_cents)}/mo"
-                                if schedule else "Loan booked"})
+                      "detail": f"{loan.term_months}-month loan, {_dollars(schedule[0].total_cents)}/mo — funded"
+                                if schedule else "Loan booked + funded"})
 
         if post_payment and schedule:
             payment = loan_servicing.record_payment(
@@ -178,6 +175,22 @@ def run_demo_application(
             steps.append({"step": "statement_generated",
                           "detail": f"Principal {_dollars(statement.principal_paid_cents)} + "
                                     f"interest {_dollars(statement.interest_paid_cents)}"})
+
+        # Build the loan snapshot AFTER any payment so principal_balance_cents is the
+        # CURRENT balance — consistent with the payment / statement / payoff below.
+        total_repayment = sum(s.total_cents for s in schedule)
+        trace["loan"] = {
+            "loan_id": str(loan.id),
+            "status": loan.status,
+            "principal_cents": loan.principal_cents,
+            "annual_rate_bps": loan.annual_rate_bps,
+            "term_months": loan.term_months,
+            "principal_balance_cents": loan.principal_balance_cents,
+            "installments": len(schedule),
+            "monthly_payment_cents": schedule[0].total_cents if schedule else None,
+            "total_repayment_cents": total_repayment,
+            "total_interest_cents": total_repayment - loan.principal_cents,
+        }
 
         payoff = loan_servicing.compute_payoff(db, loan, date.today())
         trace["payoff"] = {
