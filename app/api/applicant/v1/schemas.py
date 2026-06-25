@@ -88,6 +88,26 @@ class ConsentGrantResponse(BaseModel):
     granted: bool
 
 
+class AcceptAllConsentsBody(BaseModel):
+    """Body for the consolidated disclosure acceptance.
+
+    All fields optional: a bare ``{}`` (or no body) is a valid acceptance. The
+    explicit ``accepted`` flag lets a client signal a deliberate decline; the
+    optional ``disclosure_version`` records which consolidated disclosure
+    document the patient saw.
+    """
+
+    accepted: bool = True
+    disclosure_version: Optional[str] = None
+
+
+class AcceptAllConsentsResponse(BaseModel):
+    application_id: UUID
+    accepted: bool
+    granted_purposes: list[str]
+    disclosure_version: Optional[str] = None
+
+
 class InitiateVerificationResponse(BaseModel):
     verification_id: UUID
     verification_type: str
