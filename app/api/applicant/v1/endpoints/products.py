@@ -94,6 +94,7 @@ class QuoteResponse(BaseModel):
     cost_of_borrowing_cents: int   # interest + fees
     annual_rate_bps: int
     apr_bps: int | None            # Canadian regulatory APR (SOR/2001-104 s.3-4)
+    exceeds_criminal_rate: bool    # APR >= Criminal Code s.347 cap (compliance flag)
 
 
 @router.post("/{product_id}/quote", response_model=QuoteResponse)
@@ -136,4 +137,5 @@ def quote(product_id: UUID, body: QuoteRequest, db: Session = Depends(get_db)):
         interest_cents=q.interest_cents, fees_cents=q.fees_cents,
         cost_of_borrowing_cents=q.cost_of_borrowing_cents,
         annual_rate_bps=q.annual_rate_bps, apr_bps=q.apr_bps,
+        exceeds_criminal_rate=q.exceeds_criminal_rate,
     )

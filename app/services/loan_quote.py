@@ -47,6 +47,18 @@ FREQUENCIES: dict[str, dict] = {
 }
 
 
+# Criminal Code (Canada) s.347 criminal rate of interest. Bill C-47 lowered it from
+# 60% effective annual rate to 35% APR, in force 2026-01-01. A loan whose APR exceeds
+# this is a criminal-rate loan. Expressed in bps (35% = 3500 bps). The number should
+# be legally confirmed; this constant centralizes it so enforcement has one source.
+CRIMINAL_RATE_CAP_BPS = 3500
+
+
+def exceeds_criminal_rate(apr_bps: int) -> bool:
+    """True if the disclosed APR is at/above the s.347 criminal-rate cap."""
+    return apr_bps >= CRIMINAL_RATE_CAP_BPS
+
+
 def num_payments(term_months: int, frequency: str) -> int:
     """How many instalments a term spans at the given frequency."""
     per_year = FREQUENCIES[frequency]["per_year"]
@@ -147,7 +159,8 @@ class Quote:
     interest_cents: int               # total interest over the term
     cost_of_borrowing_cents: int      # interest + fees
     fees_cents: int = 0
-    apr_bps: Optional[int] = None     # DEFERRED — see module docstring
+    apr_bps: Optional[int] = None     # Canadian regulatory APR (SOR/2001-104 s.3-4)
+    exceeds_criminal_rate: bool = False  # APR >= s.347 cap (compliance guardrail)
     schedule_preview: list[dict] = field(default_factory=list)
 
 
@@ -223,6 +236,7 @@ def quote_loan(
         cost_of_borrowing_cents=cost_of_borrowing,
         fees_cents=fees_cents,
         apr_bps=apr_bps,
+        exceeds_criminal_rate=exceeds_criminal_rate(apr_bps),
         schedule_preview=schedule,
     )
 

@@ -74,6 +74,24 @@ class TestAprRegulatoryWorkedExample:
         assert q.interest_cents == 66_186
 
 
+class TestCriminalRateCap:
+    def test_helper_boundary(self):
+        from app.services.loan_quote import CRIMINAL_RATE_CAP_BPS, exceeds_criminal_rate
+        assert CRIMINAL_RATE_CAP_BPS == 3500
+        assert exceeds_criminal_rate(3500) is True
+        assert exceeds_criminal_rate(3499) is False
+
+    def test_normal_quote_does_not_exceed(self):
+        q = quote_loan(1_000_000, 1290, 12, "monthly", fees_cents=0)
+        assert q.exceeds_criminal_rate is False
+
+    def test_high_rate_with_fees_flags_criminal(self):
+        # 30% nominal + a heavy fee pushes the regulatory APR over the 35% cap
+        q = quote_loan(1_000_000, 3000, 12, "monthly", fees_cents=80_000)
+        assert q.apr_bps >= 3500
+        assert q.exceeds_criminal_rate is True
+
+
 class TestAprSanity:
     def test_known_case_10k_1290bps_12mo(self):
         # $10,000, 12.90% nominal, 12 monthly payments, no fees -> APR ~= 1290 bps
