@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from app.api.applicant.v1.deps import get_patient_auth_service
-from app.api.applicant.v1.schemas import MagicLinkExchangeResponse, MagicLinkRequestResponse
+from app.api.applicant.v1.schemas import MagicLinkExchangeResponse
 from app.services.auth.patient_auth_service import (
     InvalidMagicLinkToken,
     MagicLinkLocked,
@@ -28,6 +28,13 @@ class BorrowerLoginRequestBody(BaseModel):
     email: str = Field(..., min_length=3, max_length=320)
 
 
+class BorrowerLoginRequestResponse(BaseModel):
+    # Borrower login is email-only and enumeration-safe: the service ALWAYS returns
+    # the same generic message regardless of whether the account exists, so this
+    # response carries only that message (no contact_method — that would leak shape).
+    message: str
+
+
 class BorrowerLoginExchangeBody(BaseModel):
     email: str = Field(..., min_length=3, max_length=320)
     token: str = Field(..., min_length=4, max_length=12)
@@ -35,7 +42,7 @@ class BorrowerLoginExchangeBody(BaseModel):
 
 @router.post(
     "/request",
-    response_model=MagicLinkRequestResponse,
+    response_model=BorrowerLoginRequestResponse,
     status_code=status.HTTP_202_ACCEPTED,
 )
 def request_borrower_login(

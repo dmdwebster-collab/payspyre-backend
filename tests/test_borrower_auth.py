@@ -105,6 +105,18 @@ class TestBorrowerLogin:
         with pytest.raises(InvalidMagicLinkToken):
             service.exchange_borrower_login(f"nobody-{uuid.uuid4().hex}@example.com", "ABCD1234")
 
+    def test_request_endpoint_serializes_202_not_500(self, client):
+        # HTTP-level: exercises the response_model. The service-only tests above
+        # never hit serialization, which is why a response_model mismatch slipped
+        # through and 500'd on staging. Enumeration-safe → 202 + generic message
+        # even for an unknown email.
+        resp = client.post(
+            "/api/applicant/v1/auth/borrower-login/request",
+            json={"email": f"nobody-{uuid.uuid4().hex}@example.com"},
+        )
+        assert resp.status_code == 202, resp.text
+        assert "sign-in link" in resp.json()["message"]
+
     def test_wrong_token_rejected(self, db_session: Session):
         email = f"borrower-{uuid.uuid4().hex[:8]}@example.com"
         _seed_borrower(db_session, email)
