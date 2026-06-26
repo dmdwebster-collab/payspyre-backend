@@ -60,6 +60,16 @@ class TestQuoteMath:
         assert params["term_options"] == [12, 24]
         assert {f["value"] for f in params["frequencies"]} == set(loan_quote.FREQUENCIES)
 
+    def test_term_range_from_options(self):
+        # the slider range derives from the options when no explicit min/max
+        params = loan_quote.product_terms({"term_options": [12, 24, 36, 60]})
+        assert params["term_min"] == 12 and params["term_max"] == 60
+
+    def test_term_range_explicit(self):
+        # explicit term_min/term_max win (matches Dave's 3–84 month slider)
+        params = loan_quote.product_terms({"term_min": 3, "term_max": 84})
+        assert params["term_min"] == 3 and params["term_max"] == 84
+
 
 @pytest.fixture
 def client(db_session: Session):
