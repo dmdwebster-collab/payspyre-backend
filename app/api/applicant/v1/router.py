@@ -7,6 +7,7 @@ from app.api.applicant.v1.endpoints import (
     borrower_auth,
     dashboard,
     disclosure,
+    documents,
     loans,
     manual_application,
     marketplace,
@@ -22,6 +23,7 @@ applicant_router.include_router(auth.router)
 # in registration order).
 applicant_router.include_router(disclosure.router)
 applicant_router.include_router(manual_application.router)
+applicant_router.include_router(documents.router)
 applicant_router.include_router(applications.router)
 applicant_router.include_router(products.router)
 applicant_router.include_router(marketplace.router)
