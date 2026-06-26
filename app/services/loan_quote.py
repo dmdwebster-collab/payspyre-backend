@@ -244,7 +244,8 @@ def quote_loan(
 # --- product parameter extraction (drives the term/frequency selectors) -----
 
 _DEFAULT_TERMS = [12, 24, 36, 48, 60]
-_DEFAULT_RATE_BPS = 1290
+_DEFAULT_RATE_BPS = 1299  # 12.99% — mirror loan_servicing._DEFAULT_ANNUAL_RATE_BPS
+# so an unconfigured product quotes the same rate it would book at.
 
 
 def product_worst_case_apr_bps(min_amount_cents: int, pricing_config: Optional[dict]) -> int:
@@ -290,7 +291,16 @@ def product_terms(pricing_config: Optional[dict]) -> dict:
         frequencies = list(FREQUENCIES.keys())
     frequencies = [f for f in frequencies if f in FREQUENCIES]
 
-    rate = cfg.get("apr_bps") or cfg.get("annual_rate_bps") or _DEFAULT_RATE_BPS
+    # Rate resolution MUST match loan_servicing._resolve_pricing so the calculator
+    # shows the same rate the loan actually books at: explicit apr_bps/annual_rate_bps,
+    # else the floor of apr_range (stored in PERCENT, e.g. [7.99, 28.99]), else default.
+    rate = cfg.get("apr_bps")
+    if rate is None:
+        rate = cfg.get("annual_rate_bps")
+    if rate is None and cfg.get("apr_range"):
+        rate = int(round(float(cfg["apr_range"][0]) * 100))
+    if rate is None:
+        rate = _DEFAULT_RATE_BPS
 
     return {
         "term_options": term_options,
