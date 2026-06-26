@@ -54,6 +54,8 @@ class ProductTerms(BaseModel):
     min_amount_cents: int
     max_amount_cents: int
     term_options: list[int]
+    term_min: int
+    term_max: int
     frequencies: list[FrequencyOption]
     annual_rate_bps: int
 
@@ -66,7 +68,8 @@ def product_terms(product_id: UUID, db: Session = Depends(get_db)):
     return ProductTerms(
         product_id=product.id, name=product.name, currency=product.currency,
         min_amount_cents=product.min_amount_cents, max_amount_cents=product.max_amount_cents,
-        term_options=params["term_options"], frequencies=params["frequencies"],
+        term_options=params["term_options"], term_min=params["term_min"], term_max=params["term_max"],
+        frequencies=params["frequencies"],
         annual_rate_bps=params["annual_rate_bps"],
     )
 
@@ -109,8 +112,11 @@ def quote(product_id: UUID, body: QuoteRequest, db: Session = Depends(get_db)):
             detail=f"Amount must be between {product.min_amount_cents} and "
                    f"{product.max_amount_cents} cents.",
         )
-    if body.term_months not in params["term_options"]:
-        raise HTTPException(status_code=422, detail=f"Term must be one of {params['term_options']}.")
+    if not (params["term_min"] <= body.term_months <= params["term_max"]):
+        raise HTTPException(
+            status_code=422,
+            detail=f"Term must be between {params['term_min']} and {params['term_max']} months.",
+        )
     if body.frequency not in {f["value"] for f in params["frequencies"]}:
         raise HTTPException(status_code=422, detail="Unsupported payment frequency for this product.")
 

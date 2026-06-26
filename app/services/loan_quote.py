@@ -245,6 +245,14 @@ def product_terms(pricing_config: Optional[dict]) -> dict:
         terms = [terms]
     if not terms:
         terms = list(_DEFAULT_TERMS)
+    term_options = sorted(set(int(t) for t in terms))
+
+    # Term is a continuous range (the calculator uses a slider) — derive the bounds
+    # from explicit config if present, else from the discrete options.
+    term_min = int(cfg.get("term_min") or term_options[0])
+    term_max = int(cfg.get("term_max") or term_options[-1])
+    if term_min > term_max:
+        term_min, term_max = term_max, term_min
 
     frequencies = cfg.get("payment_frequencies")
     if not frequencies:
@@ -254,7 +262,9 @@ def product_terms(pricing_config: Optional[dict]) -> dict:
     rate = cfg.get("apr_bps") or cfg.get("annual_rate_bps") or _DEFAULT_RATE_BPS
 
     return {
-        "term_options": sorted(set(int(t) for t in terms)),
+        "term_options": term_options,
+        "term_min": term_min,
+        "term_max": term_max,
         "frequencies": [{"value": f, "label": FREQUENCIES[f]["label"]} for f in frequencies],
         "annual_rate_bps": int(rate),
         "fees_cents": int(cfg.get("fees_cents") or 0),
