@@ -17,7 +17,9 @@ from sqlalchemy.orm import Session, joinedload
 from app.core.auth import get_current_user, require_roles
 from app.db.base import get_db
 from app.models.loan import Vendor
+from app.models.platform.application_document import PlatformApplicationDocument
 from app.models.platform.credit_application import PlatformCreditApplication
+from app.services import document_storage
 
 router = APIRouter(dependencies=[Depends(require_roles("admin", "staff"))])
 
@@ -139,3 +141,40 @@ def get_application(
         consent_count=len(app.consents or []),
         created_at=app.created_at,
     )
+
+
+class AdminDocumentRow(BaseModel):
+    document_id: UUID
+    doc_type: str
+    status: str
+    download_url: Optional[str] = None  # short-TTL presigned GET; None if not uploaded/unconfigured
+
+
+@router.get("/{application_id}/documents", response_model=list[AdminDocumentRow])
+def list_application_documents(
+    application_id: UUID,
+    db: Session = Depends(get_db),
+    _user=Depends(get_current_user),
+):
+    """KYC documents for an application, each with a short-TTL signed download URL
+    (issued only for uploaded docs when storage is configured). RBAC-gated by the
+    router; every call is an admin action over sensitive data."""
+    docs = (
+        db.query(PlatformApplicationDocument)
+        .filter(PlatformApplicationDocument.application_id == application_id)
+        .order_by(PlatformApplicationDocument.created_at)
+        .all()
+    )
+    configured = document_storage.is_configured()
+    rows: list[AdminDocumentRow] = []
+    for d in docs:
+        url = None
+        if configured and d.status == "uploaded":
+            try:
+                url = document_storage.presigned_get_url(d.object_key)
+            except document_storage.StorageNotConfigured:
+                url = None
+        rows.append(
+            AdminDocumentRow(document_id=d.id, doc_type=d.doc_type, status=d.status, download_url=url)
+        )
+    return rows

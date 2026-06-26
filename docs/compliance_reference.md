@@ -46,6 +46,10 @@ the source docs and counsel govern.
 - **KYC documents** (ID front/back, selfie): express consent/notice at the upload step naming the
   KYC vendor; encrypt at rest + in transit; least-privilege access + audit logging (PIPEDA P7);
   purpose-bound retention/auto-purge (P5), reconciled with any FINTRAC/PCMLTFA retention floor.
+  IMPLEMENTED (manual-fallback path): `app/services/document_storage.py` (DO Spaces, private ACL,
+  presigned direct upload so bytes skip the API; INERT until SPACES_* set) + `id_document_upload`
+  consent purpose + admin signed-URL download (RBAC). TODO when keys are wired: bucket lifecycle
+  retention rule; confirm FINTRAC reporting-entity status for the retention floor.
 
 ### Open questions flagged by the research (confirm with counsel before launch)
 - **Quebec Law 25** imposes stricter, separately-governed consent (clear/free/informed/specific,

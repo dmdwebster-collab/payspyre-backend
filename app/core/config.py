@@ -87,6 +87,16 @@ class Settings(BaseSettings):
     # selector in app/api/applicant/v1/deps.py:get_notification_dispatcher.
     USE_REAL_NOTIFICATIONS: bool = False
 
+    # Document storage (DigitalOcean Spaces, S3-compatible) for KYC document uploads
+    # (manual-application fallback). Inert until all four are set — see
+    # app/services/storage/document_storage.py::is_configured. ENDPOINT defaults to the
+    # DO Spaces regional endpoint derived from SPACES_REGION when left blank.
+    SPACES_BUCKET: str = ""
+    SPACES_KEY: str = ""
+    SPACES_SECRET: str = ""
+    SPACES_REGION: str = ""           # e.g. "tor1"
+    SPACES_ENDPOINT: str = ""         # optional override; else https://<region>.digitaloceanspaces.com
+
     # Inbound notification webhooks — P7.4b. Twilio reuses TWILIO_AUTH_TOKEN
     # for StatusCallback signature validation (Twilio convention). Resend ships
     # a per-endpoint Svix secret in "whsec_<base64>" form.
