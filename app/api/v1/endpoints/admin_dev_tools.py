@@ -17,19 +17,50 @@ from __future__ import annotations
 
 import secrets
 from typing import Optional
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.auth import require_roles
 from app.core.config import settings
 from app.core.security import create_access_token, get_password_hash
 from app.db.base import get_db
+from app.models.platform.loan import PlatformLoan
 from app.models.user import Role, User, UserRoleLink
 from app.services import demo_simulation
 
 router = APIRouter(prefix="/dev", tags=["admin-dev"])
+
+
+class MarkLoanSignedResponse(BaseModel):
+    loan_id: str
+    agreement_status: str
+
+
+@router.post(
+    "/loans/{loan_id}/mark-signed",
+    response_model=MarkLoanSignedResponse,
+    dependencies=[Depends(require_roles("admin", "staff"))],
+)
+def mark_loan_signed(loan_id: UUID, db: Session = Depends(get_db)):
+    """DEV/staging: mark a loan's agreement ``signed`` so the disburse maker-checker
+    can be demoed.
+
+    The real signed-callback (``on_agreement_signed``) marks signed AND immediately
+    fires disbursement — which would make the manual maker-checker disburse a no-op.
+    This isolates just the signing so a tester can then request → approve a disburse
+    and watch it execute. Admin/staff-gated and only mounted off-prod.
+    """
+    loan = db.query(PlatformLoan).filter(PlatformLoan.id == loan_id).first()
+    if loan is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Loan not found")
+    loan.agreement_status = "signed"
+    db.commit()
+    db.refresh(loan)
+    return MarkLoanSignedResponse(loan_id=str(loan.id), agreement_status=loan.agreement_status)
 
 
 class RunDemoBody(BaseModel):
