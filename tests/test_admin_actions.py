@@ -73,6 +73,20 @@ def app_client(db_session: Session):
     app.dependency_overrides.clear()
 
 
+class TestDevMarkSigned:
+    def test_dev_mark_loan_signed(self, app_client, db_session):
+        app, client = app_client
+        loan = _seed_loan(db_session, status="pending_disbursement", agreement_status="not_sent")
+        r = client.post(f"{_BASE}/dev/loans/{loan.id}/mark-signed")
+        assert r.status_code == 200, r.text
+        assert r.json()["agreement_status"] == "signed"
+
+    def test_dev_mark_signed_404_unknown_loan(self, app_client, db_session):
+        app, client = app_client
+        r = client.post(f"{_BASE}/dev/loans/{uuid.uuid4()}/mark-signed")
+        assert r.status_code == 404, r.text
+
+
 class TestDecision:
     def test_approve_books_a_loan(self, app_client, db_session):
         app, client = app_client
