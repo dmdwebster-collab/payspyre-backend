@@ -70,6 +70,16 @@ class TestQuoteMath:
         params = loan_quote.product_terms({"term_min": 3, "term_max": 84})
         assert params["term_min"] == 3 and params["term_max"] == 84
 
+    def test_rate_from_apr_range_floor_matches_booking(self):
+        # apr_range is PERCENT; the calculator uses the floor — same as
+        # loan_servicing._resolve_pricing, so the quote matches the booked rate.
+        params = loan_quote.product_terms({"apr_range": [8.99, 24.99]})
+        assert params["annual_rate_bps"] == 899
+
+    def test_default_rate_matches_booking_default(self):
+        # an unconfigured product quotes the same default it would book at (12.99%)
+        assert loan_quote.product_terms({})["annual_rate_bps"] == 1299
+
 
 @pytest.fixture
 def client(db_session: Session):
