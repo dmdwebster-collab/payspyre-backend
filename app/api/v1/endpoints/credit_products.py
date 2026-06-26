@@ -30,8 +30,24 @@ from app.api.schemas.credit_products import (
 from app.core.auth import get_current_user, require_roles
 from app.db.base import get_db
 from app.services import credit_products as service
+from app.services import loan_quote
 
 router = APIRouter()
+
+
+def _reject_criminal_rate_config(min_amount_cents: int, pricing_config: dict) -> None:
+    """Refuse a product whose pricing could ever produce a criminal-rate (s.347)
+    APR — caught at configuration, not just at booking. Fail-closed guardrail."""
+    worst = loan_quote.product_worst_case_apr_bps(min_amount_cents, pricing_config or {})
+    if loan_quote.exceeds_criminal_rate(worst):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"This pricing can produce an APR of {worst / 100:.2f}%, at/above the "
+                f"Criminal Code s.347 cap ({loan_quote.CRIMINAL_RATE_CAP_BPS / 100:.0f}%). "
+                "Lower the interest rate or fees."
+            ),
+        )
 
 
 @router.post(
@@ -49,6 +65,7 @@ async def create_credit_product(
     data: CreditProductCreate,
     db: Session = Depends(get_db),
 ):
+    _reject_criminal_rate_config(data.min_amount_cents, data.pricing_config)
     try:
         product = service.create_credit_product(db, data)
     except JsonSchemaValidationError as exc:
@@ -125,6 +142,14 @@ async def update_credit_product(
     data: CreditProductUpdate,
     db: Session = Depends(get_db),
 ):
+    # Re-check the s.347 cap against the EFFECTIVE (merged) pricing when a patch
+    # touches the rate/fees or the amount floor.
+    if data.pricing_config is not None or data.min_amount_cents is not None:
+        existing = service.get_credit_product(db, product_id)
+        if existing is not None:
+            eff_min = data.min_amount_cents if data.min_amount_cents is not None else existing.min_amount_cents
+            eff_pricing = data.pricing_config if data.pricing_config is not None else existing.pricing_config
+            _reject_criminal_rate_config(eff_min, eff_pricing)
     try:
         product = service.update_credit_product(db, product_id, data)
     except JsonSchemaValidationError as exc:

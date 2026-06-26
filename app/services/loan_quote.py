@@ -247,6 +247,23 @@ _DEFAULT_TERMS = [12, 24, 36, 48, 60]
 _DEFAULT_RATE_BPS = 1290
 
 
+def product_worst_case_apr_bps(min_amount_cents: int, pricing_config: Optional[dict]) -> int:
+    """The HIGHEST regulatory APR a product can produce, in bps.
+
+    APR is driven up by a small advance (any fixed fee is then a larger fraction)
+    and by a short term (the fee's APR contribution scales ~1/T). So the worst case
+    sits at the product's minimum amount and a term endpoint — we evaluate both term
+    bounds and take the max. Used to refuse a product config that could ever book a
+    criminal-rate (s.347) loan, catching it at configuration rather than at booking.
+    """
+    params = product_terms(pricing_config)
+    rate, fees = params["annual_rate_bps"], params["fees_cents"]
+    return max(
+        compute_apr_bps(min_amount_cents, rate, t, "monthly", fees)
+        for t in {params["term_min"], params["term_max"]}
+    )
+
+
 def product_terms(pricing_config: Optional[dict]) -> dict:
     """The adjustable parameters a product allows: term options, frequencies, rate.
 
