@@ -54,6 +54,26 @@ class TestAprZeroRate:
         assert apr == 0
 
 
+class TestAprRegulatoryWorkedExample:
+    """Independently hand-computed against SOR/2001-104 s.3(1): APR = (C/(T*P))*100.
+
+    $10,000 @ 12.00% nominal, 12 monthly payments, $300 fee.
+    Amortizing at 1%/mo: total interest = $661.86 (C = $961.86 with the fee),
+    average opening principal P = $5,515.445, T = 1.00 yr.
+    APR = 96186 / (1.00 * 551544.5) = 0.174396 -> 1744 bps (17.44%).
+    """
+
+    def test_regulatory_apr_with_fee(self):
+        apr = compute_apr_bps(1_000_000, 1200, 12, "monthly", fees_cents=30_000)
+        assert apr == 1744
+
+    def test_breakdown_reconciles(self):
+        q = quote_loan(1_000_000, 1200, 12, "monthly", fees_cents=30_000)
+        # Principal + Interest + Fees == Total of Payments (Dave's display breakdown).
+        assert q.amount_cents + q.interest_cents + q.fees_cents == q.total_of_payments_cents
+        assert q.interest_cents == 66_186
+
+
 class TestAprSanity:
     def test_known_case_10k_1290bps_12mo(self):
         # $10,000, 12.90% nominal, 12 monthly payments, no fees -> APR ~= 1290 bps

@@ -4,23 +4,33 @@ The client adjusts Loan Amount · Term (months) · Payment Frequency within the
 product's parameters, and we compute the regulated disclosure figures:
 
   * Installment payment per the chosen frequency (Monthly / Bi-weekly / …)
-  * Total of Payments
-  * Cost of Borrowing
-  * APR — the standard actuarial Annual Percentage Rate (the Canadian
-    Cost-of-Borrowing definition): the annual rate ``r`` such that the present
-    value of the installment schedule, discounted at ``r / payments_per_year``,
-    equals the amount advanced MINUS any upfront fees. With no fees this equals
-    the contract interest rate; fees push it above the contract rate.
+  * Principal / Interest / Fees / Total of Payments breakdown
+  * APR — computed by the ONE method Canadian law allows: the Cost of Borrowing
+    Regulations (SOR/2001-104) s.3(1):
+
+        APR = ( C / (T × P) ) × 100
+
+    where, over the term of the loan:
+      C = the cost of borrowing  (total interest + applicable fees), in cents;
+      P = the average of the principal outstanding at the end of each interest
+          period, before subtracting that period's payment (rule 3(2)(b): each
+          instalment is applied first to the accumulated cost of borrowing, then
+          to principal), in cents;
+      T = the term of the loan in years (rule 3(2)(c): a month is 1/12, a week
+          1/52, a day 1/365 of a year).
+    s.4: if there is no cost of borrowing other than interest (fees = 0), the
+    APR IS the annual interest rate — so we return the contract rate directly.
 
 This is purely a calculator (no PII, no application yet). The actual booking
 schedule lives in loan_servicing; this mirrors its math across frequencies.
 
-NOTE (pending Dave / compliance confirmation): the FEE SCHEDULE — i.e. exactly
-which charges count toward the cost of borrowing and therefore enter the APR —
-plus the final APR rounding convention and day-count basis are not yet legally
-locked. The method implemented here is the standard actuarial APR; ``fees_cents``
-defaults to 0 from ``pricing_config["fees_cents"]`` until that schedule is
-confirmed, so today's disclosed APR equals the contract rate.
+COMPLIANCE NOTE: this implements SOR/2001-104 s.3-4 as quoted by Dave
+(https://laws-lois.justice.gc.ca/eng/regulations/sor-2001-104/page-1.html).
+Which specific charges count toward C (the fee schedule) is configured per
+credit product (``pricing_config["fees_cents"]``). The s.3(2)(a) option to round
+the APR to the nearest 1/8 % is NOT applied — we disclose the unrounded rate,
+which is also compliant. This calc should get a final legal/QA pass against a
+known worked example before go-live.
 """
 from __future__ import annotations
 
@@ -56,30 +66,6 @@ def _regular_installment(amount_cents: int, period_rate: float, n: int) -> int:
     return round(raw)
 
 
-def _amortize(amount_cents: int, period_rate: float, n: int) -> list[int]:
-    """Amortize at ``period_rate`` and return the actual per-period payment amounts
-    (the last entry absorbs rounding / clears the balance). The cent-rounded
-    schedule produced here is the EXACT cashflow we later discount for the APR, so
-    APR is computed against the same payments the borrower actually makes.
-    """
-    regular = _regular_installment(amount_cents, period_rate, n)
-    balance = amount_cents
-    payments: list[int] = []
-    for i in range(1, n + 1):
-        interest = round(balance * period_rate)
-        principal_portion = regular - interest
-        if i == n or principal_portion >= balance:
-            principal_portion = balance
-            payment = interest + principal_portion
-        else:
-            payment = regular
-        balance -= principal_portion
-        payments.append(payment)
-        if balance <= 0:
-            break
-    return payments
-
-
 def compute_apr_bps(
     amount_cents: int,
     annual_rate_bps: int,
@@ -87,75 +73,64 @@ def compute_apr_bps(
     frequency: str,
     fees_cents: int = 0,
 ) -> int:
-    """Standard actuarial APR for a quote, in basis points.
+    """Canadian regulatory APR (SOR/2001-104 s.3-4), in basis points.
 
-    Builds the cent-exact installment schedule at the CONTRACT rate (reusing the
-    same amortize logic as ``quote_loan``), then solves for the periodic rate ``i``
-    such that the present value of that schedule, discounted at ``i``, equals the
-    NET advance (``amount_cents - fees_cents``). Annualizing ``i`` by the number of
-    payments per year and converting to bps gives the APR.
+        APR = ( C / (T × P) ) × 100
 
-    Invariant: ``fees_cents == 0`` -> APR == ``annual_rate_bps`` (an installment
-    loan with no fees discloses its contract rate); ``fees_cents > 0`` -> APR >
-    ``annual_rate_bps`` (the borrower receives less but repays the same schedule).
+    C = total interest + fees over the term; P = average principal outstanding at
+    the end of each interest period (before that period's payment); T = term in
+    years. See the module docstring for the regulatory citations.
+
+    s.4 special case: with no cost of borrowing other than interest (fees == 0),
+    the APR IS the annual interest rate, so we return ``annual_rate_bps`` directly.
+    With fees > 0 the formula yields an APR above the contract rate.
     """
     if frequency not in FREQUENCIES:
         raise ValueError(f"Unknown payment frequency '{frequency}'")
     if amount_cents <= 0:
         raise ValueError("amount_cents must be positive")
+    if fees_cents < 0:
+        raise ValueError("fees_cents must be non-negative")
 
-    per_year = FREQUENCIES[frequency]["per_year"]
-    n = num_payments(term_months, frequency)
-    contract_period_rate = annual_rate_bps / 10_000.0 / per_year
-
-    payments = _amortize(amount_cents, contract_period_rate, n)
-    net_advance = amount_cents - fees_cents
-    if net_advance <= 0:
-        raise ValueError("amount_cents must exceed fees_cents")
-
-    def pv_minus_advance(i: float) -> float:
-        """PV of the payment schedule discounted at periodic rate ``i``, minus the
-        net advance. Monotonically DECREASING in ``i`` (higher discount -> lower PV).
-        """
-        pv = 0.0
-        for k, pay in enumerate(payments, start=1):
-            pv += pay / (1 + i) ** k
-        return pv - net_advance
-
-    # With no fees the PV at the contract rate equals the advance (to rounding),
-    # so the contract period rate is already the root — return the contract rate
-    # exactly rather than letting cent-rounding nudge it by a bp.
+    # s.4 — interest is the only cost of borrowing → APR is the annual interest rate.
     if fees_cents == 0:
         return annual_rate_bps
 
-    # Bracket the root. f is decreasing in i; fees>0 means f(contract_rate) > 0,
-    # so the APR's periodic rate is ABOVE the contract rate. Grow the upper bound
-    # until f goes negative.
-    lo = contract_period_rate
-    hi = max(contract_period_rate, 0.0) + 1e-9
-    f_hi = pv_minus_advance(hi)
-    grow_guard = 0
-    while f_hi > 0 and grow_guard < 200:
-        hi *= 2
-        if hi < 1e-6:
-            hi = 1e-6
-        f_hi = pv_minus_advance(hi)
-        grow_guard += 1
+    per_year = FREQUENCIES[frequency]["per_year"]
+    n = num_payments(term_months, frequency)
+    period_rate = annual_rate_bps / 10_000.0 / per_year
+    regular = _regular_installment(amount_cents, period_rate, n)
 
-    # Bisection on the periodic rate (robust; the function is smooth & monotone).
-    for _ in range(200):
-        mid = (lo + hi) / 2
-        f_mid = pv_minus_advance(mid)
-        if abs(f_mid) < 1e-9 or (hi - lo) < 1e-15:
+    # Walk the regulatory amortization (s.3(2)(b): payment applied to accumulated
+    # cost of borrowing first, then principal), accumulating the two inputs we need:
+    #   opening_sum — Σ principal outstanding at the end of each period BEFORE its
+    #                 payment (i.e. the opening balance of the period) → averages to P
+    #   total_interest — Σ interest accrued each period → the interest part of C
+    balance = amount_cents
+    opening_sum = 0
+    total_interest = 0
+    periods = 0
+    for i in range(1, n + 1):
+        opening_sum += balance
+        interest = round(balance * period_rate)
+        principal_portion = regular - interest
+        if i == n or principal_portion >= balance:
+            principal_portion = balance
+        total_interest += interest
+        balance -= principal_portion
+        periods += 1
+        if balance <= 0:
             break
-        if f_mid > 0:
-            lo = mid
-        else:
-            hi = mid
-    periodic = (lo + hi) / 2
 
-    apr = periodic * per_year * 10_000.0
-    return round(apr)
+    # C, P in cents (the cents cancel in C/P); T in years from the period count.
+    avg_principal = opening_sum / periods            # P
+    cost_of_borrowing = total_interest + fees_cents  # C
+    term_years = periods / per_year                  # T
+    if avg_principal <= 0 or term_years <= 0:
+        return annual_rate_bps
+
+    apr_fraction = cost_of_borrowing / (term_years * avg_principal)
+    return round(apr_fraction * 10_000.0)
 
 
 @dataclass
@@ -168,8 +143,9 @@ class Quote:
     num_payments: int
     installment_cents: int            # the regular payment
     final_installment_cents: int      # last payment absorbs rounding
-    total_of_payments_cents: int
-    cost_of_borrowing_cents: int      # interest + fees (fees=0 pending Dave)
+    total_of_payments_cents: int      # principal + interest + fees
+    interest_cents: int               # total interest over the term
+    cost_of_borrowing_cents: int      # interest + fees
     fees_cents: int = 0
     apr_bps: Optional[int] = None     # DEFERRED — see module docstring
     schedule_preview: list[dict] = field(default_factory=list)
@@ -229,7 +205,8 @@ def quote_loan(
             n = i
             break
 
-    cost_of_borrowing = total - amount_cents + fees_cents
+    interest_cents = total - amount_cents
+    cost_of_borrowing = interest_cents + fees_cents
     apr_bps = compute_apr_bps(amount_cents, annual_rate_bps, term_months, frequency, fees_cents)
 
     return Quote(
@@ -242,6 +219,7 @@ def quote_loan(
         installment_cents=regular,
         final_installment_cents=final,
         total_of_payments_cents=total + fees_cents,
+        interest_cents=interest_cents,
         cost_of_borrowing_cents=cost_of_borrowing,
         fees_cents=fees_cents,
         apr_bps=apr_bps,
