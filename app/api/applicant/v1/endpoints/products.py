@@ -85,10 +85,12 @@ class QuoteResponse(BaseModel):
     num_payments: int
     installment_cents: int
     final_installment_cents: int
-    total_of_payments_cents: int
-    cost_of_borrowing_cents: int
+    total_of_payments_cents: int   # principal + interest + fees
+    interest_cents: int            # total interest over the term
+    fees_cents: int                # applicable fees (per credit product)
+    cost_of_borrowing_cents: int   # interest + fees
     annual_rate_bps: int
-    apr_bps: int | None  # DEFERRED — regulated figure pending Dave's fee/APR confirmation
+    apr_bps: int | None            # Canadian regulatory APR (SOR/2001-104 s.3-4)
 
 
 @router.post("/{product_id}/quote", response_model=QuoteResponse)
@@ -125,6 +127,7 @@ def quote(product_id: UUID, body: QuoteRequest, db: Session = Depends(get_db)):
         frequency_label=q.frequency_label, num_payments=q.num_payments,
         installment_cents=q.installment_cents, final_installment_cents=q.final_installment_cents,
         total_of_payments_cents=q.total_of_payments_cents,
+        interest_cents=q.interest_cents, fees_cents=q.fees_cents,
         cost_of_borrowing_cents=q.cost_of_borrowing_cents,
         annual_rate_bps=q.annual_rate_bps, apr_bps=q.apr_bps,
     )
