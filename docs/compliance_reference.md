@@ -22,6 +22,42 @@ the source docs and counsel govern.
   `exceeds_criminal_rate()`; surfaced on the quote and the terms calculator blocks a
   selection at/over the cap. **TODO: hard enforcement at loan booking/decisioning.**
 
+## Consent model (researched 2026-06-26 — primary sources: OPC/PIPEDA, CRTC/CASL, BC BPCPA)
+- **Express opt-in** is required for all sensitive data here (medical + financial + bureau +
+  bank/income) — implied/bundled consent is not acceptable (OPC Meaningful Consent Guidelines;
+  medical info "almost always sensitive", financial "generally extremely sensitive").
+- **Granular & purpose-specific.** Integral underwriting purposes (PIPEDA processing, bureau
+  pull, income verification, automated decisioning) MAY be required together as a condition of
+  financing IF each is enumerated. Our required set (`get_required_consents`: id_verification,
+  bank_verification, soft/hard_bureau_pull, automated_decision_making) is correct.
+- **CASL marketing consent must be SEPARATE, OPTIONAL, pre-unchecked, and never a condition of
+  service** (CRTC opt-in + PIPEDA anti-bundling). Implemented: `marketing_communications`
+  consent purpose (registered, versioned, NOT in the required set) + an optional pre-unchecked
+  opt-in on the disclosure page, recorded separately, non-blocking. Transactional/servicing
+  messages don't need CASL consent.
+- **Record each consent BEFORE the action it authorizes** (bureau-pull consent must exist before
+  the pull — statutory in BC). Our flow records consents at the disclosure step before
+  verifications run. `record_consent_grant` already stores purpose + version + IP + user-agent +
+  timestamp via a `consent_granted` event — the auditable record the org must be able to produce.
+- **Cost-of-borrowing disclosure**: the binding disclosure (APR, total cost, schedule) must be
+  given before the earlier of entering the agreement or making any payment (BC BPCPA s.66(2)).
+  An upstream "estimate / not an offer" disclaimer is fine (our terms page) — the FINAL binding
+  disclosure must gate the e-sign/agreement step (downstream TODO).
+- **KYC documents** (ID front/back, selfie): express consent/notice at the upload step naming the
+  KYC vendor; encrypt at rest + in transit; least-privilege access + audit logging (PIPEDA P7);
+  purpose-bound retention/auto-purge (P5), reconciled with any FINTRAC/PCMLTFA retention floor.
+
+### Open questions flagged by the research (confirm with counsel before launch)
+- **Quebec Law 25** imposes stricter, separately-governed consent (clear/free/informed/specific,
+  separate request) + ADM notice & right to human review — the consolidated-consent UX must be
+  revisited for QC residents.
+- **Automated decision-making**: no explicit PIPEDA consent requirement was verified; Quebec Law 25
+  s.12.1 DOES require ADM notice + human-review right. Confirm a distinct ADM disclosure for QC.
+- **Province-by-province cost-of-credit disclosure timing** (AB/ON/QC) — only BC s.66 verified.
+- **FINTRAC/PCMLTFA retention minimum** (commonly 5 yrs) may impose a floor that interacts with
+  PIPEDA's "retain only as long as needed" — confirm whether PaySpyre is a reporting entity.
+- Bill C-27 / CPPA could replace PIPEDA and change consent/record-keeping mechanics — verify status.
+
 ## Regulatory map (Tier 1 — must have)
 1. Provincial consumer-protection legislation (every province).
 2. Provincial cost-of-credit disclosure requirements.
