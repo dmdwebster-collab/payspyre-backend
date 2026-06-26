@@ -35,6 +35,11 @@ from app.models.platform.loan import (
     PlatformLoanScheduleItem,
     PlatformLoanStatement,
 )
+from app.services.loan_quote import (
+    CRIMINAL_RATE_CAP_BPS,
+    compute_apr_bps,
+    exceeds_criminal_rate,
+)
 
 
 # Money-IN audit event. Mirrors the money-OUT events emitted by
@@ -359,13 +364,29 @@ def create_loan_from_application(
 
     principal_cents, annual_rate_bps, term_months = _resolve_pricing(application)
 
-    if first_due_date is None:
-        first_due_date = _add_months(date.today(), 1)
-
     currency = "CAD"
     product = getattr(application, "credit_product", None)
     if product is not None and getattr(product, "currency", None):
         currency = product.currency
+
+    # Compliance guardrail (fail-closed): refuse to book a loan whose APR reaches
+    # the Criminal Code s.347 cap. The calculator already blocks this up front; this
+    # is defense-in-depth at the single booking chokepoint so no path can create a
+    # criminal-rate loan. APR is the Canadian regulatory figure incl. product fees.
+    fees_cents = 0
+    if product is not None:
+        cfg = getattr(product, "pricing_config", None) or {}
+        fees_cents = int(cfg.get("fees_cents") or 0)
+    apr_bps = compute_apr_bps(principal_cents, annual_rate_bps, term_months, "monthly", fees_cents)
+    if exceeds_criminal_rate(apr_bps):
+        raise ValueError(
+            f"Refusing to book loan from application {application.id}: APR "
+            f"{apr_bps / 100:.2f}% reaches the Criminal Code s.347 cap "
+            f"({CRIMINAL_RATE_CAP_BPS / 100:.0f}%)."
+        )
+
+    if first_due_date is None:
+        first_due_date = _add_months(date.today(), 1)
 
     loan = PlatformLoan(
         application_id=application.id,
