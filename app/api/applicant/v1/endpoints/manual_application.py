@@ -39,8 +39,11 @@ from app.api.applicant.v1.schemas import (
     ManualApplicationResponse,
 )
 from app.core.logging import get_logger
+from app.core.sin_crypto import encrypt_sin
+from app.core.validation import normalize_sin
 from app.db.base import get_db
 from app.models.platform.credit_application import PlatformCreditApplication
+from app.models.platform.patient import PlatformPatient
 from app.services.flow_orchestrator import mark_manual_review
 from app.models.platform.event import PlatformEvent
 
@@ -107,6 +110,28 @@ def submit_manual_application(
     # The full v1.00 application field set; mode="json" serializes dates → ISO
     # so the JSONB column round-trips cleanly.
     manual_fields = body.model_dump(mode="json")
+
+    # SECURITY: the SIN is the most sensitive identifier we collect. It must NEVER
+    # sit in the self_reported JSONB in plaintext — route it through the SAME
+    # encrypted storage as the automated /sin path (Fernet token on the patient,
+    # only sin_last3 retained). We replace the raw SIN in manual_fields with the
+    # masked last-3 so the reviewer can see it was provided without exposing it.
+    raw_sin = manual_fields.pop("social_insurance_number", None)
+    if raw_sin:
+        digits = normalize_sin(raw_sin)
+        patient = (
+            db.query(PlatformPatient)
+            .filter(PlatformPatient.id == application.patient_id)
+            .first()
+        )
+        if patient is not None:
+            patient.sin_encrypted = encrypt_sin(digits)
+            patient.sin_last3 = digits[-3:]
+            patient.sin_collected_at = now
+            patient.sin_declined = False
+            patient.sin_declined_at = None
+            db.add(patient)
+        manual_fields["sin_last3"] = digits[-3:]
 
     # Copy-on-write: SQLAlchemy only flags a JSONB column dirty on reassignment,
     # not on in-place mutation of the existing dict.

@@ -19,6 +19,7 @@ from app.api.applicant.v1.endpoints import manual_application as manual_applicat
 from app.main import app
 from app.models.platform.credit_application import PlatformCreditApplication
 from app.models.platform.credit_product import PlatformCreditProduct
+from app.models.platform.patient import PlatformPatient
 from app.services.mock_notification_dispatcher import MockNotificationDispatcher
 
 _BASE = "/api/applicant/v1"
@@ -153,6 +154,45 @@ class TestManualApplication:
             {"aid": app_id},
         ).scalar()
         assert count == 1
+
+    def test_sin_is_encrypted_not_stored_plaintext(
+        self, client: TestClient, db_session: Session, dispatcher, monkeypatch
+    ):
+        # Configure a real Fernet key so encryption genuinely happens (prod sets one;
+        # the test env otherwise has none and encrypt_sin is a dev passthrough).
+        from cryptography.fernet import Fernet
+        from app.core.config import settings
+        from app.core import sin_crypto
+        monkeypatch.setattr(settings, "SIN_ENCRYPTION_KEY", Fernet.generate_key().decode())
+
+        app_id, headers = _auth(client, db_session, dispatcher)
+        with_sin = dict(_MANUAL_FIELDS, social_insurance_number="046454286")
+        resp = client.post(
+            f"{_BASE}/applications/{app_id}/manual", json=with_sin, headers=headers
+        )
+        assert resp.status_code == 200, resp.text
+
+        db_session.expire_all()
+        application = (
+            db_session.query(PlatformCreditApplication)
+            .filter(PlatformCreditApplication.id == app_id)
+            .first()
+        )
+        manual = application.self_reported["manual"]
+        # raw SIN must NOT be in the JSONB; only the masked last-3 remains
+        assert "social_insurance_number" not in manual
+        assert manual["sin_last3"] == "286"
+
+        # the SIN is encrypted onto the patient — ciphertext, not the digits, and
+        # decrypts back through the same mechanism the automated /sin path uses
+        patient = (
+            db_session.query(PlatformPatient)
+            .filter(PlatformPatient.id == application.patient_id)
+            .first()
+        )
+        assert patient.sin_encrypted and "046454286" not in patient.sin_encrypted
+        assert sin_crypto.decrypt_sin(patient.sin_encrypted) == "046454286"
+        assert patient.sin_last3 == "286"
 
     def test_not_owned_application_is_forbidden_or_not_found(
         self, client: TestClient, db_session: Session, dispatcher

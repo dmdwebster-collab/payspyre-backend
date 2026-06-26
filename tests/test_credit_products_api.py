@@ -169,6 +169,14 @@ class TestCreateOverHTTP:
         assert response.status_code == 422, response.text
         assert "verification_matrix" in response.json()["detail"]
 
+    def test_create_rejects_criminal_rate_pricing(self, admin_client: TestClient):
+        # a product priced at/above the s.347 cap must be refused at configuration
+        payload = _make_payload()
+        payload["pricing_config"] = {"term_options": [12, 36], "apr_bps": 4000}  # 40% > 35% cap
+        response = admin_client.post("/api/v1/credit-products", json=payload)
+        assert response.status_code == 422, response.text
+        assert "s.347" in response.json()["detail"]
+
     def test_create_duplicate_code_returns_400(self, admin_client: TestClient):
         payload = _make_payload(suffix="dup_test")
         first = admin_client.post("/api/v1/credit-products", json=payload)
