@@ -32,13 +32,26 @@ if not any(getattr(r, "path", None) == _MANUAL_PATH for r in app.router.routes):
     app.include_router(manual_application_module.router, prefix=_BASE)
 
 _MANUAL_FIELDS = {
-    "legal_name": "Jordan Q. Public",
+    # PaySpyre Credit Application v1.00 — required core (identity + income).
+    "first_name": "Jordan",
+    "last_name": "Public",
     "date_of_birth": "1990-04-15",
-    "address": "123 Test St, Toronto, ON",
+    "email": "jordan@example.com",
+    "marital_status": "single",
+    "citizenship": "Canadian",
+    "street": "123 Test St",
+    "city": "Toronto",
+    "province": "ON",
+    "postal_code": "M5V 2T6",
+    "residential_status": "rent",
+    "id_verification_type": "drivers_license",
+    "main_phone": "+14165550123",
+    "income_type": "Employed",
+    "net_monthly_income_cents": 600000,
+    "pay_frequency": "bi_weekly",
     "employer_name": "Acme Dental",
-    "monthly_income_cents": 600000,
-    "monthly_shelter_cents": 180000,
-    "monthly_non_discretionary_expenses_cents": 90000,
+    "job_title": "Hygienist",
+    "other_monthly_expenses_cents": 90000,
 }
 
 
@@ -117,16 +130,15 @@ class TestManualApplication:
         # manual fields persisted into self_reported
         manual = application.self_reported.get("manual")
         assert manual is not None
-        assert manual["legal_name"] == _MANUAL_FIELDS["legal_name"]
+        assert manual["first_name"] == _MANUAL_FIELDS["first_name"]
+        assert manual["last_name"] == _MANUAL_FIELDS["last_name"]
         assert manual["date_of_birth"] == _MANUAL_FIELDS["date_of_birth"]
-        assert manual["address"] == _MANUAL_FIELDS["address"]
+        assert manual["email"] == _MANUAL_FIELDS["email"]
         assert manual["employer_name"] == _MANUAL_FIELDS["employer_name"]
-        assert manual["monthly_income_cents"] == _MANUAL_FIELDS["monthly_income_cents"]
-        assert manual["monthly_shelter_cents"] == _MANUAL_FIELDS["monthly_shelter_cents"]
-        assert (
-            manual["monthly_non_discretionary_expenses_cents"]
-            == _MANUAL_FIELDS["monthly_non_discretionary_expenses_cents"]
-        )
+        assert manual["net_monthly_income_cents"] == _MANUAL_FIELDS["net_monthly_income_cents"]
+        assert manual["other_monthly_expenses_cents"] == _MANUAL_FIELDS["other_monthly_expenses_cents"]
+        # optional fields absent from the request default to None (not dropped)
+        assert manual["middle_name"] is None
 
         # NOT auto-decided: a manual application awaits a human decision.
         assert application.decision is None
@@ -183,7 +195,7 @@ class TestManualApplication:
         )
         assert first.status_code == 200, first.text
 
-        updated = dict(_MANUAL_FIELDS, legal_name="Jordan Renamed")
+        updated = dict(_MANUAL_FIELDS, first_name="Renamed")
         second = client.post(
             f"{_BASE}/applications/{app_id}/manual",
             json=updated,
@@ -198,4 +210,4 @@ class TestManualApplication:
             .filter(PlatformCreditApplication.id == app_id)
             .first()
         )
-        assert application.self_reported["manual"]["legal_name"] == "Jordan Renamed"
+        assert application.self_reported["manual"]["first_name"] == "Renamed"

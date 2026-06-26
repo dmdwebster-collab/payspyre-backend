@@ -131,22 +131,57 @@ class SubmitResponse(BaseModel):
 
 
 class ManualApplicationBody(BaseModel):
-    """Fields normally pulled from integrations (Didit/Flinks), entered manually.
+    """Manual credit application fields (PaySpyre Credit Application v1.00).
 
-    The fallback when an integration fails: the borrower supplies the data by
-    hand and the application is routed to manual review. All fields are required
-    — a manual application is incomplete without them (a missing one → 422).
-    Monetary fields are cents (integers, ``>= 0``) to match the rest of the
-    platform's money handling.
+    The fallback when an integration (Didit/Flinks) can't populate the
+    application: the borrower supplies the data by hand and the application is
+    routed to manual review. Field set mirrors the v1.00 paper application — a
+    pragmatic "base" required core (identity + income) with the remaining detail
+    optional (to be tightened per Dave). Monetary fields are cents (>= 0).
+    Co-borrower and document uploads are intentionally NOT here yet (uploads need
+    file-storage infra) — they're follow-ups.
     """
 
-    legal_name: str = Field(..., min_length=1)
+    # Personal information
+    first_name: str = Field(..., min_length=1)
+    middle_name: Optional[str] = None
+    last_name: str = Field(..., min_length=1)
     date_of_birth: date
-    address: str = Field(..., min_length=1)
+    email: str = Field(..., min_length=3)
+    marital_status: str = Field(..., min_length=1)
+    number_of_dependents: int = Field(0, ge=0)
+    citizenship: str = Field(..., min_length=1)
+    education: Optional[str] = None
+
+    # Address
+    residence_years: int = Field(0, ge=0)
+    residence_months: int = Field(0, ge=0, le=11)
+    street: str = Field(..., min_length=1)
+    apartment: Optional[str] = None
+    city: str = Field(..., min_length=1)
+    province: str = Field(..., min_length=1)
+    postal_code: str = Field(..., min_length=1)
+    residential_status: str = Field(..., min_length=1)
+
+    # Additional info
+    social_insurance_number: Optional[str] = None
+    id_verification_type: str = Field(..., min_length=1)
+    id_province_of_issue: Optional[str] = None
+    main_phone: str = Field(..., min_length=1)
+    alternative_phone: Optional[str] = None
+    car_owner: Optional[bool] = None
+    other_monthly_expenses_cents: int = Field(0, ge=0)
+
+    # Employment / primary income
+    income_type: str = Field(..., min_length=1)
+    net_monthly_income_cents: int = Field(..., ge=0)
+    next_pay_date: Optional[date] = None
+    pay_frequency: str = Field(..., min_length=1)
     employer_name: str = Field(..., min_length=1)
-    monthly_income_cents: int = Field(..., ge=0)
-    monthly_shelter_cents: int = Field(..., ge=0)
-    monthly_non_discretionary_expenses_cents: int = Field(..., ge=0)
+    job_title: str = Field(..., min_length=1)
+    hire_date: Optional[date] = None
+    work_phone: Optional[str] = None
+    work_phone_ext: Optional[str] = None
 
 
 class ManualApplicationResponse(BaseModel):

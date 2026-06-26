@@ -104,17 +104,9 @@ def submit_manual_application(
     # reviewer (and the marketplace denorm) can distinguish manual-entry data
     # from any other self-reported overrides. JSON-serializable shapes only
     # (date → ISO string) so the JSONB column round-trips cleanly.
-    manual_fields = {
-        "legal_name": body.legal_name,
-        "date_of_birth": body.date_of_birth.isoformat(),
-        "address": body.address,
-        "employer_name": body.employer_name,
-        "monthly_income_cents": body.monthly_income_cents,
-        "monthly_shelter_cents": body.monthly_shelter_cents,
-        "monthly_non_discretionary_expenses_cents": (
-            body.monthly_non_discretionary_expenses_cents
-        ),
-    }
+    # The full v1.00 application field set; mode="json" serializes dates → ISO
+    # so the JSONB column round-trips cleanly.
+    manual_fields = body.model_dump(mode="json")
 
     # Copy-on-write: SQLAlchemy only flags a JSONB column dirty on reassignment,
     # not on in-place mutation of the existing dict.
