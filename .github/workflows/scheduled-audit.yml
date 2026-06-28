@@ -1,0 +1,192 @@
+name: Scheduled audit (Layer 4)
+
+# Recurring security/compliance sweep — Layer 4 of the AI-CTO system
+# (see docs/ai_cto/ai_cto_system.md). This is the "nobody forgot to look"
+# safety net: it re-runs the deterministic scanners on a fixed cadence so a
+# newly-disclosed CVE, a leaked secret, or a regressed compliance check gets
+# surfaced even when no PR touches the relevant code.
+#
+# Design rules (deliberate):
+#   - Best-effort: every scan step is `continue-on-error: true`. A flaky tool or
+#     a not-yet-existing test marker must NEVER hard-fail the schedule, or the
+#     audit silently stops running and we lose the safety net.
+#   - On findings, it OPENS or UPDATES a single tracking GitHub issue (label
+#     `audit`) summarizing what tripped. The issue — reviewed by a human — IS
+#     the escalation. The workflow's own exit status is intentionally green.
+#   - Scans run: pip-audit (Python dep CVEs), gitleaks (secrets), and
+#     `pytest -m compliance` IF that marker exists yet (tolerated if absent).
+#
+# This complements security-scan.yml (the per-PR blocking gate). That one fails
+# the build to stop bad code merging; THIS one never fails the build and instead
+# files an issue, because a schedule with no PR author has no one to block.
+
+on:
+  schedule:
+    - cron: "0 8 * * 1"   # Mondays 08:00 UTC — weekly recurring sweep
+  workflow_dispatch: {}     # allow on-demand runs from the Actions tab
+
+permissions:
+  contents: read
+  issues: write             # needed so the final step can open/update the issue
+
+jobs:
+  audit:
+    name: weekly security + compliance sweep
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0    # full history so gitleaks can scan every commit
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install project + scanners
+        continue-on-error: true
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e . || true
+          pip install pip-audit pytest pytest-asyncio || true
+
+      # --- pip-audit: known-CVE dependency scan -------------------------------
+      - name: pip-audit (dependency CVEs)
+        id: pip_audit
+        continue-on-error: true
+        run: |
+          set +e
+          # --skip-editable: the project itself isn't on PyPI (matches security-scan.yml)
+          pip-audit --skip-editable --progress-spinner off > pip_audit.txt 2>&1
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          echo "----- pip-audit output -----"
+          cat pip_audit.txt
+
+      # --- gitleaks: secret scanning ------------------------------------------
+      - name: gitleaks (secret scan)
+        id: gitleaks
+        continue-on-error: true
+        run: |
+          set +e
+          # Pull the standalone binary so a single failing step can't abort the job.
+          curl -sSL -o gitleaks.tar.gz \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.18.4/gitleaks_8.18.4_linux_x64.tar.gz
+          tar -xzf gitleaks.tar.gz gitleaks 2>/dev/null || true
+          if [ -x ./gitleaks ]; then
+            ./gitleaks detect --source . --no-banner --redact \
+              --report-format json --report-path gitleaks.json > gitleaks.txt 2>&1
+            echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          else
+            echo "gitleaks binary unavailable — scan skipped" > gitleaks.txt
+            echo "exit_code=127" >> "$GITHUB_OUTPUT"
+          fi
+          echo "----- gitleaks output -----"
+          cat gitleaks.txt
+
+      # --- pytest -m compliance: only if the marker exists yet ----------------
+      - name: pytest -m compliance (if marker exists)
+        id: compliance
+        continue-on-error: true
+        run: |
+          set +e
+          # Tolerate the marker not existing yet. We detect it three ways:
+          #   (a) registered in pyproject markers, or
+          #   (b) actually applied via @pytest.mark.compliance in tests/.
+          has_marker="no"
+          if grep -q "compliance:" pyproject.toml 2>/dev/null; then has_marker="yes"; fi
+          if grep -rqs "mark.compliance" tests/ 2>/dev/null; then has_marker="yes"; fi
+          if [ "$has_marker" = "no" ]; then
+            echo "compliance marker not defined yet — skipping (tolerated)" > compliance.txt
+            echo "status=skipped" >> "$GITHUB_OUTPUT"
+            cat compliance.txt
+            exit 0
+          fi
+          pytest -m compliance -q > compliance.txt 2>&1
+          rc=$?
+          echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
+          if [ "$rc" -eq 0 ]; then echo "status=passed" >> "$GITHUB_OUTPUT"; else echo "status=failed" >> "$GITHUB_OUTPUT"; fi
+          echo "----- compliance output -----"
+          cat compliance.txt
+
+      # --- Summarize + open/update a tracking issue on findings ---------------
+      - name: Summarize findings and open/update audit issue
+        if: always()
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PIP_AUDIT_RC: ${{ steps.pip_audit.outputs.exit_code }}
+          GITLEAKS_RC: ${{ steps.gitleaks.outputs.exit_code }}
+          COMPLIANCE_STATUS: ${{ steps.compliance.outputs.status }}
+        run: |
+          set +e
+
+          findings=""
+          add() { findings="${findings}- ${1}\n"; }
+
+          # pip-audit: non-zero exit means it found vulnerable deps (or errored).
+          if [ "${PIP_AUDIT_RC:-1}" != "0" ]; then
+            add "**pip-audit**: reported findings or errored (exit ${PIP_AUDIT_RC:-?}). See \`pip_audit.txt\` excerpt below."
+          fi
+
+          # gitleaks: non-zero (and not the 127 skip) means leaks detected or error.
+          if [ "${GITLEAKS_RC:-1}" != "0" ] && [ "${GITLEAKS_RC:-1}" != "127" ]; then
+            add "**gitleaks**: potential secret(s) detected or scan errored (exit ${GITLEAKS_RC:-?}). See \`gitleaks.txt\` excerpt below."
+          elif [ "${GITLEAKS_RC:-1}" = "127" ]; then
+            add "**gitleaks**: scanner unavailable this run (could not download binary) — re-run to confirm."
+          fi
+
+          # compliance: only a 'failed' status is a finding; 'skipped'/'passed' are fine.
+          if [ "${COMPLIANCE_STATUS:-skipped}" = "failed" ]; then
+            add "**compliance tests** (\`pytest -m compliance\`): FAILED. See \`compliance.txt\` excerpt below."
+          fi
+
+          if [ -z "$findings" ]; then
+            echo "No findings — nothing to escalate. Schedule stays green."
+            exit 0
+          fi
+
+          excerpt() {
+            local file="$1"; local label="$2"
+            if [ -f "$file" ]; then
+              printf '\n<details><summary>%s</summary>\n\n```\n%s\n```\n</details>\n' \
+                "$label" "$(tail -n 60 "$file")"
+            fi
+          }
+
+          DATE_UTC="$(date -u +%Y-%m-%d)"
+          TITLE="Scheduled audit findings — weekly sweep"
+
+          BODY_FILE="$(mktemp)"
+          {
+            echo "### Scheduled audit — ${DATE_UTC} (run [\`${GITHUB_RUN_ID}\`](https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}))"
+            echo ""
+            echo "The weekly Layer-4 sweep surfaced the following. A human should triage"
+            echo "(see docs/ai_cto/escalation_boundary.md for what must stay human):"
+            echo ""
+            printf "%b" "$findings"
+            excerpt pip_audit.txt "pip-audit output (tail)"
+            excerpt gitleaks.txt "gitleaks output (tail)"
+            excerpt compliance.txt "compliance test output (tail)"
+            echo ""
+            echo "_Filed automatically by \`.github/workflows/scheduled-audit.yml\`. This issue is updated in place on subsequent runs._"
+          } > "$BODY_FILE"
+
+          # Find an existing open audit issue with our title and either comment
+          # (update-in-place) or create a fresh one. Never hard-fail.
+          existing="$(gh issue list --state open --label audit --search "$TITLE in:title" \
+            --json number --jq '.[0].number' 2>/dev/null)"
+
+          if [ -n "$existing" ] && [ "$existing" != "null" ]; then
+            gh issue comment "$existing" --body-file "$BODY_FILE" \
+              && echo "Updated existing audit issue #$existing" \
+              || echo "WARN: failed to comment on issue #$existing (non-fatal)"
+          else
+            # Ensure the label exists (ignore error if it already does).
+            gh label create audit --color B60205 --description "Scheduled security/compliance audit findings" 2>/dev/null || true
+            gh issue create --title "$TITLE" --label audit --body-file "$BODY_FILE" \
+              && echo "Opened new audit issue" \
+              || echo "WARN: failed to open audit issue (non-fatal)"
+          fi
+
+          # Always exit 0: the issue IS the escalation; the schedule must stay green.
+          exit 0

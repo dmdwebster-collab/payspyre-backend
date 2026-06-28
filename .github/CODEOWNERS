@@ -1,0 +1,41 @@
+# CODEOWNERS — the human-review boundary (Layer 5 of the AI-CTO system)
+#
+# Purpose: force a NAMED HUMAN review on the highest-risk paths so that AI /
+# automation can never silently merge a change to money movement, decisioning,
+# PII/KYC, intake/credit policy, schema, consent, secrets, or CI itself. With
+# branch protection's "require review from Code Owners" enabled, a PR touching
+# any path below cannot merge until the listed owner approves.
+#
+# See docs/ai_cto/escalation_boundary.md for WHY these are the lines that must
+# stay human, and docs/ai_cto/ai_cto_system.md for how this fits the 5 layers.
+#
+# NOTE: @dmdwebster-collab is a PLACEHOLDER for the repo owner. Replace it (and
+# add per-domain reviewers) with the REAL GitHub handles before relying on this:
+#   - PRIVACY / COMPLIANCE accountable person (PIPEDA) — the domain co-founder
+#   - TECHNICAL owner of record — the founder-engineer
+# A team handle (e.g. @org/critical-reviewers) is preferable to an individual
+# once a team exists, so review isn't bottlenecked on one person being available.
+
+# --- Money path + APR / cost-of-borrowing cap --------------------------------
+/app/services/loan_servicing.py   @dmdwebster-collab
+/app/services/loan_lifecycle.py   @dmdwebster-collab
+/app/services/loan_quote.py       @dmdwebster-collab
+
+# --- Decisioning engine (flow / credit logic) --------------------------------
+/app/services/flow_orchestrator.py   @dmdwebster-collab
+/app/services/flow_engine.py         @dmdwebster-collab
+
+# --- PII / KYC (SIN crypto, manual application intake, document handling) -----
+/app/core/sin_crypto.py                                  @dmdwebster-collab
+/app/api/applicant/v1/endpoints/manual_application.py    @dmdwebster-collab
+/app/api/applicant/v1/endpoints/documents.py             @dmdwebster-collab
+
+# --- Intake + product / credit policy ----------------------------------------
+/app/api/v1/endpoints/widget_intake.py     @dmdwebster-collab
+/app/api/v1/endpoints/credit_products.py   @dmdwebster-collab
+
+# --- Schema (migrations), consent text, secrets/config, and CI itself --------
+/alembic/               @dmdwebster-collab
+/config/consent_text/   @dmdwebster-collab
+/app/core/config.py     @dmdwebster-collab
+/.github/               @dmdwebster-collab
