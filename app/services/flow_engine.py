@@ -134,6 +134,25 @@ def _manual_review_band(bureau_cfg: dict[str, Any]) -> dict[str, int]:
     return dict(DEFAULT_MANUAL_REVIEW_BAND)
 
 
+def prequalify_score(score: Optional[int], bureau_cfg: dict[str, Any]) -> str:
+    """Pre-qualification outcome from a credit score ALONE — the single source of
+    truth for "who pre-qualifies", using the SAME band the full decision uses
+    (``verification_matrix.bureau.manual_review_band``). Keeps the embedded widget's
+    pre-qual and the platform's later full decision from ever diverging.
+
+    Returns ``approved`` (above the band), ``manual_review`` (in the band),
+    ``declined`` (below the band floor), or ``unknown`` (no score supplied).
+    """
+    if score is None:
+        return "unknown"
+    band = _manual_review_band(bureau_cfg if isinstance(bureau_cfg, dict) else {})
+    if score < band["min"]:
+        return "declined"
+    if score <= band["max"]:
+        return "manual_review"
+    return "approved"
+
+
 def _verification_dict(
     verification_type: str, method: str, result: str, confidence: float
 ) -> dict[str, Any]:
