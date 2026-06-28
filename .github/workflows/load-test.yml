@@ -30,7 +30,7 @@ jobs:
       LOAD_VUS: ${{ github.event.inputs.vus || '20' }}
       P95_MS: ${{ github.event.inputs.p95_ms || '1500' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install k6
         uses: grafana/setup-k6-action@v1
       - name: Run load test (fails on SLO breach)
