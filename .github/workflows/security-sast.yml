@@ -21,6 +21,27 @@ permissions:
   contents: read
 
 jobs:
+  # BLOCKING gate: our OWN money-path / PII guardrails (status-write owner,
+  # raw-SIN-into-JSONB, eval/exec, shell=True, SQL string-building, hardcoded
+  # secrets). Verified clean on the current codebase (0 findings). `--error`
+  # makes semgrep exit non-zero on any finding, so a NEW violation fails this
+  # job. Wire this job's check into branch protection to block merges.
+  payspyre-guardrails:
+    name: PaySpyre guardrails (blocking)
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep
+    steps:
+      - uses: actions/checkout@v4
+      # Scope to app/ — the runtime money/PII/application code. Migrations
+      # (alembic/, reviewed one-time DDL/seed scripts, already gated by CODEOWNERS)
+      # and tests legitimately build SQL strings / carry fixture data, so the
+      # BLOCKING gate targets app/ only (verified 0 findings). The advisory job
+      # below still scans broadly for visibility.
+      - name: Semgrep — PaySpyre custom guardrails (BLOCKING, fail on finding)
+        run: |
+          semgrep scan --config .semgrep/payspyre.yml app/ --error --metrics=off
+
   semgrep:
     name: Semgrep SAST (advisory)
     runs-on: ubuntu-latest
