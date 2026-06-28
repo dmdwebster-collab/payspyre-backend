@@ -1,0 +1,113 @@
+name: Supply-chain + secret scanning (advisory)
+
+# Advisory supply-chain visibility layer. EVERY job here is NON-BLOCKING
+# (continue-on-error: true) — it reports findings and uploads artifacts but
+# never gates a merge. The existing "Security scan (L0)" workflow is the
+# blocking gate; this workflow is the broader, tolerant companion that:
+#   - secret-scan : gitleaks across the full git history (committed credentials)
+#   - dep-audit   : pip-audit known-CVE scan of installed deps (advisory copy)
+#   - sbom        : CycloneDX SBOM generation, uploaded as a build artifact
+#
+# To make any check blocking later: drop its `continue-on-error: true`
+# (see docs/security/supply_chain.md).
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 8 * * 1"  # Mondays 08:00 UTC — re-scan against newly-disclosed CVEs
+
+permissions:
+  contents: read
+
+jobs:
+  secret-scan:
+    name: gitleaks (secret scan)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history so gitleaks scans every commit
+
+      - name: Gitleaks secret scan
+        uses: gitleaks/gitleaks-action@v2
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  dep-audit:
+    name: pip-audit (dependency CVEs)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install project + pip-audit (best-effort)
+        continue-on-error: true
+        run: |
+          python -m pip install --upgrade pip
+          # Best-effort install of the project so the audit sees real deps.
+          # Tolerate failure: even if the install breaks, pip-audit still runs
+          # against whatever resolved into the environment.
+          pip install -e . || echo "::warning::project install failed; auditing partial environment"
+          pip install pip-audit || echo "::warning::pip-audit install failed"
+
+      - name: pip-audit (advisory)
+        continue-on-error: true
+        run: |
+          if command -v pip-audit >/dev/null 2>&1; then
+            # --skip-editable: the project itself isn't published to PyPI.
+            pip-audit --skip-editable --progress-spinner off || \
+              echo "::warning::pip-audit reported findings or failed (advisory, non-blocking)"
+          else
+            echo "::warning::pip-audit not available; skipping (advisory)"
+          fi
+
+  sbom:
+    name: CycloneDX SBOM
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install project + cyclonedx-bom (best-effort)
+        continue-on-error: true
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e . || echo "::warning::project install failed; SBOM may be partial"
+          pip install cyclonedx-bom || echo "::warning::cyclonedx-bom install failed"
+
+      - name: Generate CycloneDX SBOM (advisory)
+        continue-on-error: true
+        run: |
+          mkdir -p sbom
+          # cyclonedx-py exposes an `environment` subcommand on modern versions;
+          # fall back to the legacy `cyclonedx-py` invocation if needed. Never
+          # fail the job — emit a placeholder so the upload step always has a file.
+          if command -v cyclonedx-py >/dev/null 2>&1; then
+            cyclonedx-py environment -o sbom/sbom.cdx.json --output-format JSON \
+              || cyclonedx-py -e -o sbom/sbom.cdx.json --format json \
+              || echo '{"warning":"cyclonedx-py failed to produce an SBOM (advisory)"}' > sbom/sbom.cdx.json
+          else
+            echo '{"warning":"cyclonedx-bom not installed; SBOM not generated (advisory)"}' > sbom/sbom.cdx.json
+          fi
+          ls -l sbom/
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: cyclonedx-sbom
+          path: sbom/
+          if-no-files-found: warn
+          retention-days: 90
