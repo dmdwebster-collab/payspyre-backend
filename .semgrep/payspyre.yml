@@ -1,0 +1,164 @@
+rules:
+  # ---------------------------------------------------------------------------
+  # MONEY-PATH GUARDRAIL: application status transitions are owned by the
+  # flow orchestrator. Mirrors tests/test_application_status_writes.py.
+  #
+  # `application.status = ...` (and credit_application.status / credit_app.status)
+  # may ONLY be assigned in app/services/flow_orchestrator.py. The CI step runs
+  # with `--exclude app/services/flow_orchestrator.py` so the owner is never
+  # flagged; this rule fires on any OTHER file that performs the write.
+  # ---------------------------------------------------------------------------
+  - id: application-status-write-outside-orchestrator
+    message: >-
+      Application status transitions are owned by app/services/flow_orchestrator.py.
+      Assigning `application.status` (or credit_application.status / credit_app.status)
+      anywhere else bypasses the V2 flow orchestrator's transition guards. Route the
+      transition through flow_orchestrator instead of writing `.status` directly.
+      (Mirrors tests/test_application_status_writes.py.)
+    severity: ERROR
+    languages: [python]
+    patterns:
+      - pattern-either:
+          - pattern: application.status = $VALUE
+          - pattern: credit_application.status = $VALUE
+          - pattern: credit_app.status = $VALUE
+
+  # ---------------------------------------------------------------------------
+  # PII GUARDRAIL: the raw SIN must never land in a JSONB / self_reported dict
+  # in plaintext. The only sanctioned storage path is the Fernet token written
+  # via app.core.sin_crypto.encrypt_sin (see manual_application.py for the
+  # correct pattern: `patient.sin_encrypted = encrypt_sin(digits)`).
+  #
+  # CONSERVATIVE: fires only when a raw value is assigned to a dict under a
+  # `social_insurance_number` / `sin` key. The metavariable-pattern guard
+  # ensures we do NOT flag values that already went through encrypt_sin(),
+  # nor the masked `sin_last3` (a different key, so it never matches).
+  # ---------------------------------------------------------------------------
+  - id: raw-sin-into-jsonb-dict
+    message: >-
+      Raw SIN assigned into a dict/JSONB under a `social_insurance_number`/`sin` key
+      without going through app.core.sin_crypto.encrypt_sin. The full SIN must never be
+      persisted in plaintext (self_reported / platform_events / analytics). Encrypt it
+      via encrypt_sin() and store only the Fernet token + sin_last3.
+    severity: ERROR
+    languages: [python]
+    patterns:
+      - pattern-either:
+          - pattern: $D["social_insurance_number"] = $VALUE
+          - pattern: $D['social_insurance_number'] = $VALUE
+          - pattern: $D["sin"] = $VALUE
+          - pattern: $D['sin'] = $VALUE
+      - metavariable-pattern:
+          metavariable: $VALUE
+          patterns:
+            - pattern-not: encrypt_sin(...)
+            - pattern-not: app.core.sin_crypto.encrypt_sin(...)
+
+  - id: raw-sin-in-dict-literal
+    message: >-
+      SIN key present in a dict literal — verify the value is encrypted via
+      app.core.sin_crypto.encrypt_sin (or is the masked sin_last3) before it is
+      persisted to a JSONB column. The full SIN must never be stored in plaintext.
+    severity: WARNING
+    languages: [python]
+    patterns:
+      - pattern-either:
+          - pattern: '{..., "social_insurance_number": $VALUE, ...}'
+          - pattern: '{..., "sin": $VALUE, ...}'
+      - metavariable-pattern:
+          metavariable: $VALUE
+          patterns:
+            - pattern-not: encrypt_sin(...)
+            - pattern-not: app.core.sin_crypto.encrypt_sin(...)
+
+  # ---------------------------------------------------------------------------
+  # DANGEROUS PATTERNS
+  # ---------------------------------------------------------------------------
+  - id: no-eval
+    message: >-
+      `eval()` executes arbitrary code and is a remote-code-execution risk if any
+      input is attacker-influenced. Use a safe parser (ast.literal_eval, json.loads)
+      or explicit dispatch instead.
+    severity: ERROR
+    languages: [python]
+    patterns:
+      - pattern: eval(...)
+
+  - id: no-exec
+    message: >-
+      `exec()` executes arbitrary code and is a remote-code-execution risk. Avoid
+      dynamic code execution; use explicit dispatch / importlib instead.
+    severity: ERROR
+    languages: [python]
+    patterns:
+      - pattern: exec(...)
+
+  - id: subprocess-shell-true
+    message: >-
+      `subprocess` with `shell=True` invokes a shell and is vulnerable to command
+      injection when any argument is dynamic. Pass an argv list and keep shell=False
+      (the default).
+    severity: ERROR
+    languages: [python]
+    patterns:
+      - pattern-either:
+          - pattern: subprocess.run(..., shell=True, ...)
+          - pattern: subprocess.call(..., shell=True, ...)
+          - pattern: subprocess.check_call(..., shell=True, ...)
+          - pattern: subprocess.check_output(..., shell=True, ...)
+          - pattern: subprocess.Popen(..., shell=True, ...)
+
+  - id: sql-string-built-with-fstring
+    message: >-
+      SQL query built with an f-string — this is SQL injection if any interpolated
+      value is user-controlled. Use parameterized queries (SQLAlchemy text() with
+      bound params, or the ORM) instead of string-formatting SQL.
+    severity: ERROR
+    languages: [python]
+    patterns:
+      - pattern-either:
+          - pattern: $CONN.execute(f"...{$X}...")
+          - pattern: $CONN.execute(text(f"...{$X}..."))
+          - pattern: $CUR.executemany(f"...{$X}...")
+          - pattern: text(f"...{$X}...")
+      # Heuristic: only flag when the f-string clearly contains a SQL verb, to
+      # keep false positives down on non-SQL f-strings passed to execute().
+      - pattern-regex: (?i)(select|insert|update|delete|drop\s+table|where|from|values)\s
+
+  - id: sql-string-built-with-format-or-percent
+    message: >-
+      SQL query built with .format() or `%` string concatenation — SQL injection if
+      any value is user-controlled. Use parameterized queries instead.
+    severity: ERROR
+    languages: [python]
+    patterns:
+      - pattern-either:
+          - pattern: $CONN.execute("...".format(...))
+          - pattern: $CONN.execute(text("...".format(...)))
+          - pattern: $CONN.execute("..." % $X)
+          - pattern: $CONN.execute(text("..." % $X))
+      - pattern-regex: (?i)(select|insert|update|delete|drop\s+table|where|from|values)\s
+
+  # ---------------------------------------------------------------------------
+  # HARDCODED SECRETS: a secret-named variable assigned a non-trivial string
+  # literal. CONSERVATIVE — the variable name must look like a credential AND
+  # the literal must be 8+ chars (placeholders / "" / "changeme" short strings
+  # and env-indirection like settings.X are not literals so never match).
+  # ---------------------------------------------------------------------------
+  - id: hardcoded-secret-literal
+    message: >-
+      Possible hardcoded secret assigned to a string literal. Secrets, API keys and
+      passwords must come from settings/env (app.core.config.settings), never be
+      committed in source. If this is a non-secret constant, rename the variable.
+    severity: WARNING
+    languages: [python]
+    patterns:
+      - pattern: $NAME = "$LITERAL"
+      - metavariable-regex:
+          metavariable: $NAME
+          regex: (?i)^(?!.*(_name|_field|_header|_env|_var|_setting|_url|_id)).*(password|passwd|secret|api_?key|apikey|access_?token|auth_?token|private_?key|client_?secret).*$
+      - metavariable-regex:
+          metavariable: $LITERAL
+          # Require a non-trivial literal (8+ chars) that is not an obvious
+          # placeholder or an interpolation/format string.
+          regex: ^(?!.*(changeme|placeholder|example|your_|xxx|\{|%s|\$\{))(?=.{8,}).*$

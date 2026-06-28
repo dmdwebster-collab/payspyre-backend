@@ -1,0 +1,90 @@
+name: Security SAST (Semgrep, advisory)
+
+# Static analysis (SAST) + custom PaySpyre money-path / PII guardrail rules via
+# Semgrep. This check is ADVISORY / NON-BLOCKING: it reports findings into the
+# job summary and an uploaded artifact but NEVER fails the build, so it cannot
+# gate merges. See docs/security/sast.md for how to make it blocking later.
+#
+# Rule sources:
+#   - .semgrep/payspyre.yml  : custom guardrails (status-write owner, raw-SIN,
+#                              eval/exec/shell=True, SQL string-building, secrets)
+#   - p/python               : public OSS Python correctness/security pack
+#   - p/security-audit       : public OSS security-audit pack
+# All run with the community Semgrep OSS engine — no account/token required.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  semgrep:
+    name: Semgrep SAST (advisory)
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep
+    steps:
+      - uses: actions/checkout@v4
+
+      # Custom PaySpyre guardrails. flow_orchestrator.py is the sanctioned owner
+      # of application status writes, so it is excluded from our own ruleset.
+      # continue-on-error keeps this non-blocking regardless of findings.
+      - name: Semgrep — PaySpyre custom guardrails (advisory)
+        id: payspyre
+        continue-on-error: true
+        run: |
+          semgrep scan \
+            --config .semgrep/payspyre.yml \
+            --exclude app/services/flow_orchestrator.py \
+            --sarif --output payspyre.sarif \
+            --metrics=off || true
+          semgrep scan \
+            --config .semgrep/payspyre.yml \
+            --exclude app/services/flow_orchestrator.py \
+            --metrics=off || true
+
+      # Public OSS rule packs. Advisory only.
+      - name: Semgrep — public OSS packs (p/python, p/security-audit) (advisory)
+        id: public
+        continue-on-error: true
+        run: |
+          semgrep scan \
+            --config p/python \
+            --config p/security-audit \
+            --sarif --output public.sarif \
+            --metrics=off || true
+          semgrep scan \
+            --config p/python \
+            --config p/security-audit \
+            --metrics=off || true
+
+      - name: Write findings to job summary
+        if: always()
+        continue-on-error: true
+        run: |
+          {
+            echo "## Semgrep SAST (advisory / non-blocking)"
+            echo ""
+            echo "This check never fails the build. Findings below are informational."
+            echo ""
+            echo "### PaySpyre custom guardrails"
+            echo '```'
+            semgrep scan --config .semgrep/payspyre.yml \
+              --exclude app/services/flow_orchestrator.py \
+              --metrics=off 2>&1 | tail -n 60 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload SARIF results (artifact)
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-sarif
+          path: |
+            payspyre.sarif
+            public.sarif
+          if-no-files-found: ignore
