@@ -61,12 +61,18 @@ def test_inert_without_key(client, db_session, monkeypatch):
     assert r.status_code == 403, r.text
 
 
+def _band(p):
+    from app.services import flow_engine
+    return flow_engine._manual_review_band((p.verification_matrix or {}).get("bureau") or {})
+
+
 def test_intake_creates_application_records_widget_and_returns_quote(client, db_session, monkeypatch):
     monkeypatch.setattr(settings, "WIDGET_API_KEY", "secret")
-    r = client.post(_URL, headers={"X-Widget-Key": "secret"}, json=_body(_product(db_session)))
+    p = _product(db_session)
+    r = client.post(_URL, headers={"X-Widget-Key": "secret"}, json=_body(p, score=_band(p)["max"] + 40))
     assert r.status_code == 200, r.text
     d = r.json()
-    assert d["prequalified"] is True
+    assert d["outcome"] == "approved" and d["prequalified"] is True
     assert d["quote"]["installment_cents"] > 0 and d["quote"]["apr_bps"] is not None
     # the application is now a real row in the platform (lands in the cockpit)
     app = (
@@ -75,20 +81,22 @@ def test_intake_creates_application_records_widget_and_returns_quote(client, db_
         .first()
     )
     assert app is not None
-    assert app.self_reported["widget"]["outcome"] == "Approved"
+    assert app.self_reported["widget"]["widget_outcome"] == "Approved"          # widget's own call, audit-only
+    assert app.self_reported["widget"]["platform_prequal_outcome"] == "approved"  # the PLATFORM's call
     assert app.flow_state["widget_prequalification"] is True
 
 
-def test_below_product_min_score_is_referred_not_prequalified(client, db_session, monkeypatch):
+def test_platform_decides_using_same_bands_as_full_decision(client, db_session, monkeypatch):
     monkeypatch.setattr(settings, "WIDGET_API_KEY", "secret")
     p = _product(db_session)
-    min_score = ((p.verification_matrix or {}).get("bureau") or {}).get("min_score")
-    if not min_score:
-        pytest.skip("product has no configured min_score")
-    r = client.post(_URL, headers={"X-Widget-Key": "secret"}, json=_body(p, score=min_score - 50))
-    assert r.status_code == 200, r.text
-    d = r.json()
-    assert d["prequalified"] is False and d["reasons"]
+    band = _band(p)
+    mid = (band["min"] + band["max"]) // 2
+    # in-band → manual_review (refer), not pre-qualified — matches the full engine
+    r1 = client.post(_URL, headers={"X-Widget-Key": "secret"}, json=_body(p, score=mid))
+    assert r1.json()["outcome"] == "manual_review" and r1.json()["prequalified"] is False
+    # below the floor → declined
+    r2 = client.post(_URL, headers={"X-Widget-Key": "secret"}, json=_body(p, score=band["min"] - 30))
+    assert r2.json()["outcome"] == "declined"
 
 
 def test_unknown_product_404(client, db_session, monkeypatch):
@@ -97,3 +105,12 @@ def test_unknown_product_404(client, db_session, monkeypatch):
     body["financing"]["product_code"] = "NO_SUCH_PRODUCT"
     r = client.post(_URL, headers={"X-Widget-Key": "secret"}, json=body)
     assert r.status_code == 404, r.text
+
+
+def test_prequalify_score_bands_are_the_single_source_of_truth():
+    from app.services import flow_engine
+    cfg = {"manual_review_band": {"min": 600, "max": 679}}
+    assert flow_engine.prequalify_score(720, cfg) == "approved"
+    assert flow_engine.prequalify_score(640, cfg) == "manual_review"
+    assert flow_engine.prequalify_score(599, cfg) == "declined"
+    assert flow_engine.prequalify_score(None, cfg) == "unknown"

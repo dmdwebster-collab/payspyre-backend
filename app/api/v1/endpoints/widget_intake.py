@@ -24,7 +24,7 @@ from app.core.config import settings
 from app.db.base import get_db
 from app.models.platform.credit_product import PlatformCreditProduct
 from app.models.platform.patient import PlatformPatient
-from app.services import loan_quote
+from app.services import flow_engine, loan_quote
 from app.services.flow_orchestrator import FlowOrchestrator, InvalidAmountError
 from app.services.verifications.mock_dispatcher import MockVerificationDispatcher
 
@@ -75,7 +75,8 @@ class WidgetPreQualBody(BaseModel):
 
 class WidgetPreQualResponse(BaseModel):
     application_id: UUID
-    prequalified: bool
+    outcome: str            # approved | manual_review | declined | unknown (the PLATFORM's call)
+    prequalified: bool      # convenience: outcome == "approved"
     reasons: list[str]
     quote: dict
 
@@ -137,7 +138,7 @@ def widget_prequalification(body: WidgetPreQualBody, db: Session = Depends(get_d
     # OUR decision.
     self_reported = dict(application.self_reported or {})
     self_reported["widget"] = {
-        "outcome": body.widget_outcome,
+        "widget_outcome": body.widget_outcome,   # the widget's OWN call, kept for audit only
         "credit_score": body.applicant.credit_score,
         "date_of_birth": body.applicant.date_of_birth.isoformat() if body.applicant.date_of_birth else None,
         "vendor": fin.vendor,
@@ -147,6 +148,19 @@ def widget_prequalification(body: WidgetPreQualBody, db: Session = Depends(get_d
         "frequency": fin.frequency,
         "income": body.income.model_dump() if body.income else None,
     }
+    # THE PLATFORM decides the pre-qual — using the SAME score bands the full
+    # decision uses (flow_engine), so the widget and the platform never diverge.
+    # The widget's own outcome above is recorded for audit but NOT used here.
+    matrix = product.verification_matrix if isinstance(product.verification_matrix, dict) else {}
+    outcome = flow_engine.prequalify_score(body.applicant.credit_score, matrix.get("bureau") or {})
+    reasons = {
+        "declined": ["credit_score_below_floor"],
+        "manual_review": ["credit_score_in_manual_review_band"],
+        "unknown": ["no_credit_score_provided"],
+        "approved": [],
+    }[outcome]
+
+    self_reported["widget"]["platform_prequal_outcome"] = outcome
     application.self_reported = self_reported
     flow_state = dict(application.flow_state or {})
     flow_state["widget_prequalification"] = True
@@ -160,18 +174,10 @@ def widget_prequalification(body: WidgetPreQualBody, db: Session = Depends(get_d
         fees_cents=params["fees_cents"],
     )
 
-    # Pre-qual gate using the PRODUCT's own configured minimum score (not invented):
-    # below it → refer, not a hard decline. The full decision runs later via the
-    # normal verification flow; this is a soft pre-qual.
-    reasons: list[str] = []
-    matrix = product.verification_matrix if isinstance(product.verification_matrix, dict) else {}
-    min_score = (matrix.get("bureau") or {}).get("min_score")
-    if min_score is not None and body.applicant.credit_score is not None and body.applicant.credit_score < min_score:
-        reasons.append(f"credit_score_below_product_minimum_{min_score}")
-
     return WidgetPreQualResponse(
         application_id=application.id,
-        prequalified=not reasons,
+        outcome=outcome,
+        prequalified=outcome == "approved",
         reasons=reasons,
         quote={
             "amount_cents": q.amount_cents,
