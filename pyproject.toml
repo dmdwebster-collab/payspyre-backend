@@ -56,6 +56,7 @@ asyncio_mode = "auto"
 addopts = "-m 'not fuzz'"
 markers = [
     "fuzz: property/contract fuzzing — non-deterministic across envs; nightly-only",
+    "compliance: regulatory/compliance control tests (auditor-facing control suite)",
 ]
 
 [tool.black]
