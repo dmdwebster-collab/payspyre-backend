@@ -33,9 +33,14 @@ jobs:
       image: semgrep/semgrep
     steps:
       - uses: actions/checkout@v4
+      # Scope to app/ — the runtime money/PII/application code. Migrations
+      # (alembic/, reviewed one-time DDL/seed scripts, already gated by CODEOWNERS)
+      # and tests legitimately build SQL strings / carry fixture data, so the
+      # BLOCKING gate targets app/ only (verified 0 findings). The advisory job
+      # below still scans broadly for visibility.
       - name: Semgrep — PaySpyre custom guardrails (BLOCKING, fail on finding)
         run: |
-          semgrep scan --config .semgrep/payspyre.yml --error --metrics=off
+          semgrep scan --config .semgrep/payspyre.yml app/ --error --metrics=off
 
   semgrep:
     name: Semgrep SAST (advisory)
