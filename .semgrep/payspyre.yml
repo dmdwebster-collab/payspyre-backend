@@ -17,6 +17,12 @@ rules:
       (Mirrors tests/test_application_status_writes.py.)
     severity: ERROR
     languages: [python]
+    # flow_orchestrator.py is the SANCTIONED owner of status transitions — it is
+    # the one file allowed to write .status (mirrors the test's allowlist), so it
+    # must be excluded or the rule flags the legitimate owner.
+    paths:
+      exclude:
+        - "app/services/flow_orchestrator.py"
     patterns:
       - pattern-either:
           - pattern: application.status = $VALUE
@@ -152,6 +158,13 @@ rules:
       committed in source. If this is a non-secret constant, rename the variable.
     severity: WARNING
     languages: [python]
+    # Exclude the Settings module (intentional, env-overridden DEV defaults live
+    # here, e.g. JWT_SECRET_KEY = "dev_..._change_me") and tests (fixtures use fake
+    # secrets). Real secrets must still never be committed in app code.
+    paths:
+      exclude:
+        - "app/core/config.py"
+        - "tests/"
     patterns:
       - pattern: $NAME = "$LITERAL"
       - metavariable-regex:
@@ -159,6 +172,7 @@ rules:
           regex: (?i)^(?!.*(_name|_field|_header|_env|_var|_setting|_url|_id)).*(password|passwd|secret|api_?key|apikey|access_?token|auth_?token|private_?key|client_?secret).*$
       - metavariable-regex:
           metavariable: $LITERAL
-          # Require a non-trivial literal (8+ chars) that is not an obvious
-          # placeholder or an interpolation/format string.
-          regex: ^(?!.*(changeme|placeholder|example|your_|xxx|\{|%s|\$\{))(?=.{8,}).*$
+          # Require a credential-LENGTH literal (16+ chars) that is not an obvious
+          # placeholder or interpolation. 16+ avoids protocol/grant-type constants
+          # like "password" (an OAuth grant_type) and "refresh_token".
+          regex: ^(?!.*(changeme|placeholder|example|your_|xxx|\{|%s|\$\{))(?=.{16,}).*$
