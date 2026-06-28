@@ -46,6 +46,11 @@ api_router.include_router(admin_analytics.router, prefix="/admin/analytics", tag
 api_router.include_router(admin_config.router, prefix="/admin/config", tags=["admin-config"])
 # System mode (Simulation vs Live) — read-only, admin/staff, for the cockpit banner.
 api_router.include_router(admin_system.router, prefix="/admin/system", tags=["admin-system"])
+# Embedded pre-qual widget intake (server-to-server, X-Widget-Key gated; inert until
+# WIDGET_API_KEY is set). Turns the widget's pre-qual into a real application.
+from app.api.v1.endpoints import widget_intake  # noqa: E402
+
+api_router.include_router(widget_intake.router, tags=["widget-intake"])
 # UNAUTHENTICATED dev helper: seed an admin/staff RBAC user so the cockpit can be
 # signed into on a fresh env (the clinic dev-seed only makes a clinic STAFF user).
 # Same gate as the clinic dev-seed: auto-on in dev/test, else explicit ENABLE_DEV_TOOLS

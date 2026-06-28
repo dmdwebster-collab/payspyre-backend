@@ -97,6 +97,11 @@ class Settings(BaseSettings):
     SPACES_REGION: str = ""           # e.g. "tor1"
     SPACES_ENDPOINT: str = ""         # optional override; else https://<region>.digitaloceanspaces.com
 
+    # Shared secret for the embedded pre-qualification widget (server-to-server intake).
+    # The /api/v1/widget/pre-qualification endpoint is INERT (403) until this is set;
+    # callers must send a matching X-Widget-Key header.
+    WIDGET_API_KEY: str = ""
+
     # Inbound notification webhooks — P7.4b. Twilio reuses TWILIO_AUTH_TOKEN
     # for StatusCallback signature validation (Twilio convention). Resend ships
     # a per-endpoint Svix secret in "whsec_<base64>" form.
