@@ -1,0 +1,52 @@
+name: Compliance Controls
+
+# Runs ONLY the regulatory/compliance control smoke suite (pytest -m compliance)
+# and reports the result. The suite is DB-free (it calls the enforcing functions
+# directly), so this job needs no Postgres service. Non-blocking for now
+# (continue-on-error), but the smoke tests are expected to genuinely pass — they
+# are the runnable counterpart to docs/compliance_controls.md.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  compliance:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    env:
+      JWT_SECRET_KEY: test-secret-key-for-ci-only
+      JWT_ALGORITHM: HS256
+      STRIPE_API_KEY: sk_test_fake_key
+      STRIPE_SECRET_KEY: sk_test_fake_secret
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pytest pytest-asyncio
+
+      - name: Run compliance control suite
+        run: |
+          pytest -m compliance --strict-markers -ra -v | tee compliance_summary.log
+
+      - name: Upload compliance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compliance-controls-report
+          path: |
+            compliance_summary.log
+            docs/compliance_controls.md

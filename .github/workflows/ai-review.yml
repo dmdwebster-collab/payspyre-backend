@@ -1,0 +1,61 @@
+name: AI adversarial review (advisory)
+
+# Cross-model adversarial code review on pull requests. The builder model on this repo
+# is Claude (Anthropic); this job sends the PR diff to a DIFFERENT vendor's model
+# (preferring OpenAI/GPT) and posts its findings as a PR comment. The value is
+# cross-MODEL independence — a model reviewing its own lineage is an echo chamber.
+#
+# This is ADVISORY and NON-BLOCKING. scripts/ai_review.py always exits 0 (missing key,
+# empty diff, API error all exit 0), so this workflow can NEVER fail a build. It is
+# INERT until a repo secret (OPENAI_API_KEY or ANTHROPIC_API_KEY) is configured — until
+# then it just posts a "not configured" note. The real regression gates are the
+# deterministic workflows (tests / security-scan / fuzz); this augments human review.
+
+on:
+  pull_request:
+
+# Need write on PRs to post the review comment; contents:read to checkout the diff.
+permissions:
+  contents: read
+  pull-requests: write
+
+# One in-flight review per PR; newer pushes cancel the stale run.
+concurrency:
+  group: ai-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  ai-review:
+    name: cross-model adversarial review
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so origin/main...HEAD resolves the true PR diff.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Generate AI review
+        id: review
+        env:
+          # Won't exist until configured — that's fine, the script stays inert. Prefer
+          # OPENAI_API_KEY (cross-vendor from the Claude builder); Anthropic is fallback.
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          # Diff the PR base against the head commit, feed it to the reviewer.
+          git diff "origin/${{ github.base_ref }}...HEAD" > pr.diff || true
+          python scripts/ai_review.py pr.diff | tee ai_review.md
+          # Script always exits 0; never fail the build on review issues.
+
+      - name: Post review as PR comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # Best-effort comment; never fail the build if commenting hiccups.
+          gh pr comment "$PR_NUMBER" --body-file ai_review.md || \
+            echo "Could not post PR comment (non-fatal)."
