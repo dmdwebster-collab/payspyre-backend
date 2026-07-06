@@ -41,7 +41,17 @@ class Settings(BaseSettings):
     # JWT
     JWT_SECRET_KEY: str = "dev_jwt_secret_change_me"
     JWT_ALGORITHM: str = "HS256"
+    # Access-token lifetime for APPLICANT / borrower sessions (short, for security —
+    # these are consumer-facing and often on shared/public devices).
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    # Access-token lifetime for STAFF / admin (lender operations cockpit) sessions.
+    # The cockpit is an all-day internal tool someone stays signed into, so a 30-min
+    # timeout mid-workday is disruptive. Scoped to staff/admin ONLY — the applicant
+    # short lifetime above is unchanged. Refresh is unaffected (its own DAYS setting),
+    # so a shorter value here would still be transparently refreshed; this just avoids
+    # the mid-task re-auth. ~10 hours = one workday. The "Lock screen" idle-timeout is
+    # a separate frontend concern.
+    JWT_STAFF_ACCESS_TOKEN_EXPIRE_MINUTES: int = 600
     JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
     # Patient (applicant) magic-link JWT — P6.5.
