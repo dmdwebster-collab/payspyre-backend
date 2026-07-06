@@ -37,6 +37,28 @@ def create_access_token(
     return encoded_jwt
 
 
+# Roles that get the long (workday) access-token lifetime. These are the
+# staff-facing cockpit roles; applicant/borrower sessions are deliberately excluded
+# so consumer sessions stay short.
+STAFF_SESSION_ROLES = frozenset({"admin", "staff"})
+
+
+def create_staff_access_token(data: dict, roles: Optional[list[str]] = None) -> str:
+    """Mint an access token, using the workday lifetime for staff/admin roles.
+
+    Applicant/borrower access tokens must NOT go through here — they are minted on
+    the separate patient-magic-link path and keep the short
+    ``JWT_ACCESS_TOKEN_EXPIRE_MINUTES`` lifetime. For a staff/admin user (any role in
+    ``STAFF_SESSION_ROLES``) this uses ``JWT_STAFF_ACCESS_TOKEN_EXPIRE_MINUTES`` so the
+    lender cockpit doesn't time out mid-workday; any other user falls back to the
+    short lifetime.
+    """
+    minutes = settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES
+    if roles and STAFF_SESSION_ROLES.intersection(roles):
+        minutes = settings.JWT_STAFF_ACCESS_TOKEN_EXPIRE_MINUTES
+    return create_access_token(data, expires_delta=timedelta(minutes=minutes))
+
+
 def create_refresh_token(data: dict) -> tuple[str, str]:
     token = secrets.token_urlsafe(64)
     expires_delta = timedelta(days=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS)
