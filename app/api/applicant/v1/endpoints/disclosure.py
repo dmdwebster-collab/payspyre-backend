@@ -39,6 +39,7 @@ from app.api.applicant.v1.endpoints.applications import _client_ip, _http_errors
 from app.api.applicant.v1.schemas import (
     AcceptAllConsentsBody,
     AcceptAllConsentsResponse,
+    ApplicationDisclaimerResponse,
 )
 from app.core.logging import get_logger
 from app.db.base import get_db
@@ -49,6 +50,29 @@ logger = get_logger(__name__)
 
 # Registered by the orchestrator in app/api/applicant/v1/router.py.
 router = APIRouter(prefix="/applications", tags=["applicant-applications"])
+
+# The canonical full application disclaimer (Dave's exact wording) is stored as a
+# versioned, immutable consent-text file and served verbatim by the loader. This is
+# the single source of truth for the in-flow application attestation.
+_APPLICATION_DISCLAIMER_PURPOSE = "application_disclaimer"
+
+
+@router.get(
+    "/{application_id}/disclosure",
+    response_model=ApplicationDisclaimerResponse,
+)
+def get_application_disclosure(
+    application_id: UUID,
+    claims: ApplicantClaims = Depends(get_current_applicant),
+):
+    """Serve the canonical, versioned full application disclaimer text in-flow."""
+    require_app_scope(application_id, claims)
+    disclaimer = consent_service.get_active_consent_text(_APPLICATION_DISCLAIMER_PURPOSE)
+    return ApplicationDisclaimerResponse(
+        purpose=disclaimer.purpose,
+        version=disclaimer.version,
+        text=disclaimer.text,
+    )
 
 
 @router.post(
@@ -85,6 +109,13 @@ def accept_all_consents(
         ip = _client_ip(request)
         ua = request.headers.get("user-agent", "")
 
+        # Capture the canonical application-disclaimer version the applicant is
+        # attesting to, so the acceptance event is an auditable purpose+version
+        # record of the exact language shown.
+        disclaimer = consent_service.get_active_consent_text(
+            _APPLICATION_DISCLAIMER_PURPOSE
+        )
+
         for purpose in required:
             if purpose in already_granted:
                 continue  # idempotent: a re-accept is a no-op for granted purposes
@@ -107,6 +138,8 @@ def accept_all_consents(
                 "accepted": bool(body.accepted),
                 "purposes": list(required),
                 "disclosure_version": body.disclosure_version,
+                "application_disclaimer_purpose": disclaimer.purpose,
+                "application_disclaimer_version": disclaimer.version,
             },
             "metadata": {"ip_address": ip, "user_agent": ua},
         }
@@ -134,4 +167,5 @@ def accept_all_consents(
         accepted=bool(body.accepted),
         granted_purposes=list(required),
         disclosure_version=body.disclosure_version,
+        application_disclaimer_version=disclaimer.version,
     )

@@ -117,6 +117,43 @@ class TestConsentTextLoader:
         second = get_active_consent_text("id_verification")
         assert first is second  # identity => served from cache, not re-built
 
+    def test_application_disclaimer_registered_and_versioned(self):
+        """TASK 1: the canonical full application disclaimer is registered in
+        active.json, versioned, and served verbatim with Dave's exact wording."""
+        ct = get_active_consent_text("application_disclaimer")
+        assert ct.purpose == "application_disclaimer"
+        assert ct.version == "v1_2026-07"  # versioned + auditable
+        assert f"<!-- Version: {ct.version} -->" in ct.text
+        # Dave's exact wording (verbatim substrings that must be present).
+        assert "By submitting this application, you:" in ct.text
+        assert "Attest that the information provided is true & accurate" in ct.text
+        assert "Are not currently involved in insolvency proceedings" in ct.text
+        assert "Have reached the age of majority in the province you are located" in ct.text
+        assert "Agree to receive communications from us via phone, email, SMS" in ct.text
+        assert "Accept and agree to our Terms & Conditions and Privacy Policy." in ct.text
+
+    def test_pre_qualification_disclosure_registered_and_versioned(self):
+        """TASK 2: the SEPARATE pre-qualification disclosure is registered,
+        versioned, and served verbatim with Dave's exact wording."""
+        ct = get_active_consent_text("pre_qualification_disclosure")
+        assert ct.purpose == "pre_qualification_disclosure"
+        assert ct.version == "v1_2026-07"
+        assert f"<!-- Version: {ct.version} -->" in ct.text
+        assert "Pre-qualification is based on self-reported information only." in ct.text
+        assert (
+            "Pre-qualification is not a loan approval, credit decision, or offer to lend."
+            in ct.text
+        )
+        assert "Financing is not guaranteed." in ct.text
+        assert "Full Pre-Qualification Terms are available here." in ct.text
+
+    def test_new_disclosures_are_distinct_documents(self):
+        """The application disclaimer and pre-qual disclosure are SEPARATE texts."""
+        disclaimer = get_active_consent_text("application_disclaimer")
+        prequal = get_active_consent_text("pre_qualification_disclosure")
+        assert disclaimer.text != prequal.text
+        assert disclaimer.purpose != prequal.purpose
+
     def test_cache_avoids_filesystem_reread(self, monkeypatch):
         # Populate the cache (this performs the only allowed reads), then assert
         # subsequent calls never touch the filesystem again.

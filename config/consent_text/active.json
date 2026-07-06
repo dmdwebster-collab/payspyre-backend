@@ -6,5 +6,7 @@
   "automated_decision_making": "v1_2026-05",
   "marketplace_listing": "v1_2026-06",
   "marketing_communications": "v1_2026-06",
-  "id_document_upload": "v1_2026-06"
+  "id_document_upload": "v1_2026-06",
+  "application_disclaimer": "v1_2026-07",
+  "pre_qualification_disclosure": "v1_2026-07"
 }
