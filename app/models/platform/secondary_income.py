@@ -32,8 +32,16 @@ class PlatformApplicationSecondaryIncome(Base):
     )
 
     # Same enum as the primary-income column so every income line is comparable.
+    # Enumerate the values (matching credit_application.income_type) so SQLAlchemy
+    # can bind/validate — name-only ENUM leaves it with no values and rejects
+    # every write ("Possible values: None").
     income_type = Column(
-        ENUM(name="platform_income_type", create_type=False),
+        ENUM(
+            "employed_full_time", "employed_part_time", "employed_seasonal",
+            "self_employed", "retirement_pension", "disability",
+            "employment_insurance", "other",
+            name="platform_income_type", create_type=False,
+        ),
         nullable=True,
     )
     net_monthly_income_cents = Column(BigInteger, nullable=True)
