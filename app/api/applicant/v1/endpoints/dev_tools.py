@@ -15,12 +15,14 @@ from sqlalchemy.orm import Session
 
 import app.services.consent_service as consent_service
 from app.db.base import get_db
+from app.models.platform.credit_application import PlatformCreditApplication
 from app.models.platform.verification import PlatformVerification
 from app.services.flow_orchestrator import (
     CONSENT_TO_VERIFICATION_TYPE,
     FlowOrchestrator,
     OrchestratorError,
 )
+from app.services.mock_application_filler import mock_complete_application
 from app.services.mock_notification_dispatcher import peek_dev_code
 from app.services.verifications.mock_dispatcher import MockVerificationDispatcher
 
@@ -99,4 +101,39 @@ def complete_verification(
         "application_status": result.application_status,
         "decided": result.decided,
         "decision": result.decision,
+    }
+
+
+@router.post("/applications/{application_id}/mock-complete")
+def mock_complete(
+    application_id: uuid.UUID,
+    seed: int | None = Query(
+        None, description="Optional RNG seed for deterministic mock data (tests/demos)."
+    ),
+    db: Session = Depends(get_db),
+):
+    """Fill the canonical credit application with realistic RANDOM data + route to
+    manual underwriting (mock mode).
+
+    So a test/demo application carries realistic values through the backend, this
+    populates every canonical field (personal / ID / residence / primary income /
+    financial + 0-2 secondary incomes), encrypts a valid random SIN onto the
+    patient (never plaintext), stamps ``flow_state.mock_filled``, and moves the
+    application to ``under_review`` (manual underwriting) via the orchestrator.
+    """
+    application = (
+        db.query(PlatformCreditApplication)
+        .filter(PlatformCreditApplication.id == application_id)
+        .first()
+    )
+    if application is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Application not found"
+        )
+
+    mock_complete_application(db, application, seed=seed)
+    return {
+        "application_id": str(application.id),
+        "application_status": application.status,
+        "mock_filled": True,
     }

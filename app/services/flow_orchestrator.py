@@ -187,6 +187,56 @@ def mark_manual_review(application: PlatformCreditApplication) -> None:
     application.status = "under_review"
 
 
+# ---------------------------------------------------------------------------
+# Dave's named status workflow (pre-origination → origination → verification →
+# underwriting → approved/rejected).
+#
+# Application status transitions are owned by THIS module (spec §4.3, enforced by
+# tests/test_application_status_writes.py + the Semgrep money-path guardrail). So
+# every named transition is a small function here; callers (endpoints/services)
+# invoke these instead of ever assigning ``application.status`` themselves.
+#
+# The functions only decide the status value (and stamp status_updated_at). The
+# caller owns the surrounding unit-of-work, event emission, and field persistence.
+# The transitions are intentionally permissive about the *source* state (the
+# scorecard/gating rules that decide when a move is legal are a business decision
+# left to the calling layer / config, not hard-coded here) — they never move a
+# terminal application, which is the one invariant we do enforce.
+# ---------------------------------------------------------------------------
+
+# Terminal states that must never be re-opened by a workflow transition.
+_TERMINAL_STATUSES = ("approved", "declined", "withdrawn", "expired")
+
+
+def _assert_not_terminal(application: PlatformCreditApplication, target: str) -> None:
+    if application.status in _TERMINAL_STATUSES:
+        raise InvalidStateTransition(
+            f"Cannot move application to '{target}' from terminal status "
+            f"'{application.status}'"
+        )
+
+
+def mark_origination(application: PlatformCreditApplication) -> None:
+    """Move the application into the ORIGINATION state (being filled out)."""
+    _assert_not_terminal(application, "origination")
+    application.status = "origination"
+    application.status_updated_at = datetime.now(timezone.utc)
+
+
+def mark_verification(application: PlatformCreditApplication) -> None:
+    """Move the application into the VERIFICATION state (status='verifying')."""
+    _assert_not_terminal(application, "verifying")
+    application.status = "verifying"
+    application.status_updated_at = datetime.now(timezone.utc)
+
+
+def mark_underwriting(application: PlatformCreditApplication) -> None:
+    """Move the application into the UNDERWRITING state (human/automated adjudication)."""
+    _assert_not_terminal(application, "underwriting")
+    application.status = "underwriting"
+    application.status_updated_at = datetime.now(timezone.utc)
+
+
 class FlowOrchestrator:
     def __init__(
         self,
