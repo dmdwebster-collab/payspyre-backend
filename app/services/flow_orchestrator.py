@@ -482,15 +482,18 @@ class FlowOrchestrator:
         - income with 'bank_link' method  → bank_verification
         - bureau.soft_pull_required       → soft_bureau_pull
         - bureau.hard_pull_required       → hard_bureau_pull
-        Plus ``automated_decision_making``: ``_decide`` requires explicit consent to
-        automated decisioning (PIPEDA/GDPR). It MUST be surfaced here — the client only
-        grants what this returns, so omitting it left it ungranted and every decision
-        failed with ConsentMissingError once the final verification completed.
+
+        Policy (Dave, 2026-07): running an automated lending decision does NOT
+        require a discrete borrower consent — that is the lender's call, not the
+        applicant's. ``automated_decision_making`` is therefore no longer surfaced
+        here and ``_decide`` no longer gates on it. The identity / bank / bureau
+        verification consents above are unaffected and remain required.
+        NOTE: compliance sign-off required before merge (PIPEDA automated-decisioning).
         """
         application = self._get_application(application_id)
         product = self._get_product(application.credit_product_id)
         required = self._required_purposes_from_matrix(product.verification_matrix)
-        return [p for p in _CONSENT_ORDER if p in required] + ["automated_decision_making"]
+        return [p for p in _CONSENT_ORDER if p in required]
 
     @staticmethod
     def _required_purposes_from_matrix(matrix: Any) -> set[str]:
@@ -854,14 +857,13 @@ class FlowOrchestrator:
                 f"Cannot decide an application in status '{application.status}'"
             )
 
-        # Security finding #4: an automated credit decision must not run without the
-        # applicant's automated-decision-making consent (spec §4.3 / §8.1; PIPEDA
-        # automated-decisioning requirement). Verifications were already consent-
-        # gated, but the decision itself was not — this closes that gap.
-        if self._find_active_consent(application.patient_id, "automated_decision_making") is None:
-            raise ConsentMissingError(
-                "automated_decision_making consent is required before an automated decision"
-            )
+        # Policy (Dave, 2026-07): an automated lending decision is NOT gated behind a
+        # discrete borrower "consent to automated decision" grant — whether to run an
+        # automated decision is the lender's call, not the applicant's. The prior
+        # finding-#4 gate is intentionally removed here. The identity/bank/bureau
+        # verification consents remain enforced upstream in ``initiate_verification``.
+        # NOTE: compliance/human sign-off required before merge (PIPEDA
+        # automated-decisioning safeguards / adverse-action notice still apply).
 
         product = self._get_product(application.credit_product_id)
         decision_product = self._decision_product_view(application, product)

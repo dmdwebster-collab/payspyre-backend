@@ -106,6 +106,21 @@ class AcceptAllConsentsResponse(BaseModel):
     accepted: bool
     granted_purposes: list[str]
     disclosure_version: Optional[str] = None
+    application_disclaimer_version: Optional[str] = None
+
+
+class ApplicationDisclaimerResponse(BaseModel):
+    """The canonical, versioned full application disclaimer served in-flow.
+
+    Text is loaded verbatim from ``config/consent_text/application_disclaimer/``
+    via the consent-text loader (version-controlled, immutable per file). The
+    version is recorded on the ``consolidated_disclosure_accepted`` event when the
+    applicant accepts, giving an auditable purpose+version record.
+    """
+
+    purpose: str
+    version: str
+    text: str
 
 
 class InitiateVerificationResponse(BaseModel):

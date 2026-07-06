@@ -84,6 +84,13 @@ def test_intake_creates_application_records_widget_and_returns_quote(client, db_
     assert app.self_reported["widget"]["widget_outcome"] == "Approved"          # widget's own call, audit-only
     assert app.self_reported["widget"]["platform_prequal_outcome"] == "approved"  # the PLATFORM's call
     assert app.flow_state["widget_prequalification"] is True
+    # TASK 2: the SEPARATE pre-qualification disclosure is served on the pre-qual path
+    # (versioned, verbatim) and its purpose+version is recorded for audit.
+    assert d["prequal_disclosure_version"] == "v1_2026-07"
+    assert "Pre-qualification is based on self-reported information only." in d["prequal_disclosure_text"]
+    assert "Pre-qualification is not a loan approval" in d["prequal_disclosure_text"]
+    assert app.self_reported["widget"]["prequal_disclosure_purpose"] == "pre_qualification_disclosure"
+    assert app.self_reported["widget"]["prequal_disclosure_version"] == "v1_2026-07"
 
 
 def test_platform_decides_using_same_bands_as_full_decision(client, db_session, monkeypatch):

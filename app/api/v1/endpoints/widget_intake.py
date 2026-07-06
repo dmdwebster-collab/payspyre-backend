@@ -73,12 +73,21 @@ class WidgetPreQualBody(BaseModel):
     widget_outcome: str | None = None   # the widget's OWN pre-qual result, recorded as-is
 
 
+# The separate pre-qualification disclosure (Dave's exact wording) is a versioned,
+# immutable consent-text file served verbatim by the loader. It is surfaced ONLY on
+# the pre-qual path (here), distinct from the full application disclaimer.
+_PRE_QUAL_DISCLOSURE_PURPOSE = "pre_qualification_disclosure"
+
+
 class WidgetPreQualResponse(BaseModel):
     application_id: UUID
     outcome: str            # approved | manual_review | declined | unknown (the PLATFORM's call)
     prequalified: bool      # convenience: outcome == "approved"
     reasons: list[str]
     quote: dict
+    # The versioned pre-qualification disclosure shown alongside this pre-qual result.
+    prequal_disclosure_version: str
+    prequal_disclosure_text: str
 
 
 @router.post(
@@ -160,7 +169,13 @@ def widget_prequalification(body: WidgetPreQualBody, db: Session = Depends(get_d
         "approved": [],
     }[outcome]
 
+    # The separate pre-qualification disclosure served with this result — recorded
+    # (purpose + version) on the application for an auditable trail of what was shown.
+    prequal_disclosure = consent_service.get_active_consent_text(_PRE_QUAL_DISCLOSURE_PURPOSE)
+
     self_reported["widget"]["platform_prequal_outcome"] = outcome
+    self_reported["widget"]["prequal_disclosure_purpose"] = prequal_disclosure.purpose
+    self_reported["widget"]["prequal_disclosure_version"] = prequal_disclosure.version
     application.self_reported = self_reported
     flow_state = dict(application.flow_state or {})
     flow_state["widget_prequalification"] = True
@@ -179,6 +194,8 @@ def widget_prequalification(body: WidgetPreQualBody, db: Session = Depends(get_d
         outcome=outcome,
         prequalified=outcome == "approved",
         reasons=reasons,
+        prequal_disclosure_version=prequal_disclosure.version,
+        prequal_disclosure_text=prequal_disclosure.text,
         quote={
             "amount_cents": q.amount_cents,
             "term_months": q.term_months,

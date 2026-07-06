@@ -60,9 +60,9 @@ class TestApplicantDevTools:
         assert ex.status_code == 200, ex.text
         headers = {"Authorization": f"Bearer {ex.json()['jwt']}"}
 
-        # consents (the 4 verification purposes + the automated-decision-making
-        # decision-gate consent the orchestrator requires before deciding) + initiate
-        for p in (*_PURPOSES, "automated_decision_making"):
+        # consents (the 4 verification purposes only) + initiate. Policy (Dave,
+        # 2026-07): the automated decision is NOT gated behind a discrete consent.
+        for p in _PURPOSES:
             assert (
                 client.post(f"{_BASE}/applications/{app_id}/consents/{p}", headers=headers).status_code
                 == 200
@@ -87,13 +87,13 @@ class TestApplicantDevTools:
         assert r.status_code == 200
         assert r.json()["status"] == "approved", r.text
 
-    def test_complete_without_decision_consent_is_422_not_500(
+    def test_complete_without_decision_consent_still_decides(
         self, client: TestClient, db_session: Session
     ):
-        """Regression (found in the live browser walkthrough): if the
-        automated_decision_making consent was never granted, completing the FINAL
-        verification triggers _decide -> ConsentMissingError. The dev endpoint must
-        map that to a clean 422, never a 500."""
+        """Policy (Dave, 2026-07): the automated decision is NOT gated behind a
+        discrete automated_decision_making consent. Completing the FINAL verification
+        with ONLY the verification consents granted must run the decision cleanly
+        (previously this raised ConsentMissingError -> 422; that gate is removed)."""
         resp = client.post(
             f"{_BASE}/applications",
             json={
@@ -117,6 +117,7 @@ class TestApplicantDevTools:
         headers = {"Authorization": f"Bearer {ex.json()['jwt']}"}
 
         # Grant ONLY the verification consents — deliberately NOT automated_decision_making.
+        # Under the new policy the decision runs anyway (no ADM gate).
         for p in _PURPOSES:
             assert (
                 client.post(f"{_BASE}/applications/{app_id}/consents/{p}", headers=headers).status_code
@@ -129,8 +130,8 @@ class TestApplicantDevTools:
                 == 200
             )
 
-        # First three complete cleanly; the final one triggers the decision and must be
-        # a 422 (ConsentMissing), not a 500.
+        # First three complete cleanly; the final one triggers the decision, which now
+        # runs WITHOUT an automated_decision_making consent (200, not 422).
         for p in _PURPOSES[:-1]:
             assert (
                 client.post(
@@ -143,8 +144,10 @@ class TestApplicantDevTools:
             f"{_BASE}/dev/applications/{app_id}/verifications/{_PURPOSES[-1]}/complete",
             params={"score": 720},
         )
-        assert final.status_code == 422, final.text
-        assert "automated_decision_making" in final.text
+        assert final.status_code == 200, final.text
+        # The decision ran and reached a terminal state despite no ADM consent.
+        r = client.get(f"{_BASE}/applications/{app_id}", headers=headers)
+        assert r.json()["status"] == "approved", r.text
 
     def test_magic_link_code_missing_returns_404(self, client: TestClient, db_session: Session):
         resp = client.get(

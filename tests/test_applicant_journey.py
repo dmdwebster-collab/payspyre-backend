@@ -111,10 +111,8 @@ def _drive(client, db, dispatcher, score: int) -> tuple[str, dict]:
     app_id, headers = _auth(client, db, dispatcher)
     for p in _PURPOSES:
         assert client.post(f"{_BASE}/applications/{app_id}/consents/{p}", headers=headers).status_code == 200
-    # ADM consent is a decision-gate consent (finding #4) — required before submit.
-    assert client.post(
-        f"{_BASE}/applications/{app_id}/consents/automated_decision_making", headers=headers
-    ).status_code == 200
+    # Policy (Dave, 2026-07): the automated decision is NOT gated behind a discrete
+    # automated_decision_making consent, so it is not granted here.
     for p in _PURPOSES:
         assert client.post(
             f"{_BASE}/applications/{app_id}/verifications/{p}/initiate", headers=headers
@@ -158,19 +156,16 @@ class TestApplicantJourney:
         r = client.get(f"{_BASE}/applications/{app_id}", headers=headers)
         assert r.status_code == 200 and r.json()["status"] == "started"
 
-        # 6. required consents — the verification purposes PLUS automated_decision_making
-        # (surfaced so the client grants it; _decide enforces it before the decision).
+        # 6. required consents — ONLY the verification purposes. Policy (Dave,
+        # 2026-07): automated_decision_making is NOT gated behind a borrower consent.
         req = client.get(f"{_BASE}/applications/{app_id}/consents", headers=headers)
         assert req.status_code == 200
-        assert set(req.json()["required"]) == set(_PURPOSES) | {"automated_decision_making"}
+        assert set(req.json()["required"]) == set(_PURPOSES)
+        assert "automated_decision_making" not in req.json()["required"]
 
         # 7. grant all consents
         for p in _PURPOSES:
             assert client.post(f"{_BASE}/applications/{app_id}/consents/{p}", headers=headers).status_code == 200
-        # 7b. automated-decision-making consent — decision-gate, required before submit (finding #4)
-        assert client.post(
-            f"{_BASE}/applications/{app_id}/consents/automated_decision_making", headers=headers
-        ).status_code == 200
 
         # 8-11. initiate all four verifications (pending)
         for p in _PURPOSES:

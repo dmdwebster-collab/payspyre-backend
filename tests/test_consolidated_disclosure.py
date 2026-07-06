@@ -99,8 +99,9 @@ class TestAcceptAll:
         app_id, headers = _create_and_auth(client, db_session, dispatcher)
         required = _required(client, app_id, headers)
         assert required, "fixture product must require at least one consent purpose"
-        # automated_decision_making is always part of the required set (orchestrator).
-        assert "automated_decision_making" in required
+        # Policy (Dave, 2026-07): automated_decision_making is NOT gated behind a
+        # discrete borrower consent, so it is no longer in the required set.
+        assert "automated_decision_making" not in required
 
         r = client.post(f"{_BASE}/applications/{app_id}/consents/accept-all", headers=headers)
         assert r.status_code == 200, r.text
@@ -147,6 +148,10 @@ class TestAcceptAll:
         assert after["accepted"] is True
         assert set(after["purposes"]) == set(required)
         assert after["disclosure_version"] == "consolidated_v1"
+        # The canonical application disclaimer (purpose + version) is recorded on the
+        # acceptance event for an auditable trail of the exact language attested to.
+        assert after["application_disclaimer_purpose"] == "application_disclaimer"
+        assert after["application_disclaimer_version"] == "v1_2026-07"
 
     def test_idempotent_reaccept_is_noop(self, client, db_session, dispatcher):
         app_id, headers = _create_and_auth(client, db_session, dispatcher)
@@ -174,6 +179,20 @@ class TestAcceptAll:
             by_purpose[row.purpose] = by_purpose.get(row.purpose, 0) + 1
         for purpose in required:
             assert by_purpose.get(purpose) == 1, f"duplicate active consent for {purpose}"
+
+    def test_get_disclosure_serves_canonical_application_disclaimer(
+        self, client, db_session, dispatcher
+    ):
+        """TASK 1: the canonical full application disclaimer is served in-flow,
+        versioned and verbatim (Dave's exact wording)."""
+        app_id, headers = _create_and_auth(client, db_session, dispatcher)
+        r = client.get(f"{_BASE}/applications/{app_id}/disclosure", headers=headers)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["purpose"] == "application_disclaimer"
+        assert body["version"] == "v1_2026-07"
+        assert "By submitting this application, you:" in body["text"]
+        assert "Accept and agree to our Terms & Conditions and Privacy Policy." in body["text"]
 
     def test_not_owned_returns_403(self, client, db_session, dispatcher):
         _app_id, headers = _create_and_auth(client, db_session, dispatcher)

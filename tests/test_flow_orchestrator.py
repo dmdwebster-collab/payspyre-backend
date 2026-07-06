@@ -81,10 +81,9 @@ def _drive_to_decision(db, orch, *, score, purposes=_REQUIRED_PURPOSES):
     app = _create_app(orch, patient.id, _seed_product_id(db))
     for p in purposes:
         _grant(orch, app.id, p)
-    # automated_decision_making consent is required before _decide (finding #4).
-    # It is a decision-gate consent, not tied to a verification, so it is granted
-    # here rather than in the verification-purposes loop above.
-    _grant(orch, app.id, "automated_decision_making")
+    # Policy (Dave, 2026-07): the automated decision is NOT gated behind a discrete
+    # ``automated_decision_making`` consent, so it is intentionally NOT granted here.
+    # Only the identity/bank/bureau verification consents (granted above) are required.
     dispatcher = orch.dispatcher
     verifs = {p: orch.initiate_verification(app.id, p) for p in purposes}
     for p, verif in verifs.items():
@@ -197,10 +196,11 @@ class TestGetRequiredConsents:
         patient = _make_patient(db_session)
         app = _create_app(orch, patient.id, _seed_product_id(db_session))
         required = orch.get_required_consents(app.id)
-        # The matrix-derived verification consents PLUS automated_decision_making
-        # (which _decide enforces; it must be surfaced so the client grants it).
-        assert set(required) == set(_REQUIRED_PURPOSES) | {"automated_decision_making"}
-        assert "automated_decision_making" in required
+        # Policy (Dave, 2026-07): ONLY the matrix-derived verification consents are
+        # required. ``automated_decision_making`` is NO LONGER surfaced — running an
+        # automated lending decision is not gated behind a discrete borrower consent.
+        assert set(required) == set(_REQUIRED_PURPOSES)
+        assert "automated_decision_making" not in required
 
 
 # ---------------------------------------------------------------------------
@@ -404,7 +404,7 @@ class TestDecisionPaths:
         app = _create_app(orch, patient.id, _seed_product_id(db_session))
         for p in _REQUIRED_PURPOSES:
             _grant(orch, app.id, p)
-        _grant(orch, app.id, "automated_decision_making")  # decision-gate consent (finding #4)
+        # Policy (Dave, 2026-07): no discrete automated-decision consent is granted.
         verifs = {p: orch.initiate_verification(app.id, p) for p in _REQUIRED_PURPOSES}
         for p, verif in verifs.items():
             if verif.verification_type == "kyc_id":
@@ -477,7 +477,7 @@ class TestConcurrency:
         app = _create_app(orch, patient.id, _seed_product_id(db_session))
         for p in _REQUIRED_PURPOSES:
             _grant(orch, app.id, p)
-        _grant(orch, app.id, "automated_decision_making")  # decision-gate consent (finding #4)
+        # Policy (Dave, 2026-07): no discrete automated-decision consent is granted.
         verifs = {p: orch.initiate_verification(app.id, p) for p in _REQUIRED_PURPOSES}
 
         # Complete two of four up front, leaving two to race.
