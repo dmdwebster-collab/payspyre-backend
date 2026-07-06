@@ -8,6 +8,7 @@ from app.api.applicant.v1.endpoints import (
     dashboard,
     disclosure,
     documents,
+    finalize,
     loans,
     manual_application,
     marketplace,
@@ -17,12 +18,13 @@ from app.core.config import settings
 
 applicant_router = APIRouter()
 applicant_router.include_router(auth.router)
-# Consolidated disclosure (accept-all) + manual application MUST register BEFORE
-# applications.router: applications has a catch-all POST /consents/{purpose} that
-# would otherwise swallow the literal /consents/accept-all path (FastAPI matches
-# in registration order).
+# Consolidated disclosure (accept-all) + manual application + finalize MUST
+# register BEFORE applications.router: applications has a catch-all POST
+# /consents/{purpose} and a GET /{application_id} that would otherwise shadow the
+# literal /detail + /finalize paths (FastAPI matches in registration order).
 applicant_router.include_router(disclosure.router)
 applicant_router.include_router(manual_application.router)
+applicant_router.include_router(finalize.router)
 applicant_router.include_router(documents.router)
 applicant_router.include_router(applications.router)
 applicant_router.include_router(products.router)

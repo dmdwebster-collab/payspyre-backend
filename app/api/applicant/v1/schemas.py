@@ -190,6 +190,99 @@ class ManualApplicationResponse(BaseModel):
     manual_application: bool
 
 
+# --- review & finalize (canonical application) -----------------------------
+
+
+class SecondaryIncomeInput(BaseModel):
+    """One declared secondary-income line (all optional; underwriting decides
+    which are mandatory). No SIN/PII beyond employment fields."""
+
+    income_type: Optional[str] = None
+    net_monthly_income_cents: Optional[int] = Field(default=None, ge=0)
+    pay_frequency: Optional[str] = None
+    next_pay_date: Optional[date] = None
+    employer_name: Optional[str] = None
+    job_title: Optional[str] = None
+    hire_date: Optional[date] = None
+    work_phone: Optional[str] = None
+    work_phone_ext: Optional[str] = None
+    description: Optional[str] = None
+
+
+class FinalizeApplicationBody(BaseModel):
+    """The applicant's corrected/completed canonical field values, submitted from
+    the review-and-finalize screen.
+
+    Every field is OPTIONAL: the review screen submits corrections on top of
+    whatever an integration (or a mock fill) already populated, so an unset field
+    means "leave as-is", not "clear". Which fields are ultimately mandatory for a
+    decision is a business rule owned by the underwriting layer, not enforced here.
+
+    SIN is intentionally NOT accepted here — it is collected via the dedicated
+    ``POST /applications/{id}/sin`` path (encrypted at rest, only last-3 retained).
+    A raw SIN must never arrive on this body.
+    """
+
+    # Personal
+    first_name: Optional[str] = None
+    middle_name: Optional[str] = None
+    last_name: Optional[str] = None
+    date_of_birth: Optional[date] = None
+    marital_status: Optional[str] = None
+    number_of_dependents: Optional[int] = Field(default=None, ge=0)
+    citizenship: Optional[str] = None
+    education: Optional[str] = None
+    main_phone: Optional[str] = None
+    alternative_phone: Optional[str] = None
+    email: Optional[str] = None
+
+    # ID (NOTE: no SIN — see docstring)
+    id_type: Optional[str] = None
+    id_number: Optional[str] = None
+    id_province_of_issue: Optional[str] = None
+    id_expiry: Optional[date] = None
+
+    # Residence
+    residence_street: Optional[str] = None
+    residence_unit: Optional[str] = None
+    residence_city: Optional[str] = None
+    residence_province: Optional[str] = None
+    residence_postal_code: Optional[str] = None
+    time_at_address_years: Optional[int] = Field(default=None, ge=0)
+    time_at_address_months: Optional[int] = Field(default=None, ge=0, le=11)
+    residential_status: Optional[str] = None
+    monthly_housing_payment_cents: Optional[int] = Field(default=None, ge=0)
+
+    # Primary income
+    income_type: Optional[str] = None
+    net_monthly_income_cents: Optional[int] = Field(default=None, ge=0)
+    next_pay_date: Optional[date] = None
+    pay_frequency: Optional[str] = None
+    employer_name: Optional[str] = None
+    hire_date: Optional[date] = None
+    job_title: Optional[str] = None
+    work_phone: Optional[str] = None
+    work_phone_ext: Optional[str] = None
+    ok_to_contact_at_work: Optional[bool] = None
+
+    # Financial
+    number_of_credit_accounts: Optional[int] = Field(default=None, ge=0)
+    car_ownership: Optional[str] = None
+    monthly_car_payment_cents: Optional[int] = Field(default=None, ge=0)
+    non_discretionary_expenses_cents: Optional[int] = Field(default=None, ge=0)
+
+    # Secondary incomes. None = "leave existing lines untouched"; a list (even
+    # empty) REPLACES the declared secondary-income lines wholesale.
+    secondary_incomes: Optional[list[SecondaryIncomeInput]] = None
+
+
+class FinalizeApplicationResponse(BaseModel):
+    application_id: UUID
+    status: str
+    finalized: bool
+    routed_to: str  # "manual_review" | "verification"
+
+
 # --- products (applicant-facing catalogue) ---------------------------------
 
 
