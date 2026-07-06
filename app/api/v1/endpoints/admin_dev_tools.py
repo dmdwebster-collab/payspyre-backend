@@ -30,7 +30,7 @@ from app.core.security import create_access_token, get_password_hash
 from app.db.base import get_db
 from app.models.platform.loan import PlatformLoan
 from app.models.user import Role, User, UserRoleLink
-from app.services import demo_simulation
+from app.services import demo_simulation, dev_seed_collections
 
 router = APIRouter(prefix="/dev", tags=["admin-dev"])
 
@@ -170,3 +170,34 @@ def seed_admin(body: SeedAdminRequest, db: Session = Depends(get_db)):
     return SeedAdminResponse(
         email=email, password=password, user_id=str(user.id), role=role_name, jwt=token,
     )
+
+
+class SeedPastDueResponse(BaseModel):
+    seeded_count: int
+    accounts: list[dict]
+    aging: dict
+
+
+@router.post(
+    "/seed-past-due",
+    response_model=SeedPastDueResponse,
+    dependencies=[Depends(_require_seed_token)],
+)
+def seed_past_due(db: Session = Depends(get_db)):
+    """DEV/staging: seed several past-due loans across the delinquency buckets.
+
+    Creates one fully-originated, funded loan per bucket (current-month-late / 30 /
+    60 / 90 / 120+), back-dated so Collections and the delinquency aging + queue
+    reports have data to work against. Each account is booked through the real
+    engine and then marked delinquent by the real aging pass — so the state is
+    identical to how it arises in production.
+
+    Guarded exactly like ``/seed-admin``: inert unless ``DEV_SEED_TOKEN`` is set AND
+    presented in ``X-Dev-Seed-Token``, and the whole router is only mounted off
+    production. Returns a 409 if there is no active credit product to originate
+    against (create one first).
+    """
+    try:
+        return dev_seed_collections.seed_past_due_accounts(db)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))

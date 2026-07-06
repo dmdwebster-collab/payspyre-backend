@@ -21,9 +21,11 @@ from __future__ import annotations
 
 _CLINIC_STATUS: dict[str, str] = {
     "started": "started",
+    "origination": "started",       # migration 043 — being filled out
     "verifying": "started",
     "pre_qualified": "started",
     "awaiting_hard_pull": "started",
+    "underwriting": "manual_review",  # migration 043 — adjudication in progress
     "under_review": "manual_review",
     "approved": "approved",
     "declined": "declined",
