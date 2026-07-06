@@ -9,6 +9,7 @@ from app.core.security import (
     get_password_hash,
     verify_password,
     create_access_token,
+    create_staff_access_token,
     create_refresh_token,
     generate_verification_token,
     generate_reset_token,
@@ -89,7 +90,11 @@ class AuthService:
         self.db.commit()
         self.db.refresh(user)
 
-        access_token = create_access_token(data={"sub": str(user.id)})
+        # Staff/admin (lender cockpit) sessions get the long workday lifetime; every
+        # other login keeps the short one. Roles are resolved off the same user object.
+        access_token = create_staff_access_token(
+            data={"sub": str(user.id)}, roles=self._role_names(user)
+        )
 
         return LoginResponse(
             access_token=access_token,
@@ -123,7 +128,10 @@ class AuthService:
 
         self.db.commit()
 
-        access_token = create_access_token(data={"sub": str(user.id)})
+        # Preserve the workday lifetime across refresh for staff/admin sessions.
+        access_token = create_staff_access_token(
+            data={"sub": str(user.id)}, roles=self._role_names(user)
+        )
 
         return RefreshTokenResponse(
             access_token=access_token,
@@ -321,6 +329,11 @@ class AuthService:
 
     def has_role(self, user: User, role_name: str) -> bool:
         return any(role.role.name == role_name for role in user.roles)
+
+    @staticmethod
+    def _role_names(user: User) -> list[str]:
+        """Flat list of the user's role names (for access-token lifetime scoping)."""
+        return [link.role.name for link in user.roles]
 
     def _user_to_response(self, user: User):
         from app.schemas.auth import UserResponse, RoleResponse, PermissionResponse
