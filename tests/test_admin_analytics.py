@@ -1,6 +1,6 @@
 """Lender/admin portal Phase 4 — portfolio analytics (live test DB)."""
 import uuid
-from datetime import datetime, timezone, date
+from datetime import datetime, timedelta, timezone, date
 from types import SimpleNamespace
 
 import pytest
@@ -109,3 +109,81 @@ def test_requires_auth(client, db_session):
         id=uuid.uuid4(), roles=[SimpleNamespace(role=SimpleNamespace(name="patient"))])
     r = client.get(f"{_BASE}/portfolio")
     assert r.status_code == 403
+
+
+# ---- Dave's reporting suite (integration: SQL validity end-to-end) --------
+
+
+def test_report_portfolio_shape(client, db_session):
+    _loan(db_session, status="active", principal=2_000_000, balance=1_800_000,
+          disbursed=datetime(2026, 5, 1, tzinfo=timezone.utc))
+    r = client.get(f"{_BASE}/reports/portfolio?interval=monthly")
+    assert r.status_code == 200, r.text
+    b = r.json()
+    assert b["interval"] == "monthly"
+    assert "disbursed_cents" in b["totals"]
+    assert "disbursed_cents" in b["series"]
+    assert "disbursed_cents" in b["deltas"]
+    assert b["totals"]["portfolio_size_cents"] >= 0
+
+
+def test_report_collections_buckets(client, db_session):
+    loan = _loan(db_session, status="delinquent", principal=1_000_000, balance=900_000)
+    # An overdue installment 45 days ago -> "30" bucket.
+    db_session.add(PlatformLoanScheduleItem(
+        loan_id=loan.id, installment_number=1, due_date=date.today() - timedelta(days=45),
+        principal_cents=90000, interest_cents=5000, total_cents=95000, status="scheduled", paid_cents=0))
+    db_session.commit()
+    r = client.get(f"{_BASE}/reports/collections")
+    assert r.status_code == 200, r.text
+    b = r.json()
+    assert set(b["buckets"].keys()) == {"current_late", "30", "60", "90", "120plus"}
+    assert b["buckets"]["30"]["count"] >= 1
+    assert "write_offs" in b
+
+
+def test_report_applications_funnel_and_bands(client, db_session):
+    _loan(db_session, status="active", principal=750_000)   # 5-10k band
+    r = client.get(f"{_BASE}/reports/applications?interval=monthly")
+    assert r.status_code == 200, r.text
+    b = r.json()
+    assert "total" in b["funnel"]
+    assert set(b["by_amount_band"].keys()) == {"<1k", "1-5k", "5-10k", "10-20k", "20-30k", ">30k"}
+    assert b["by_amount_band"]["5-10k"]["count"] >= 1
+    assert b["by_risk_rank"]["value"] is None  # stubbed
+    assert "repaid_pct_of_disbursed" in b["repaid_vs_disbursed"]
+
+
+def test_report_operational_shape(client, db_session):
+    _loan(db_session, status="active")
+    _loan(db_session, status="charged_off", principal=500_000, balance=0)
+    r = client.get(f"{_BASE}/reports/operational")
+    assert r.status_code == 200, r.text
+    b = r.json()
+    assert "new_borrowers" in b["business_status"]
+    assert "count" in b["performing"]
+    assert b["closed"]["transferred_out"]["avg_earned_cents"] is None  # not modeled
+
+
+def test_report_risk_and_scoring_and_underwriting(client, db_session):
+    _loan(db_session, status="charged_off", principal=400_000, balance=0)
+    r = client.get(f"{_BASE}/reports/risk?interval=quarterly")
+    assert r.status_code == 200, r.text
+    assert set(r.json()["delinquency_buckets"].keys()) == {"1-29", "30-59", "60-89", "90plus"}
+
+    r2 = client.get(f"{_BASE}/reports/scoring")
+    assert r2.status_code == 200, r2.text
+    s = r2.json()
+    assert s["scorecard_stability"] is None and s["scorecard_accuracy"] is None
+    assert s["notes"]  # carries the TODO
+
+    r3 = client.get(f"{_BASE}/reports/underwriting")
+    assert r3.status_code == 200, r3.text
+    assert "rate_pct" in r3.json()["override_rate"]
+
+
+def test_report_province_filter_scopes(client, db_session):
+    # Province filter joins vendors; an unknown province returns an empty-but-valid report.
+    r = client.get(f"{_BASE}/reports/portfolio?province=Nowhere")
+    assert r.status_code == 200, r.text
+    assert r.json()["totals"]["disbursed_cents"] == 0
