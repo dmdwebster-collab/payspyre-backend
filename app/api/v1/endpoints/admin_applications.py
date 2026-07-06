@@ -14,6 +14,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, joinedload
 
+from app.api.platform_application_serialization import (
+    CanonicalApplicationDetail,
+    build_canonical_detail,
+)
 from app.core.auth import get_current_user, require_roles
 from app.db.base import get_db
 from app.models.loan import Vendor
@@ -31,21 +35,40 @@ class AdminApplicationRow(BaseModel):
     vendor_name: str
     requested_amount_cents: int
     status: str
+    # Key personal/income summary so the queue is meaningful without opening detail.
+    applicant_first_name: Optional[str] = None
+    applicant_last_name: Optional[str] = None
+    applicant_city: Optional[str] = None
+    applicant_province: Optional[str] = None
+    income_type: Optional[str] = None
+    net_monthly_income_cents: Optional[int] = None
     decision_at: Optional[datetime] = None
     created_at: datetime
 
 
-class AdminApplicationDetail(AdminApplicationRow):
+class AdminApplicationDetail(BaseModel):
+    """Queue-row metadata + the FULL canonical field set for the workspace."""
+
+    id: UUID
+    patient_name: str
     patient_contact: str
+    product_name: str
+    vendor_name: str
     vendor_id: Optional[UUID] = None
-    applicant_role: str
+    requested_amount_cents: int
     requested_amount_source: str
+    applicant_role: str
+    status: str
     decision: Optional[dict] = None
     decision_by: Optional[str] = None
+    decision_at: Optional[datetime] = None
     flow_state: dict
     self_reported: dict
     verification_count: int
     consent_count: int
+    created_at: datetime
+    # The canonical Personal / ID / Residence / income / Financial field set.
+    canonical: CanonicalApplicationDetail
 
 
 def _patient_name(p) -> str:
@@ -71,6 +94,7 @@ def list_applications(
     status_filter: Optional[str] = Query(None, alias="status"),
     vendor_id: Optional[UUID] = Query(None),
     limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
     _user=Depends(get_current_user),
 ):
@@ -83,7 +107,12 @@ def list_applications(
         q = q.filter(PlatformCreditApplication.status == status_filter)
     if vendor_id is not None:
         q = q.filter(PlatformCreditApplication.vendor_id == vendor_id)
-    rows = q.order_by(PlatformCreditApplication.created_at.desc()).limit(limit).all()
+    rows = (
+        q.order_by(PlatformCreditApplication.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
     return [
         AdminApplicationRow(
             id=r.id,
@@ -92,6 +121,12 @@ def list_applications(
             vendor_name=_vendor_name(db, r.vendor_id),
             requested_amount_cents=r.requested_amount_cents,
             status=r.status,
+            applicant_first_name=r.first_name,
+            applicant_last_name=r.last_name,
+            applicant_city=r.residence_city,
+            applicant_province=r.residence_province,
+            income_type=str(r.income_type) if r.income_type is not None else None,
+            net_monthly_income_cents=r.net_monthly_income_cents,
             decision_at=r.decision_at,
             created_at=r.created_at,
         )
@@ -114,6 +149,7 @@ def get_application(
             joinedload(PlatformCreditApplication.credit_product),
             joinedload(PlatformCreditApplication.verifications),
             joinedload(PlatformCreditApplication.consents),
+            joinedload(PlatformCreditApplication.secondary_incomes),
         )
         .first()
     )
@@ -129,9 +165,9 @@ def get_application(
         vendor_name=_vendor_name(db, app.vendor_id),
         vendor_id=app.vendor_id,
         requested_amount_cents=app.requested_amount_cents,
-        requested_amount_source=app.requested_amount_source,
-        applicant_role=app.applicant_role,
-        status=app.status,
+        requested_amount_source=str(app.requested_amount_source),
+        applicant_role=str(app.applicant_role),
+        status=str(app.status),
         decision=app.decision,
         decision_by=app.decision_by,
         decision_at=app.decision_at,
@@ -140,6 +176,7 @@ def get_application(
         verification_count=len(app.verifications or []),
         consent_count=len(app.consents or []),
         created_at=app.created_at,
+        canonical=build_canonical_detail(app, p),
     )
 
 
