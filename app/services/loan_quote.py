@@ -26,8 +26,9 @@ schedule lives in loan_servicing; this mirrors its math across frequencies.
 
 COMPLIANCE NOTE: this implements SOR/2001-104 s.3-4 as quoted by Dave
 (https://laws-lois.justice.gc.ca/eng/regulations/sor-2001-104/page-1.html).
-Which specific charges count toward C (the fee schedule) is configured per
-credit product (``pricing_config["fees_cents"]``). The s.3(2)(a) option to round
+Which specific charges count toward C is configured per credit product via the
+typed fee schedule (``app/schemas/pricing_config.py``; contingent ``on_event``
+default charges like NSF are excluded). The s.3(2)(a) option to round
 the APR to the nearest 1/8 % is NOT applied — we disclose the unrounded rate,
 which is also compliant. This calc should get a final legal/QA pass against a
 known worked example before go-live.
@@ -37,13 +38,30 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
-# Payment frequencies and how many payments fall in a year. Confirm the offered
-# set with Dave (these are the standard Canadian instalment frequencies).
+from app.schemas.pricing_config import (
+    FREQUENCY_LABELS,
+    PAYMENTS_PER_YEAR,
+    InterestConfig,
+    PaymentFrequency,
+    PricingConfig,
+    PricingConfigError,
+    origination_lump_fees_cents,
+    parse_pricing_config,
+    payments_in_term,
+    quote_fees_cents,
+)
+
+# Payment frequencies and how many payments fall in a year — derived from the
+# canonical table in app/schemas/pricing_config.py so the product schema and
+# the quote engine can never diverge on the frequency set again.
 FREQUENCIES: dict[str, dict] = {
-    "monthly": {"label": "Monthly", "per_year": 12},
-    "semi_monthly": {"label": "Semi-monthly", "per_year": 24},
-    "bi_weekly": {"label": "Bi-weekly", "per_year": 26},
-    "weekly": {"label": "Weekly", "per_year": 52},
+    f.value: {"label": FREQUENCY_LABELS[f], "per_year": PAYMENTS_PER_YEAR[f]}
+    for f in (
+        PaymentFrequency.MONTHLY,
+        PaymentFrequency.SEMI_MONTHLY,
+        PaymentFrequency.BI_WEEKLY,
+        PaymentFrequency.WEEKLY,
+    )
 }
 
 
@@ -60,14 +78,12 @@ def exceeds_criminal_rate(apr_bps: int) -> bool:
 
 
 def num_payments(term_months: int, frequency: str) -> int:
-    """How many instalments a term spans at the given frequency."""
-    per_year = FREQUENCIES[frequency]["per_year"]
-    if frequency == "monthly":
-        return term_months
-    if frequency == "semi_monthly":
-        return term_months * 2
-    # weekly / bi-weekly don't divide months evenly — scale by the year fraction.
-    return max(1, round(term_months * per_year / 12))
+    """How many instalments a term spans at the given frequency.
+
+    Delegates to the canonical implementation next to the pricing schema so
+    fee math and schedule math always agree on the payment count.
+    """
+    return payments_in_term(term_months, frequency)
 
 
 def _regular_installment(amount_cents: int, period_rate: float, n: int) -> int:
@@ -248,65 +264,160 @@ _DEFAULT_RATE_BPS = 1299  # 12.99% — mirror loan_servicing._DEFAULT_ANNUAL_RAT
 # so an unconfigured product quotes the same rate it would book at.
 
 
+def _term_bounds(cfg: PricingConfig) -> tuple[int, int, list[int]]:
+    """(term_min, term_max, term_options) with the engine's historical defaults."""
+    term_options = cfg.term_options or list(_DEFAULT_TERMS)
+    term_min = cfg.term_min_months or term_options[0]
+    term_max = cfg.term_max_months or term_options[-1]
+    if term_min > term_max:
+        term_min, term_max = term_max, term_min
+    return term_min, term_max, term_options
+
+
+def _rate_bounds(cfg: PricingConfig) -> InterestConfig:
+    """The product's interest config, or the legacy 12.99% platform default."""
+    if cfg.interest is not None:
+        return cfg.interest
+    return InterestConfig(
+        annual_rate_bps=_DEFAULT_RATE_BPS,
+        min_rate_bps=_DEFAULT_RATE_BPS,
+        max_rate_bps=_DEFAULT_RATE_BPS,
+    )
+
+
+def product_fees_cents(
+    pricing_config: Optional[dict], amount_cents: int, term_months: int, frequency: str
+) -> int:
+    """The cost-of-borrowing fees (cents) for ONE selection on a product.
+
+    This replaces the old amount/term-blind ``pricing_config["fees_cents"]``
+    lump: per-payment fees scale with the payment count (a $1/payment admin fee
+    compounds more often bi-weekly than monthly — exactly the APR effect Dave
+    demoed in Turkey), rate fees scale with the advance, and contingent
+    (``on_event``) fees like NSF are excluded per SOR/2001-104.
+    """
+    cfg = parse_pricing_config(pricing_config)
+    return quote_fees_cents(cfg, amount_cents, term_months, frequency)
+
+
 def product_worst_case_apr_bps(min_amount_cents: int, pricing_config: Optional[dict]) -> int:
     """The HIGHEST regulatory APR a product can produce, in bps.
 
-    APR is driven up by a small advance (any fixed fee is then a larger fraction)
-    and by a short term (the fee's APR contribution scales ~1/T). So the worst case
-    sits at the product's minimum amount and a term endpoint — we evaluate both term
-    bounds and take the max. Used to refuse a product config that could ever book a
-    criminal-rate (s.347) loan, catching it at configuration rather than at booking.
+    APR is driven up by a small advance (any fixed fee is then a larger fraction),
+    a short term (a lump fee's APR contribution scales ~1/T), a frequent payment
+    period (per-payment fees recur more often), and the TOP of the rate band. We
+    evaluate every enabled frequency at both term bounds with the max allowed
+    rate and take the max. Used to refuse a product config that could ever book
+    a criminal-rate (s.347) loan, catching it at configuration, not at booking.
     """
-    params = product_terms(pricing_config)
-    rate, fees = params["annual_rate_bps"], params["fees_cents"]
+    cfg = parse_pricing_config(pricing_config)
+    interest = _rate_bounds(cfg)
+    term_min, term_max, _ = _term_bounds(cfg)
     return max(
-        compute_apr_bps(min_amount_cents, rate, t, "monthly", fees)
-        for t in {params["term_min"], params["term_max"]}
+        compute_apr_bps(
+            min_amount_cents,
+            interest.max_rate_bps,
+            t,
+            freq.value,
+            quote_fees_cents(cfg, min_amount_cents, t, freq),
+        )
+        for freq in cfg.payment_frequencies
+        for t in {term_min, term_max}
     )
+
+
+def province_cap_hook(province: Optional[str], apr_bps: int) -> bool:
+    """Stub interface for the future per-province compliance engine.
+
+    Will validate a disclosed APR against the province's maximum (including
+    high-cost-credit licensing thresholds; multi-province products must clear
+    the LOWEST cap). Returns ok (True) for every province until the compliance
+    engine lands — the Criminal Code s.347 cap remains the binding federal
+    check in the meantime.
+    """
+    return True
+
+
+def validate_pricing_config(
+    pricing_config: Optional[dict],
+    min_amount_cents: int,
+    max_amount_cents: int,
+    provinces: Optional[list[str]] = None,
+) -> PricingConfig:
+    """Validate + normalize a product's pricing_config (create/PATCH gate).
+
+    1. Parses the payload through the typed schema (tolerant of the legacy
+       shape; raises :class:`PricingConfigError` on invalid payloads — which
+       includes any enabled late fee, per Canadian policy).
+    2. Normalizes: fills ``interest`` so the stored config is explicit about
+       the rate it will quote/book at.
+    3. Computes the Canadian regulatory APR for EVERY enabled payment frequency
+       at the boundary amounts/terms and the top of the rate band, and refuses
+       any configuration that can reach the Criminal Code s.347 cap.
+    4. Runs each boundary APR through :func:`province_cap_hook` (stub — future
+       per-province compliance engine seam).
+
+    Returns the normalized :class:`PricingConfig`; callers should persist
+    ``.model_dump(mode="json", exclude_none=True)`` so the DB converges on the
+    typed shape.
+    """
+    cfg = parse_pricing_config(pricing_config, context="product create/update")
+    if cfg.interest is None:
+        # Pin the legacy platform default explicitly so quote == booking == disclosure.
+        cfg = cfg.model_copy(update={"interest": _rate_bounds(cfg)})
+
+    interest = cfg.interest
+    term_min, term_max, _ = _term_bounds(cfg)
+    amounts = {min_amount_cents, max_amount_cents}
+    if cfg.amount_min_cents is not None:
+        amounts.add(cfg.amount_min_cents)
+    if cfg.amount_max_cents is not None:
+        amounts.add(cfg.amount_max_cents)
+    rates = {interest.annual_rate_bps, interest.min_rate_bps, interest.max_rate_bps}
+
+    for freq in cfg.payment_frequencies:
+        for amount in amounts:
+            for term in {term_min, term_max}:
+                fees = quote_fees_cents(cfg, amount, term, freq)
+                for rate in rates:
+                    apr = compute_apr_bps(amount, rate, term, freq.value, fees)
+                    if exceeds_criminal_rate(apr):
+                        raise PricingConfigError(
+                            f"This pricing can produce an APR of {apr / 100:.2f}% "
+                            f"({FREQUENCY_LABELS[freq]}, ${amount / 100:,.2f} over "
+                            f"{term} months at {rate / 100:.2f}%), at/above the "
+                            f"Criminal Code s.347 cap ({CRIMINAL_RATE_CAP_BPS / 100:.0f}%). "
+                            "Lower the interest rate or fees, or disable that payment frequency."
+                        )
+                    for province in provinces or [None]:
+                        if not province_cap_hook(province, apr):
+                            raise PricingConfigError(
+                                f"APR {apr / 100:.2f}% ({FREQUENCY_LABELS[freq]}) exceeds "
+                                f"the provincial cap for {province}."
+                            )
+    return cfg
 
 
 def product_terms(pricing_config: Optional[dict]) -> dict:
     """The adjustable parameters a product allows: term options, frequencies, rate.
 
-    Reads pricing_config defensively; falls back to sensible defaults so the
-    calculator renders even for a thinly-configured product.
+    Parses pricing_config through the typed schema (tolerant of the legacy
+    shape); falls back to sensible defaults so the calculator renders even for
+    a thinly-configured product.
+
+    NOTE: ``fees_cents`` here is the LEGACY fixed at-origination lump kept for
+    back-compat readers; selection-aware fee math (per-payment / rate-based /
+    per-frequency fees) lives in :func:`product_fees_cents`.
     """
-    cfg = pricing_config or {}
-    terms = cfg.get("term_options") or cfg.get("term_months")
-    if isinstance(terms, int):
-        terms = [terms]
-    if not terms:
-        terms = list(_DEFAULT_TERMS)
-    term_options = sorted(set(int(t) for t in terms))
-
-    # Term is a continuous range (the calculator uses a slider) — derive the bounds
-    # from explicit config if present, else from the discrete options.
-    term_min = int(cfg.get("term_min") or term_options[0])
-    term_max = int(cfg.get("term_max") or term_options[-1])
-    if term_min > term_max:
-        term_min, term_max = term_max, term_min
-
-    frequencies = cfg.get("payment_frequencies")
-    if not frequencies:
-        frequencies = list(FREQUENCIES.keys())
-    frequencies = [f for f in frequencies if f in FREQUENCIES]
-
-    # Rate resolution MUST match loan_servicing._resolve_pricing so the calculator
-    # shows the same rate the loan actually books at: explicit apr_bps/annual_rate_bps,
-    # else the floor of apr_range (stored in PERCENT, e.g. [7.99, 28.99]), else default.
-    rate = cfg.get("apr_bps")
-    if rate is None:
-        rate = cfg.get("annual_rate_bps")
-    if rate is None and cfg.get("apr_range"):
-        rate = int(round(float(cfg["apr_range"][0]) * 100))
-    if rate is None:
-        rate = _DEFAULT_RATE_BPS
-
+    cfg = parse_pricing_config(pricing_config)
+    term_min, term_max, term_options = _term_bounds(cfg)
     return {
         "term_options": term_options,
         "term_min": term_min,
         "term_max": term_max,
-        "frequencies": [{"value": f, "label": FREQUENCIES[f]["label"]} for f in frequencies],
-        "annual_rate_bps": int(rate),
-        "fees_cents": int(cfg.get("fees_cents") or 0),
+        "frequencies": [
+            {"value": f.value, "label": FREQUENCY_LABELS[f]} for f in cfg.payment_frequencies
+        ],
+        "annual_rate_bps": _rate_bounds(cfg).annual_rate_bps,
+        "fees_cents": origination_lump_fees_cents(cfg),
     }

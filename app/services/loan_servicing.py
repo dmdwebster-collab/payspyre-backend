@@ -35,6 +35,7 @@ from app.models.platform.loan import (
     PlatformLoanScheduleItem,
     PlatformLoanStatement,
 )
+from app.schemas.pricing_config import parse_pricing_config, quote_fees_cents
 from app.services.loan_quote import (
     CRIMINAL_RATE_CAP_BPS,
     compute_apr_bps,
@@ -297,13 +298,14 @@ def _resolve_pricing(application: PlatformCreditApplication) -> tuple[int, int, 
       * PRINCIPAL = the application's ``requested_amount_cents`` (the approved
         amount). If the decision carries an explicit ``amount_cents`` it wins
         (the decision can approve a different amount than requested).
-      * RATE  — first the decision's ``apr_bps``; else the product's
-        ``pricing_config`` (``apr_bps`` if present, else first value of
-        ``apr_range`` interpreted as a percentage -> bps); else
+      * RATE  — first the decision's ``apr_bps``; else the product's typed
+        pricing config (``interest.annual_rate_bps``; the tolerant loader maps
+        legacy ``apr_bps``/``apr_range``-floor onto it); else
         ``_DEFAULT_ANNUAL_RATE_BPS``.
-      * TERM  — first the decision's ``term_months``; else the product's
-        ``pricing_config`` (``term_months`` if present, else first of
-        ``term_options``); else ``_DEFAULT_TERM_MONTHS``.
+      * TERM  — first the decision's ``term_months``; else the product's typed
+        pricing config (``default_term_months``, which the loader maps from
+        legacy ``term_months``; else first of ``term_options``; else
+        ``term_min_months``); else ``_DEFAULT_TERM_MONTHS``.
     """
     decision = application.decision or {}
 
@@ -315,26 +317,26 @@ def _resolve_pricing(application: PlatformCreditApplication) -> tuple[int, int, 
         raise ValueError("Cannot book a loan with non-positive principal")
 
     product = getattr(application, "credit_product", None)
-    pricing_config = (getattr(product, "pricing_config", None) or {}) if product else {}
+    raw_pricing = (getattr(product, "pricing_config", None) or {}) if product else {}
+    cfg = parse_pricing_config(raw_pricing, context="loan booking")
 
     # Rate (bps)
     annual_rate_bps = decision.get("apr_bps")
     if annual_rate_bps is None:
-        if "apr_bps" in pricing_config:
-            annual_rate_bps = pricing_config["apr_bps"]
-        elif pricing_config.get("apr_range"):
-            # apr_range is in PERCENT (e.g. [7.99, 28.99]); use the floor.
-            annual_rate_bps = int(round(float(pricing_config["apr_range"][0]) * 100))
+        if cfg.interest is not None:
+            annual_rate_bps = cfg.interest.annual_rate_bps
         else:
             annual_rate_bps = _DEFAULT_ANNUAL_RATE_BPS
 
     # Term (months)
     term_months = decision.get("term_months")
     if term_months is None:
-        if "term_months" in pricing_config:
-            term_months = pricing_config["term_months"]
-        elif pricing_config.get("term_options"):
-            term_months = pricing_config["term_options"][0]
+        if cfg.default_term_months is not None:
+            term_months = cfg.default_term_months
+        elif cfg.term_options:
+            term_months = cfg.term_options[0]
+        elif cfg.term_min_months is not None:
+            term_months = cfg.term_min_months
         else:
             term_months = _DEFAULT_TERM_MONTHS
 
@@ -375,8 +377,12 @@ def create_loan_from_application(
     # criminal-rate loan. APR is the Canadian regulatory figure incl. product fees.
     fees_cents = 0
     if product is not None:
-        cfg = getattr(product, "pricing_config", None) or {}
-        fees_cents = int(cfg.get("fees_cents") or 0)
+        cfg = parse_pricing_config(
+            getattr(product, "pricing_config", None), context="loan booking APR guard"
+        )
+        # Selection-aware cost-of-borrowing fees for the booked terms (typed fee
+        # schedule; contingent on_event fees excluded per SOR/2001-104).
+        fees_cents = quote_fees_cents(cfg, principal_cents, term_months, "monthly")
     apr_bps = compute_apr_bps(principal_cents, annual_rate_bps, term_months, "monthly", fees_cents)
     if exceeds_criminal_rate(apr_bps):
         raise ValueError(
