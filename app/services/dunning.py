@@ -64,7 +64,10 @@ DEFAULT_POLICY = DunningPolicy()
 
 # Loan statuses we actively chase (disbursed loans only).
 _CHASEABLE_LOAN_STATUSES = ("active", "delinquent")
-# Installment statuses that still owe money.
+# Installment statuses that still owe money AND may be chased. ``suspended``
+# (schedule surgery, WS-F) is DELIBERATELY excluded: a staff-suspended
+# installment must never generate reminders/overdue notices — that is the
+# entire point of suspending it. Pinned by tests/test_schedule_surgery.py.
 _OPEN_ITEM_STATUSES = ("scheduled", "partial", "late")
 
 REMINDER_EVENT = "payment_due_reminder"
