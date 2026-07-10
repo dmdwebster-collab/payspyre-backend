@@ -40,8 +40,14 @@ class _Loan:
     def __init__(self, schedule, principal_balance_cents):
         self.id = "loan-prop"
         self.schedule = schedule
+        self.principal_cents = principal_balance_cents
         self.principal_balance_cents = principal_balance_cents
         self.status = "active"
+        # WS-A actuals-ledger attributes (no disbursement -> no accrual; the
+        # ledger allocates all cash to principal, clamped at zero).
+        self.annual_rate_bps = 0
+        self.disbursed_at = None
+        self.transactions = []
 
 
 class LoanPaymentMachine(RuleBasedStateMachine):

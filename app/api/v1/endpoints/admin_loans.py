@@ -25,6 +25,7 @@ from app.models.platform.loan import (
     PlatformLoanStatement,
 )
 from app.models.platform.patient import PlatformPatient
+from app.services import loan_ledger as ledger_service
 from app.services.loan_servicing import get_loan_status
 
 router = APIRouter(dependencies=[Depends(require_roles("admin", "staff"))])
@@ -166,6 +167,23 @@ def loan_payments(loan_id: UUID, db: Session = Depends(get_db), _user=Depends(ge
         .order_by(PlatformLoanPayment.received_at.desc())
         .all()
     )
+
+
+@router.get("/{loan_id}/ledger")
+def loan_ledger_view(
+    loan_id: UUID,
+    as_of: Optional[date] = None,
+    db: Session = Depends(get_db),
+    _user=Depends(get_current_user),
+):
+    """The immutable money ledger (WS-A): every transaction with its allocation
+    split, dual dates (effective vs processing), reference number, and running
+    category balances — plus the actuals-engine balance view at ``as_of``
+    (outstanding principal + interest due + fees due + add-on == payoff)."""
+    loan = db.query(PlatformLoan).filter(PlatformLoan.id == loan_id).first()
+    if loan is None:
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="Loan not found")
+    return ledger_service.ledger_view(loan, as_of or date.today())
 
 
 @router.get("/{loan_id}/statements", response_model=list[StatementRow])
