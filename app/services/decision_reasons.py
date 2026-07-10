@@ -14,7 +14,8 @@ cancels).
 from __future__ import annotations
 
 import re
-from typing import Iterable, Optional
+from typing import Any, Iterable, Optional
+from uuid import uuid4
 
 from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
@@ -28,6 +29,150 @@ REASON_KINDS = ("reject", "cancel")
 
 # Stable slug: lowercase snake_case, must start with a letter.
 CODE_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+
+
+# ---------------------------------------------------------------------------
+# Default directory contents — the SINGLE source of truth for the seeds.
+#
+# Reject codes intentionally MATCH the engine's stable decision_reasons codes
+# where one exists, so the directory's borrower_facing_text can override the
+# adverse-action notice wording for both automated and staff declines. Wording
+# mirrors adverse_action._REASON_TEXT so seeding changes no applicant-facing
+# text until an admin edits the directory.
+#
+# Consumed by migration 048 AND the test-DB fixture (tests/conftest.py) via
+# :func:`seed_defaults` — the conftest TRUNCATE wipes migration-inserted rows
+# before every test, so both paths must share one idempotent seeder.
+#
+# FLAGGED FOR DAVE: borrower_facing_text wordings require his (and counsel's)
+# review before launch — editable in the directory afterwards.
+# ---------------------------------------------------------------------------
+
+REJECT_REASON_SEEDS: list[tuple[str, str, str]] = [
+    # (code, internal_label, borrower_facing_text)
+    (
+        "bureau_below_minimum",
+        "Credit score below minimum requirement",
+        "Your credit score did not meet our minimum requirement.",
+    ),
+    (
+        "insufficient_income",
+        "Income below minimum requirement",
+        "Your income did not meet our minimum requirement for the amount requested.",
+    ),
+    (
+        "excessive_debt_ratio",
+        "Debt-to-income ratio too high",
+        "Your existing debt obligations are too high relative to your income.",
+    ),
+    (
+        "active_bankruptcy",
+        "Active or undischarged bankruptcy",
+        "Our records indicate an active or recent bankruptcy.",
+    ),
+    (
+        "bankruptcy_discharge_recent",
+        "Bankruptcy discharged too recently",
+        "Our records indicate a bankruptcy that was discharged too recently to "
+        "meet our lending criteria.",
+    ),
+    (
+        "fraud_signal_review",
+        "Information could not be verified (fraud signal)",
+        "We were unable to verify the information provided.",
+    ),
+    (
+        "identity_manual_review",
+        "Identity could not be fully verified",
+        "We were unable to fully verify your identity.",
+    ),
+    (
+        "many_active_loans",
+        "Too many active credit obligations",
+        "You have too many active credit obligations at this time.",
+    ),
+    (
+        "non_resident",
+        "Not a resident of Canada",
+        "Applicants must be residents of Canada.",
+    ),
+    (
+        "quebec_coming_soon",
+        "Province not yet serviced (Quebec)",
+        "Service is not yet available in your province.",
+    ),
+]
+
+CANCEL_REASON_SEEDS: list[tuple[str, str, str]] = [
+    (
+        "customer_request",
+        "Customer requested cancellation",
+        "Your application was cancelled at your request.",
+    ),
+    (
+        "duplicate_application",
+        "Duplicate application",
+        "Your application was cancelled because it duplicates another "
+        "application on file.",
+    ),
+    (
+        "vendor_request",
+        "Vendor requested cancellation",
+        "Your application was cancelled at the request of your treatment provider.",
+    ),
+    (
+        "offer_expired",
+        "Offer expired",
+        "Your application was cancelled because the associated offer expired.",
+    ),
+    (
+        "bank_verification_expired",
+        "Bank verification expired",
+        "Your application was cancelled because your bank verification expired "
+        "before it could be completed.",
+    ),
+    (
+        "other",
+        "Other (see comment)",
+        "Your application has been cancelled.",
+    ),
+]
+
+_SEED_INSERT = text(
+    """
+    INSERT INTO platform_decision_reasons
+        (id, kind, code, internal_label, borrower_facing_text, active, sort_order,
+         created_at, updated_at)
+    VALUES
+        (:id, CAST(:kind AS platform_decision_reason_kind), :code, :label, :text,
+         TRUE, :sort, now(), now())
+    ON CONFLICT (kind, code) DO NOTHING
+    """
+)
+
+
+def seed_defaults(conn: Any) -> int:
+    """Idempotently insert the default reject/cancel reasons.
+
+    ``conn`` may be a SQLAlchemy Session or Connection (both expose
+    ``execute``). Existing (kind, code) rows are left untouched — admin edits
+    and soft-deactivations are never overwritten (ON CONFLICT DO NOTHING on the
+    unique (kind, code) index). Returns the number of rows inserted; the caller
+    owns the transaction/commit. Called by migration 048 and by the test-DB
+    fixture (which truncates the table before every test).
+    """
+    inserted = 0
+    for kind, seeds in (("reject", REJECT_REASON_SEEDS), ("cancel", CANCEL_REASON_SEEDS)):
+        for sort, (code, label, text_) in enumerate(seeds):
+            result = conn.execute(
+                _SEED_INSERT,
+                {
+                    "id": str(uuid4()), "kind": kind, "code": code,
+                    "label": label, "text": text_, "sort": sort,
+                },
+            )
+            inserted += result.rowcount or 0
+    return inserted
 
 
 def validate_reason_fields(

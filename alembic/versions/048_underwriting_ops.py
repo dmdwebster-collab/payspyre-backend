@@ -27,10 +27,14 @@ docs/turnkey_parity/02__WP_Underwriting.md):
 
 All changes are additive; no existing row or query breaks.
 
-FLAGGED FOR DAVE: the borrower_facing_text seed wordings below require his (and
+Seed data lives in ``app.services.decision_reasons`` (REJECT_REASON_SEEDS /
+CANCEL_REASON_SEEDS + the idempotent ``seed_defaults``) — the single source of
+truth shared with the test-DB fixture, whose per-test TRUNCATE would otherwise
+wipe rows this migration inserted.
+
+FLAGGED FOR DAVE: the borrower_facing_text seed wordings require his (and
 counsel's) review before launch — they are editable in the directory afterwards.
 """
-import uuid
 from typing import Sequence, Union
 
 import sqlalchemy as sa
@@ -44,104 +48,6 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
-# ---------------------------------------------------------------------------
-# Seed data. Codes are stable slugs; reject codes intentionally MATCH the
-# engine's stable decision_reasons codes where one exists, so the directory's
-# borrower_facing_text can override the adverse-action notice wording for both
-# automated and staff declines. Wording mirrors adverse_action._REASON_TEXT.
-# ---------------------------------------------------------------------------
-
-REJECT_REASON_SEEDS: list[tuple[str, str, str]] = [
-    # (code, internal_label, borrower_facing_text)
-    (
-        "bureau_below_minimum",
-        "Credit score below minimum requirement",
-        "Your credit score did not meet our minimum requirement.",
-    ),
-    (
-        "insufficient_income",
-        "Income below minimum requirement",
-        "Your income did not meet our minimum requirement for the amount requested.",
-    ),
-    (
-        "excessive_debt_ratio",
-        "Debt-to-income ratio too high",
-        "Your existing debt obligations are too high relative to your income.",
-    ),
-    (
-        "active_bankruptcy",
-        "Active or undischarged bankruptcy",
-        "Our records indicate an active or recent bankruptcy.",
-    ),
-    (
-        "bankruptcy_discharge_recent",
-        "Bankruptcy discharged too recently",
-        "Our records indicate a bankruptcy that was discharged too recently to "
-        "meet our lending criteria.",
-    ),
-    (
-        "fraud_signal_review",
-        "Information could not be verified (fraud signal)",
-        "We were unable to verify the information provided.",
-    ),
-    (
-        "identity_manual_review",
-        "Identity could not be fully verified",
-        "We were unable to fully verify your identity.",
-    ),
-    (
-        "many_active_loans",
-        "Too many active credit obligations",
-        "You have too many active credit obligations at this time.",
-    ),
-    (
-        "non_resident",
-        "Not a resident of Canada",
-        "Applicants must be residents of Canada.",
-    ),
-    (
-        "quebec_coming_soon",
-        "Province not yet serviced (Quebec)",
-        "Service is not yet available in your province.",
-    ),
-]
-
-CANCEL_REASON_SEEDS: list[tuple[str, str, str]] = [
-    (
-        "customer_request",
-        "Customer requested cancellation",
-        "Your application was cancelled at your request.",
-    ),
-    (
-        "duplicate_application",
-        "Duplicate application",
-        "Your application was cancelled because it duplicates another "
-        "application on file.",
-    ),
-    (
-        "vendor_request",
-        "Vendor requested cancellation",
-        "Your application was cancelled at the request of your treatment provider.",
-    ),
-    (
-        "offer_expired",
-        "Offer expired",
-        "Your application was cancelled because the associated offer expired.",
-    ),
-    (
-        "bank_verification_expired",
-        "Bank verification expired",
-        "Your application was cancelled because your bank verification expired "
-        "before it could be completed.",
-    ),
-    (
-        "other",
-        "Other (see comment)",
-        "Your application has been cancelled.",
-    ),
-]
-
-
 def upgrade() -> None:
     # --- reason-kind enum ----------------------------------------------------
     op.execute(
@@ -150,7 +56,7 @@ def upgrade() -> None:
     kind_enum = postgresql.ENUM(name="platform_decision_reason_kind", create_type=False)
 
     # --- directory table -------------------------------------------------------
-    reasons = op.create_table(
+    op.create_table(
         "platform_decision_reasons",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column("kind", kind_enum, nullable=False),
@@ -174,32 +80,13 @@ def upgrade() -> None:
     )
 
     # --- seeds -----------------------------------------------------------------
-    rows = []
-    for sort, (code, label, text_) in enumerate(REJECT_REASON_SEEDS):
-        rows.append(
-            {
-                "id": uuid.uuid4(),
-                "kind": "reject",
-                "code": code,
-                "internal_label": label,
-                "borrower_facing_text": text_,
-                "active": True,
-                "sort_order": sort,
-            }
-        )
-    for sort, (code, label, text_) in enumerate(CANCEL_REASON_SEEDS):
-        rows.append(
-            {
-                "id": uuid.uuid4(),
-                "kind": "cancel",
-                "code": code,
-                "internal_label": label,
-                "borrower_facing_text": text_,
-                "active": True,
-                "sort_order": sort,
-            }
-        )
-    op.bulk_insert(reasons, rows)
+    # Single source of truth for the default directory contents:
+    # app.services.decision_reasons (shared with the test-DB fixture, which
+    # truncates + re-seeds the table before every test). Idempotent — ON
+    # CONFLICT (kind, code) DO NOTHING.
+    from app.services.decision_reasons import seed_defaults
+
+    seed_defaults(op.get_bind())
 
     # --- application assignment --------------------------------------------------
     op.add_column(

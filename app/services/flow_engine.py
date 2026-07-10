@@ -280,14 +280,21 @@ def _bankruptcy_min_years(bureau_cfg: dict[str, Any]) -> int:
 def _resolve_decision(
     outcome: _ApplicantOutcome,
     *,
-    bankruptcy_declines: bool,
-    bankruptcy_review: bool,
+    bankruptcy: bool = False,
+    bankruptcy_declines: bool = False,
+    bankruptcy_review: bool = False,
     fraud_review: bool,
     has_unknown: bool,
     has_failed_required: bool,
     identity_manual_review: bool,
 ) -> str:
     """Resolve a single applicant's decision.
+
+    ``bankruptcy`` is the pre-WS-E kwarg (a confirmed bankruptcy declines),
+    kept for signature compatibility with existing callers/tests — it is
+    equivalent to ``bankruptcy_declines=True``. New callers pass the
+    discharge-policy outputs ``bankruptcy_declines`` / ``bankruptcy_review``
+    (see :func:`resolve_bankruptcy_policy`).
 
     Precedence: a *confirmed* hard disqualifier (a bankruptcy the discharge
     policy declines, or a confirmed below-floor score) is final and declines —
@@ -302,7 +309,7 @@ def _resolve_decision(
     score = outcome.effective_score
     band = outcome.band
 
-    if bankruptcy_declines:
+    if bankruptcy or bankruptcy_declines:
         return "declined"
     if score is not None and score < band["min"]:
         if REASON_BUREAU_BELOW_MINIMUM not in outcome.reasons:
