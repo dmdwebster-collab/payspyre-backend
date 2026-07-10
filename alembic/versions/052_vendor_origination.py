@@ -1,7 +1,7 @@
 """Vendor origination — structured intake fields + reprocessing flag (WS-I)
 
 Revision ID: 052_vendor_origination
-Revises: 048_underwriting_ops
+Revises: 049_loan_ledger
 Create Date: 2026-07-10
 
 Turnkey parity WS-I (docs/turnkey_parity/10__Vendor_Access.md — Dave's vendor
@@ -38,10 +38,9 @@ free text and live in ``self_reported['vendor_intake']`` — no columns.
 The reprocessing request itself is an append-only ``platform_events`` row
 (``vendor_reprocessing_requested``) — no event table changes needed.
 
-NOTE ON CHAINING: the P0 build plan reserves 049_loan_ledger for the ledger
-workstream; at branch time origin/main's head is still 048_underwriting_ops,
-so this chains from 048 (per the WS-I instruction). If 049 lands first, the
-merge train re-chains this to the new head.
+NOTE ON CHAINING: chained from 049_loan_ledger (the ledger migration landed on
+main before this branch pushed, per the WS-I instruction), giving a single
+linear head at 052.
 """
 from typing import Sequence, Union
 
@@ -50,7 +49,7 @@ from alembic import op
 
 
 revision: str = "052_vendor_origination"
-down_revision: Union[str, None] = "048_underwriting_ops"
+down_revision: Union[str, None] = "049_loan_ledger"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
