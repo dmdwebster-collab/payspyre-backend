@@ -136,6 +136,10 @@ class Settings(BaseSettings):
     WEBHOOK_TIMEOUT_SECONDS: int = 30
     WEBHOOK_MAX_RETRIES: int = 3
 
+    # Alvero -> PaySpyre application handoff (HMAC-authenticated).
+    ALVERO_TENANT_KEY_KDC: str = ""
+    PAYSPYRE_PORTAL_BASE_URL: str = "https://portal.payspyre.app"
+
     # S3 Storage
     AWS_ACCESS_KEY_ID: str = ""
     AWS_SECRET_ACCESS_KEY: str = ""

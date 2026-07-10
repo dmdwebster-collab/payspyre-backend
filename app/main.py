@@ -68,6 +68,10 @@ app.add_middleware(
         "X-Request-ID",
         "X-Didit-Signature",
         "X-Persona-Signature",
+        "Idempotency-Key",
+        "X-Alvero-Tenant",
+        "X-Alvero-Timestamp",
+        "X-Alvero-Signature",
     ],
     expose_headers=["X-Request-ID", "Retry-After", "X-Process-Time-ms"],
     max_age=600,
@@ -165,3 +169,8 @@ app.include_router(applicant_router, prefix="/api/applicant/v1")
 from app.api.webhooks.v1.router import webhook_router  # noqa: E402
 
 app.include_router(webhook_router, prefix="/api/webhooks/v1")
+
+# Alvero server-to-server API (HMAC-authenticated).
+from app.api.alvero import router as alvero_router  # noqa: E402
+
+app.include_router(alvero_router)
