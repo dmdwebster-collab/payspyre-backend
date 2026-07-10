@@ -3,6 +3,10 @@ from app.models.platform.patient_field import PlatformPatientField
 from app.models.platform.credit_product import PlatformCreditProduct
 from app.models.platform.credit_application import PlatformCreditApplication
 from app.models.platform.secondary_income import PlatformApplicationSecondaryIncome
+from app.models.platform.application_history import (
+    PlatformApplicationAddressHistory,
+    PlatformApplicationEmploymentHistory,
+)
 from app.models.platform.verification import PlatformVerification
 from app.models.platform.consent import PlatformConsent
 from app.models.platform.application_document import PlatformApplicationDocument
@@ -26,6 +30,7 @@ from app.models.platform.notification_outbox import PlatformNotificationOutbox
 from app.models.platform.notification_cursor import PlatformNotificationCursor
 from app.models.platform.notification_rule import PlatformNotificationRule
 from app.models.platform.decision_reason import PlatformDecisionReason
+from app.models.platform.import_batch import PlatformImportBatch
 
 __all__ = [
     "PlatformPatient",
@@ -33,6 +38,8 @@ __all__ = [
     "PlatformCreditProduct",
     "PlatformCreditApplication",
     "PlatformApplicationSecondaryIncome",
+    "PlatformApplicationAddressHistory",
+    "PlatformApplicationEmploymentHistory",
     "PlatformVerification",
     "PlatformConsent",
     "PlatformApplicationDocument",
@@ -50,4 +57,5 @@ __all__ = [
     "PlatformNotificationCursor",
     "PlatformNotificationRule",
     "PlatformDecisionReason",
+    "PlatformImportBatch",
 ]

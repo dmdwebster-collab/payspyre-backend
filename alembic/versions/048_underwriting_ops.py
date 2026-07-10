@@ -43,7 +43,7 @@ from sqlalchemy.dialects import postgresql
 
 
 revision: str = "048_underwriting_ops"
-down_revision: Union[str, None] = "043_canonical_credit_application"
+down_revision: Union[str, None] = "047_import_batches"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
