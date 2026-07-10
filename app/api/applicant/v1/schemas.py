@@ -5,10 +5,78 @@ from datetime import date, datetime
 from typing import Any, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from app.core.intake_policy import (
+    check_canonical_income_type,
+    check_free_text_income_type,
+)
 
 ContactMethod = Literal["sms", "email"]
 AmountSource = Literal["clinic", "patient", "clinic_then_patient_adjusted"]
+
+# Dave's employment classification for history entries: "Employed, really we
+# are looking at full-time, part-time, seasonally, self-employed" (+ retired /
+# unemployed / other). Mirrors the platform_employment_type DB enum.
+EmploymentType = Literal[
+    "full_time", "part_time", "seasonal", "self_employed",
+    "retired", "unemployed", "other",
+]
+
+
+# --- 3-year address & employment history (P0 schema pack) -------------------
+
+
+class AddressHistoryEntryInput(BaseModel):
+    """One address-history entry. The list must cover 3 years (or since age of
+    majority) and include >=1 current entry — validated where the applicant's
+    DOB is known (endpoint / parent model), not per-entry."""
+
+    street: str = Field(..., min_length=1)
+    unit: Optional[str] = None
+    city: Optional[str] = None
+    province: Optional[str] = None
+    postal_code: Optional[str] = None
+    residential_status: Optional[str] = None
+    monthly_housing_payment_cents: Optional[int] = Field(default=None, ge=0)
+    from_date: date
+    to_date: Optional[date] = None
+    is_current: bool = False
+
+    @model_validator(mode="after")
+    def _check_range(self) -> "AddressHistoryEntryInput":
+        if self.to_date is not None and self.to_date < self.from_date:
+            raise ValueError("to_date must be on or after from_date")
+        return self
+
+
+class EmploymentHistoryEntryInput(BaseModel):
+    """One employment-history entry (employer, role, employment_type, income
+    fields, from/to, current). Same list-level coverage rules as addresses."""
+
+    employer_name: Optional[str] = None
+    job_title: Optional[str] = None
+    employment_type: EmploymentType
+    income_type: Optional[str] = None
+    net_monthly_income_cents: Optional[int] = Field(default=None, ge=0)
+    pay_frequency: Optional[str] = None
+    from_date: date
+    to_date: Optional[date] = None
+    is_current: bool = False
+
+    @field_validator("income_type")
+    @classmethod
+    def _income_type_intake_policy(cls, v: Optional[str]) -> Optional[str]:
+        error = check_canonical_income_type(v)
+        if error:
+            raise ValueError(error)
+        return v
+
+    @model_validator(mode="after")
+    def _check_range(self) -> "EmploymentHistoryEntryInput":
+        if self.to_date is not None and self.to_date < self.from_date:
+            raise ValueError("to_date must be on or after from_date")
+        return self
 
 
 # --- auth ------------------------------------------------------------------
@@ -198,6 +266,40 @@ class ManualApplicationBody(BaseModel):
     work_phone: Optional[str] = None
     work_phone_ext: Optional[str] = None
 
+    # 3-year address & employment history (optional lists; validated for
+    # coverage against THIS body's date_of_birth when provided). Stored with the
+    # rest of the manual fields in self_reported.manual (this path's design).
+    address_history: Optional[list[AddressHistoryEntryInput]] = None
+    employment_history: Optional[list[EmploymentHistoryEntryInput]] = None
+
+    @field_validator("income_type")
+    @classmethod
+    def _income_type_intake_policy(cls, v: str) -> str:
+        # Manual path takes free-text labels ("Employed") — reject Dave's
+        # removed income types (EI / Student) via the config blocklist.
+        error = check_free_text_income_type(v)
+        if error:
+            raise ValueError(error)
+        return v
+
+    @model_validator(mode="after")
+    def _check_history_coverage(self) -> "ManualApplicationBody":
+        from app.core.application_history import validate_history_entries
+
+        today = date.today()
+        for label, entries in (
+            ("address_history", self.address_history),
+            ("employment_history", self.employment_history),
+        ):
+            if entries is None:
+                continue
+            errors = validate_history_entries(
+                entries, today=today, date_of_birth=self.date_of_birth, label=label
+            )
+            if errors:
+                raise ValueError("; ".join(errors))
+        return self
+
 
 class ManualApplicationResponse(BaseModel):
     application_id: UUID
@@ -222,6 +324,14 @@ class SecondaryIncomeInput(BaseModel):
     work_phone: Optional[str] = None
     work_phone_ext: Optional[str] = None
     description: Optional[str] = None
+
+    @field_validator("income_type")
+    @classmethod
+    def _income_type_intake_policy(cls, v: Optional[str]) -> Optional[str]:
+        error = check_canonical_income_type(v)
+        if error:
+            raise ValueError(error)
+        return v
 
 
 class FinalizeApplicationBody(BaseModel):
@@ -286,9 +396,31 @@ class FinalizeApplicationBody(BaseModel):
     monthly_car_payment_cents: Optional[int] = Field(default=None, ge=0)
     non_discretionary_expenses_cents: Optional[int] = Field(default=None, ge=0)
 
+    # Co-borrower file linking metadata: the declared relationship of THIS
+    # (co-borrower) file's applicant to the primary borrower (spouse, parent, …).
+    relationship_to_primary: Optional[str] = None
+
     # Secondary incomes. None = "leave existing lines untouched"; a list (even
     # empty) REPLACES the declared secondary-income lines wholesale.
     secondary_incomes: Optional[list[SecondaryIncomeInput]] = None
+
+    # 3-year address & employment history. None = "leave existing rows
+    # untouched"; a list REPLACES the applicant-declared history wholesale
+    # (versioned_edit snapshots are preserved by the endpoint). Coverage
+    # (3 years / since age of majority, >=1 current entry) is validated in the
+    # endpoint, where the application's stored date_of_birth is available.
+    address_history: Optional[list[AddressHistoryEntryInput]] = None
+    employment_history: Optional[list[EmploymentHistoryEntryInput]] = None
+
+    @field_validator("income_type")
+    @classmethod
+    def _income_type_intake_policy(cls, v: Optional[str]) -> Optional[str]:
+        # Dave's intake policy: EI / Student are not acceptable income types on
+        # new applications (config-driven allowlist; storage stays permissive).
+        error = check_canonical_income_type(v)
+        if error:
+            raise ValueError(error)
+        return v
 
 
 class FinalizeApplicationResponse(BaseModel):
