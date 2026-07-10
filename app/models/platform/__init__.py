@@ -29,6 +29,7 @@ from app.models.platform.profile_change_request import (
 from app.models.platform.notification_outbox import PlatformNotificationOutbox
 from app.models.platform.notification_cursor import PlatformNotificationCursor
 from app.models.platform.notification_rule import PlatformNotificationRule
+from app.models.platform.decision_reason import PlatformDecisionReason
 from app.models.platform.import_batch import PlatformImportBatch
 
 __all__ = [
@@ -55,5 +56,6 @@ __all__ = [
     "PlatformNotificationOutbox",
     "PlatformNotificationCursor",
     "PlatformNotificationRule",
+    "PlatformDecisionReason",
     "PlatformImportBatch",
 ]

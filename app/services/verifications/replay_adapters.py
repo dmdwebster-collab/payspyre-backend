@@ -19,6 +19,7 @@ mapped to the actual ``BankAccountSummary`` field names
 """
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 
 from app.services.adapters.base import (
@@ -70,11 +71,24 @@ class ReplayBureauAdapter(BureauAdapter):
         fraud_signals: Any = data.get("fraud_signals")
         if not isinstance(fraud_signals, dict):
             fraud_signals = {}
+        # WS-E: replay the discharge date (ISO string in the stored JSON payload)
+        # so the engine's bankruptcy discharge policy sees it. Absent/invalid →
+        # None, which the engine treats as active/undischarged (unchanged).
+        raw_discharged = data.get("bankruptcy_discharged_at")
+        discharged_at = None
+        if isinstance(raw_discharged, date):
+            discharged_at = raw_discharged
+        elif isinstance(raw_discharged, str):
+            try:
+                discharged_at = date.fromisoformat(raw_discharged)
+            except ValueError:
+                discharged_at = None
         return BureauResult(
             pull_type=pull_type,  # type: ignore[arg-type]
             score=int(data["credit_score"]),
             result=data["result"],
             bankruptcy=bool(data.get("bankruptcy", False)),
+            bankruptcy_discharged_at=discharged_at,
             fraud_signals=fraud_signals,
             confidence=float(data.get("confidence", 1.0)),
             vendor=data.get("vendor", "mock"),

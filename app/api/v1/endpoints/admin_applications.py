@@ -43,6 +43,9 @@ class AdminApplicationRow(BaseModel):
     income_type: Optional[str] = None
     net_monthly_income_cents: Optional[int] = None
     decision_at: Optional[datetime] = None
+    # WS-E: underwriting queue assignment.
+    assigned_to_user_id: Optional[UUID] = None
+    assigned_at: Optional[datetime] = None
     created_at: datetime
 
 
@@ -66,6 +69,8 @@ class AdminApplicationDetail(BaseModel):
     self_reported: dict
     verification_count: int
     consent_count: int
+    assigned_to_user_id: Optional[UUID] = None
+    assigned_at: Optional[datetime] = None
     created_at: datetime
     # The canonical Personal / ID / Residence / income / Financial field set.
     canonical: CanonicalApplicationDetail
@@ -93,12 +98,19 @@ def _vendor_name(db: Session, vendor_id) -> str:
 def list_applications(
     status_filter: Optional[str] = Query(None, alias="status"),
     vendor_id: Optional[UUID] = Query(None),
+    assigned_to: Optional[UUID] = Query(
+        None, description="Only applications assigned to this staff user (WS-E queue lane)."
+    ),
+    unassigned: bool = Query(
+        False, description="Only unassigned applications (the pick-up queue). Ignored when assigned_to is set."
+    ),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
     _user=Depends(get_current_user),
 ):
-    """Whole-book application queue, newest first. Optional status / vendor filters."""
+    """Whole-book application queue, newest first. Optional status / vendor /
+    assignment filters."""
     q = db.query(PlatformCreditApplication).options(
         joinedload(PlatformCreditApplication.patient),
         joinedload(PlatformCreditApplication.credit_product),
@@ -107,6 +119,10 @@ def list_applications(
         q = q.filter(PlatformCreditApplication.status == status_filter)
     if vendor_id is not None:
         q = q.filter(PlatformCreditApplication.vendor_id == vendor_id)
+    if assigned_to is not None:
+        q = q.filter(PlatformCreditApplication.assigned_to_user_id == assigned_to)
+    elif unassigned:
+        q = q.filter(PlatformCreditApplication.assigned_to_user_id.is_(None))
     rows = (
         q.order_by(PlatformCreditApplication.created_at.desc())
         .offset(offset)
@@ -128,6 +144,8 @@ def list_applications(
             income_type=str(r.income_type) if r.income_type is not None else None,
             net_monthly_income_cents=r.net_monthly_income_cents,
             decision_at=r.decision_at,
+            assigned_to_user_id=r.assigned_to_user_id,
+            assigned_at=r.assigned_at,
             created_at=r.created_at,
         )
         for r in rows
@@ -175,6 +193,8 @@ def get_application(
         self_reported=app.self_reported or {},
         verification_count=len(app.verifications or []),
         consent_count=len(app.consents or []),
+        assigned_to_user_id=app.assigned_to_user_id,
+        assigned_at=app.assigned_at,
         created_at=app.created_at,
         canonical=build_canonical_detail(app, p),
     )
