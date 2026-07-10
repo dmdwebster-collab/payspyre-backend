@@ -21,13 +21,19 @@ class PlatformCreditApplication(Base):
     # not the live product row. NULL only for rows created before migration 026.
     product_config_snapshot = Column(JSONB, nullable=True)
 
-    # Co-applicant linkage
-    co_applicant_of_application_id = Column(UUID(as_uuid=True), ForeignKey("platform_credit_applications.id"), nullable=True)
+    # Co-applicant linkage — each co-borrower is a fully separate application
+    # file (own documents / verifications / history) linked to the primary via
+    # co_applicant_of_application_id + applicant_role (Dave: "a completely
+    # separate file for each individual"). relationship_to_primary carries the
+    # declared relationship (spouse, parent, …) per the co-borrower dialog
+    # (migration 046; indexed for primary→co-borrower file enumeration).
+    co_applicant_of_application_id = Column(UUID(as_uuid=True), ForeignKey("platform_credit_applications.id"), nullable=True, index=True)
     applicant_role = Column(
         ENUM("primary", "co_applicant", name="platform_applicant_role", create_type=False),
         nullable=False,
         default="primary"
     )
+    relationship_to_primary = Column(String, nullable=True)
 
     # Requested amount: source tagging
     requested_amount_cents = Column(BigInteger, nullable=False)
@@ -165,6 +171,16 @@ class PlatformCreditApplication(Base):
     events = relationship("PlatformEvent", back_populates="application", cascade="all, delete-orphan")
     secondary_incomes = relationship(
         "PlatformApplicationSecondaryIncome",
+        back_populates="application",
+        cascade="all, delete-orphan",
+    )
+    address_history = relationship(
+        "PlatformApplicationAddressHistory",
+        back_populates="application",
+        cascade="all, delete-orphan",
+    )
+    employment_history = relationship(
+        "PlatformApplicationEmploymentHistory",
         back_populates="application",
         cascade="all, delete-orphan",
     )

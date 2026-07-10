@@ -52,12 +52,14 @@ _EDUCATION = ["high_school", "college_diploma", "bachelors", "masters",
 _PROVINCES = ["BC", "AB", "ON", "MB", "SK", "NS", "NB"]  # QC intentionally omitted
 _ID_TYPES = ["drivers_licence", "provincial_id", "passport"]
 _RESIDENTIAL_STATUS = ["own", "rent", "living_with_family", "board"]
+# NOTE: "employment_insurance" is deliberately absent — Dave removed EI (and
+# Student) as acceptable income types for NEW intake (P0 schema pack). The DB
+# enum still stores it for legacy rows, but a mock-filled application must pass
+# the intake allowlist when its fields are echoed back through finalize.
 _INCOME_TYPES = ["employed_full_time", "employed_part_time", "employed_seasonal",
-                 "self_employed", "retirement_pension", "disability",
-                 "employment_insurance", "other"]
+                 "self_employed", "retirement_pension", "disability", "other"]
 _SECONDARY_INCOME_TYPES = ["employed_part_time", "self_employed",
-                           "retirement_pension", "disability",
-                           "employment_insurance", "other"]
+                           "retirement_pension", "disability", "other"]
 _PAY_FREQ = ["weekly", "biweekly", "semimonthly", "monthly"]
 _CAR_OWNERSHIP = ["fully_paid", "financing", "leasing", "none"]
 _EMPLOYERS = ["Maple Retail Ltd", "Northern Logistics", "Coast Health Services",
