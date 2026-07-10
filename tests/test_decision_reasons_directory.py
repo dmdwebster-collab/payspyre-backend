@@ -141,7 +141,7 @@ def test_cancel_seeds_cover_turnkey_directory():
 
 def test_migration_chain():
     assert MIG.revision == "048_underwriting_ops"
-    assert MIG.down_revision == "043_canonical_credit_application"
+    assert MIG.down_revision == "047_import_batches"
 
 
 def test_migration_delegates_to_shared_seeder():
