@@ -39,7 +39,7 @@ from sqlalchemy.dialects import postgresql
 
 
 revision: str = "047_import_batches"
-down_revision: Union[str, None] = "043_canonical_credit_application"
+down_revision: Union[str, None] = "046_application_history"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
