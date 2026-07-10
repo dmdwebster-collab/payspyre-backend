@@ -382,6 +382,7 @@ def record_payment(
     payment = loan_servicing.record_payment(
         db, loan, body.amount_cents, body.received_at or datetime.now(timezone.utc),
         body.method, body.external_ref,
+        created_by=_actor_id(user), comment=body.note,
     )
     _audit(db, event_type="admin_loan_payment", actor=_actor_id(user),
            payload={"loan_id": str(loan_id), "amount_cents": body.amount_cents,
@@ -398,13 +399,17 @@ def payoff_quote(
     db: Session = Depends(get_db),
     _user=Depends(require_roles("admin", "staff")),
 ):
-    """Payoff quote (remaining principal + accrued interest) as of a date."""
+    """Payoff quote from the ACTUALS engine (WS-A): 100% outstanding principal
+    + daily simple interest accrued to date + fees due + add-on balance, and 0%
+    future interest. The four buckets sum exactly to ``payoff_cents``."""
     loan = _get_loan(db, loan_id)
     quote = loan_servicing.compute_payoff(db, loan, as_of or date.today())
     return {
         "as_of": quote.as_of.isoformat(),
         "principal_cents": quote.principal_cents,
         "accrued_interest_cents": quote.accrued_interest_cents,
+        "fees_due_cents": quote.fees_due_cents,
+        "add_on_balance_cents": quote.add_on_balance_cents,
         "payoff_cents": quote.payoff_cents,
     }
 
