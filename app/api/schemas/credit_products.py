@@ -14,6 +14,9 @@ class CreditProductBase(BaseModel):
     currency: str = Field(default="CAD", min_length=3, max_length=3)
     verification_matrix: dict[str, Any]
     decision_ruleset: str = Field(..., min_length=1, max_length=200)
+    # Wire type stays a dict for back-compat (legacy shapes are accepted), but
+    # create/PATCH validate it against app.schemas.pricing_config.PricingConfig
+    # (+ per-frequency s.347 APR gates) and persist the normalized typed shape.
     pricing_config: dict[str, Any]
     funding_source: Literal["payspyre_capital", "partner_lender", "hybrid", "clinic_self"]
     created_by: Optional[UUID] = None

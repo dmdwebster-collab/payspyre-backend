@@ -122,9 +122,16 @@ def quote(product_id: UUID, body: QuoteRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=422, detail="Unsupported payment frequency for this product.")
 
     try:
+        # Selection-aware fees from the typed pricing schema: per-payment /
+        # rate-based / per-frequency fees are computed for THIS amount, term and
+        # frequency (contingent NSF-style fees are excluded from the APR). This
+        # replaces the old amount-blind pricing_config["fees_cents"] lump.
+        fees_cents = loan_quote.product_fees_cents(
+            product.pricing_config, body.amount_cents, body.term_months, body.frequency,
+        )
         q = loan_quote.quote_loan(
             body.amount_cents, params["annual_rate_bps"], body.term_months, body.frequency,
-            fees_cents=params["fees_cents"],
+            fees_cents=fees_cents,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
