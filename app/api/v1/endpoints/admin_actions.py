@@ -143,6 +143,9 @@ def decide(
     app.decision_by = actor
     app.decision_at = datetime.now(timezone.utc)
     app.status = new_status
+    # WS-I: a staff decision resolves any pending vendor reprocessing request,
+    # so the admin queue's reprocessing lane only shows unhandled requests.
+    app.vendor_reprocessing_requested = False
 
     loan_id = None
     if body.outcome == "approved":

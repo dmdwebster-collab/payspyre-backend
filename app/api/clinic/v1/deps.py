@@ -24,15 +24,22 @@ from sqlalchemy.orm import Session
 
 from app.core.auth import get_current_user  # noqa: F401  (re-exported for endpoints)
 from app.db.base import get_db
-from app.services.clinic_membership import resolve_clinic_vendor_id
+from app.services.clinic_membership import resolve_clinic_membership
 
 
 @dataclass(frozen=True)
 class ClinicPrincipal:
-    """The authenticated clinic caller, scoped to a single clinic/vendor."""
+    """The authenticated clinic caller, scoped to a single clinic/vendor.
+
+    ``role`` is the CLINIC-side membership role (``platform_clinic_memberships
+    .role``, default ``staff``) — distinct from platform user roles. WS-I uses
+    it to gate rate-editing on vendor-originated applications against the
+    product's ``PricingConfig.interest.rate_edit_roles``.
+    """
 
     user: object
     vendor_id: UUID
+    role: str = "staff"
 
     @property
     def user_id(self):
@@ -46,16 +53,20 @@ def get_current_clinic_user(
     """Resolve the authenticated user's clinic (vendor) or raise 403.
 
     Requires a valid staff JWT (``get_current_user``) AND a clinic membership.
-    Returns a ``ClinicPrincipal`` carrying the resolved ``vendor_id`` that the
-    endpoints use to scope their queries.
+    Returns a ``ClinicPrincipal`` carrying the resolved ``vendor_id`` (which the
+    endpoints use to scope their queries) and the clinic membership ``role``.
     """
-    vendor_id = resolve_clinic_vendor_id(db, user.id)
-    if vendor_id is None:
+    membership = resolve_clinic_membership(db, user.id)
+    if membership is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User is not a member of any clinic",
         )
-    return ClinicPrincipal(user=user, vendor_id=vendor_id)
+    return ClinicPrincipal(
+        user=user,
+        vendor_id=membership.vendor_id,
+        role=membership.role or "staff",
+    )
 
 
 def get_orchestrator(db: Session = Depends(get_db)):

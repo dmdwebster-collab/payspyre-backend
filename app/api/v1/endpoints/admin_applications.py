@@ -46,6 +46,8 @@ class AdminApplicationRow(BaseModel):
     # WS-E: underwriting queue assignment.
     assigned_to_user_id: Optional[UUID] = None
     assigned_at: Optional[datetime] = None
+    # WS-I: the vendor asked for the deal back / another look (their one action).
+    vendor_reprocessing_requested: bool = False
     created_at: datetime
 
 
@@ -71,6 +73,7 @@ class AdminApplicationDetail(BaseModel):
     consent_count: int
     assigned_to_user_id: Optional[UUID] = None
     assigned_at: Optional[datetime] = None
+    vendor_reprocessing_requested: bool = False
     created_at: datetime
     # The canonical Personal / ID / Residence / income / Financial field set.
     canonical: CanonicalApplicationDetail
@@ -104,6 +107,10 @@ def list_applications(
     unassigned: bool = Query(
         False, description="Only unassigned applications (the pick-up queue). Ignored when assigned_to is set."
     ),
+    reprocessing_requested: bool = Query(
+        False,
+        description="Only applications where the vendor requested reprocessing (WS-I lane).",
+    ),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
@@ -123,6 +130,8 @@ def list_applications(
         q = q.filter(PlatformCreditApplication.assigned_to_user_id == assigned_to)
     elif unassigned:
         q = q.filter(PlatformCreditApplication.assigned_to_user_id.is_(None))
+    if reprocessing_requested:
+        q = q.filter(PlatformCreditApplication.vendor_reprocessing_requested.is_(True))
     rows = (
         q.order_by(PlatformCreditApplication.created_at.desc())
         .offset(offset)
@@ -146,6 +155,7 @@ def list_applications(
             decision_at=r.decision_at,
             assigned_to_user_id=r.assigned_to_user_id,
             assigned_at=r.assigned_at,
+            vendor_reprocessing_requested=bool(r.vendor_reprocessing_requested),
             created_at=r.created_at,
         )
         for r in rows
@@ -195,6 +205,7 @@ def get_application(
         consent_count=len(app.consents or []),
         assigned_to_user_id=app.assigned_to_user_id,
         assigned_at=app.assigned_at,
+        vendor_reprocessing_requested=bool(app.vendor_reprocessing_requested),
         created_at=app.created_at,
         canonical=build_canonical_detail(app, p),
     )
