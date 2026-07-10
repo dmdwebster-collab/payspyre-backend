@@ -1,4 +1,4 @@
-"""Vendor data-exposure REGRESSION FENCE (WS-I) — clinic/v1 response snapshots.
+"""Vendor data-exposure REGRESSION FENCE (WS-I) — clinic/v1 model snapshots.
 
 Dave's tab-by-tab visibility rules (docs/turnkey_parity/10__Vendor_Access.md §2/§5)
 say vendors must NEVER receive: risk scores, credit-bureau data, bank
@@ -6,14 +6,29 @@ statements / bank details (account, routing, transit, institution numbers),
 hardship/rescheduling data, scheduled-transaction internals, borrower
 contact-log/comms, or SIN. This module makes that rule STRUCTURAL:
 
-1. It walks every route mounted on ``clinic_router`` and recursively collects
-   the declared Pydantic response models (including nested models and generic
-   containers).
+1. It walks every module in the ``app.api.clinic.v1`` package (pkgutil, plain
+   imports) and collects every Pydantic model present in a clinic module
+   namespace whose home package is ``app.api.*`` — i.e. every model the clinic
+   surface can declare as a request or response schema — recursing into nested
+   models and generic containers.
 2. It asserts no field NAME matches the forbidden vocabulary — the data cannot
    be present even as ``null`` because the field does not exist.
-3. It snapshots the exact field set of every clinic response model. ANY new
-   field on the vendor surface fails this test and forces a conscious review
-   against Dave's rules before the snapshot is updated.
+3. It snapshots the exact field set of every collected model. ANY new field on
+   the vendor surface fails this test and forces a conscious review against
+   Dave's rules before the snapshot is updated.
+
+DISCOVERY IS HERMETIC BY DESIGN (do not "simplify" it back to route walking):
+the first version of this fence walked ``clinic_router.routes`` and read each
+route's ``response_model``. That is instantiation-state and version dependent —
+FastAPI 0.139 changed ``include_router`` to LAZY inclusion, so a parent
+router's ``.routes`` holds ``_IncludedRouter`` wrappers (no ``path``, no
+``response_model``) and the walk silently discovered NOTHING in CI (which
+resolves the latest FastAPI) while passing locally on an older pin. Module-walk
+discovery depends only on Python imports, so it finds the same models under
+every FastAPI/starlette version and every env-flag combination. Its one blind
+spot: a schema referenced ONLY via attribute access in a decorator (e.g.
+``response_model=some_module.Foo``) without importing ``Foo`` into the module
+namespace — don't do that in clinic endpoints.
 
 Out of static reach (covered elsewhere / by convention):
 * ``dict``-typed dashboard blocks (``VendorOverview.window/applications/...``)
@@ -22,19 +37,22 @@ Out of static reach (covered elsewhere / by convention):
   (stable-contract docstrings + module tests) and contain aggregates only.
 * ``GET /marketplace/leads`` returns the marketplace ``vendor_view`` projection
   (de-identified, PII-free by design — see app/services/marketplace tests).
-* The dev-only ``/dev/seed-clinic`` helper is excluded: it is never mounted in
-  production (router guard) and returns seeding credentials, not borrower data.
+* The dev-only ``endpoints/dev_tools.py`` module is excluded: it is never
+  mounted in production (router guard) and returns seeding credentials, not
+  borrower data.
 
 Run (only this file — the full suite hits a shared remote DB):
     python -m pytest tests/test_vendor_visibility_fence.py -p no:warnings -q
 """
 from __future__ import annotations
 
+import importlib
+import pkgutil
 from typing import get_args, get_origin
 
 from pydantic import BaseModel
 
-from app.api.clinic.v1.router import clinic_router
+import app.api.clinic.v1 as clinic_pkg
 
 # ---------------------------------------------------------------------------
 # Forbidden vocabulary (Dave's never-list). Matching is TOKEN-based on the
@@ -65,11 +83,15 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("VendorProfile", "compliance_score"),
 }
 
+# Dev-only modules, never mounted in production (router guard); their schemas
+# return seeding credentials, not borrower data.
+EXCLUDED_MODULES = {"app.api.clinic.v1.endpoints.dev_tools"}
+
 
 # ---------------------------------------------------------------------------
-# The snapshot: EVERY clinic/v1 response model and its exact field set.
-# Adding/renaming a field on the vendor surface MUST update this dict — that
-# update is the review checkpoint against Dave's visibility rules.
+# The snapshot: EVERY clinic/v1 request/response model and its exact field
+# set. Adding/renaming a field on the vendor surface MUST update this dict —
+# that update is the review checkpoint against Dave's visibility rules.
 # ---------------------------------------------------------------------------
 
 EXPECTED_MODEL_FIELDS: dict[str, list[str]] = {
@@ -85,14 +107,30 @@ EXPECTED_MODEL_FIELDS: dict[str, list[str]] = {
     "ClinicDashboardSummary": [
         "approved", "declined", "manual_review", "started", "total",
     ],
+    "CreateFinancingLinkBody": [
+        "amount_cents", "credit_product_id", "patient_contact", "patient_name",
+    ],
     "ClinicFinancingLink": [
         "amount_cents", "application_ref", "patient_name", "product_name", "url",
     ],
     # WS-I vendor origination
+    "VendorApplicationIntakeBody": [
+        "additional_notes", "alt_contact_name", "alt_contact_relationship",
+        "amount_financed_cents", "credit_product_id", "down_payment_cents",
+        "first_due_date", "insurance_coverage_cents", "loan_start_date",
+        "patient_contact", "patient_name", "preferred_first_due_date",
+        "preferred_payment_amount_cents", "preferred_payment_frequency",
+        "provider_name", "province", "requested_annual_rate_bps",
+        "term_months", "treatment_cost_cents",
+    ],
     "VendorApplicationCreated": [
         "amount_financed_cents", "application_id", "patient_flow_url",
         "patient_name", "product_name", "status", "verification_channel",
         "verification_message",
+    ],
+    "PreviewRequestBody": [
+        "amount_cents", "annual_rate_bps", "credit_product_id", "frequency",
+        "term_months",
     ],
     "VendorPaymentPreview": [
         "amount_cents", "annual_rate_bps", "apr_bps", "commission_cents",
@@ -141,6 +179,10 @@ EXPECTED_MODEL_FIELDS: dict[str, list[str]] = {
         "license_number", "phone", "status",
     ],
     "VendorAddress": ["city", "line1", "line2", "postal_code", "province"],
+    "ProfileChangeRequestBody": [
+        "address_line1", "address_line2", "city", "contact_name", "email",
+        "note", "phone", "postal_code", "province",
+    ],
     "ProfileChangeRequest": [
         "created_at", "id", "note", "requested_changes", "status", "vendor_id",
     ],
@@ -151,7 +193,7 @@ EXPECTED_MODEL_FIELDS: dict[str, list[str]] = {
 
 
 # ---------------------------------------------------------------------------
-# Collection
+# Hermetic collection (imports only — no router/app instantiation state)
 # ---------------------------------------------------------------------------
 
 
@@ -162,20 +204,38 @@ def _collect_models(tp, seen: set) -> None:
         for arg in get_args(tp):
             _collect_models(arg, seen)
         return
-    if isinstance(tp, type) and issubclass(tp, BaseModel) and tp not in seen:
+    if isinstance(tp, type) and issubclass(tp, BaseModel) and tp is not BaseModel and tp not in seen:
         seen.add(tp)
         for field in tp.model_fields.values():
             _collect_models(field.annotation, seen)
 
 
-def clinic_response_models() -> set[type[BaseModel]]:
+def _clinic_modules():
+    for info in pkgutil.walk_packages(clinic_pkg.__path__, prefix=clinic_pkg.__name__ + "."):
+        if info.name in EXCLUDED_MODULES:
+            continue
+        yield importlib.import_module(info.name)
+
+
+def clinic_models() -> set[type[BaseModel]]:
+    """Every Pydantic model reachable from a clinic/v1 module namespace whose
+    home package is ``app.api.*`` (plus their nested models).
+
+    The ``app.api.*`` filter keeps merely-imported internal schemas (e.g.
+    ``PricingConfig`` from ``app.schemas``) out of the top-level scan; if such
+    a model were ever EMBEDDED in a clinic schema, the field recursion would
+    still pull it into the fence — exactly when it becomes vendor-exposed.
+    """
     seen: set[type[BaseModel]] = set()
-    for route in clinic_router.routes:
-        if "seed-clinic" in getattr(route, "path", ""):
-            continue  # dev-only helper; never mounted in production
-        model = getattr(route, "response_model", None)
-        if model is not None:
-            _collect_models(model, seen)
+    for mod in _clinic_modules():
+        for obj in vars(mod).values():
+            if (
+                isinstance(obj, type)
+                and issubclass(obj, BaseModel)
+                and obj is not BaseModel
+                and obj.__module__.startswith("app.api.")
+            ):
+                _collect_models(obj, seen)
     return seen
 
 
@@ -188,12 +248,24 @@ def _tokens(field_name: str) -> set[str]:
 # ---------------------------------------------------------------------------
 
 
+def test_discovery_is_not_empty():
+    """Guards the fence's own discovery: if the module walk ever comes back
+    (near-)empty, the fence is blind and must fail LOUDLY — this is exactly the
+    failure mode the route-walking version hit under FastAPI 0.139's lazy
+    include_router."""
+    models = clinic_models()
+    assert len(models) >= 20, (
+        f"Fence discovery found only {len(models)} clinic models — discovery is "
+        "broken (blind fence), not a clean surface."
+    )
+
+
 def test_no_forbidden_field_names_on_the_vendor_surface():
-    """Dave's never-list is STRUCTURALLY absent: no clinic response model may
-    declare a field whose name touches risk/bureau/bank/hardship/comms/SIN
-    vocabulary. Absent means absent — not just null."""
+    """Dave's never-list is STRUCTURALLY absent: no clinic model may declare a
+    field whose name touches risk/bureau/bank/hardship/comms/SIN vocabulary.
+    Absent means absent — not just null."""
     offenders = []
-    for model in clinic_response_models():
+    for model in clinic_models():
         for name in model.model_fields:
             if (model.__name__, name) in ALLOWLIST:
                 continue
@@ -207,25 +279,25 @@ def test_no_forbidden_field_names_on_the_vendor_surface():
     )
 
 
-def test_clinic_response_models_match_snapshot():
-    """The exact field set of EVERY clinic response model is pinned. A new or
-    renamed field fails here by design: update EXPECTED_MODEL_FIELDS only after
+def test_clinic_models_match_snapshot():
+    """The exact field set of EVERY clinic model is pinned. A new or renamed
+    field fails here by design: update EXPECTED_MODEL_FIELDS only after
     checking the field against Dave's vendor visibility rules."""
     actual = {
         model.__name__: sorted(model.model_fields.keys())
-        for model in clinic_response_models()
+        for model in clinic_models()
     }
     assert actual == EXPECTED_MODEL_FIELDS, (
-        "Clinic response-model snapshot drift. If you intentionally changed the "
-        "vendor surface, review the change against docs/turnkey_parity/"
+        "Clinic model snapshot drift. If you intentionally changed the vendor "
+        "surface, review the change against docs/turnkey_parity/"
         "10__Vendor_Access.md §2 (vendor never-list) and update the snapshot."
     )
 
 
-def test_every_expected_model_is_still_mounted():
-    """Guards the fence itself: if a route/model is unmounted or renamed, the
+def test_every_expected_model_is_still_present():
+    """Guards the fence itself: if a module/model is removed or renamed, the
     snapshot must shrink consciously rather than silently stop covering it."""
-    actual_names = {m.__name__ for m in clinic_response_models()}
+    actual_names = {m.__name__ for m in clinic_models()}
     assert actual_names == set(EXPECTED_MODEL_FIELDS.keys())
 
 
