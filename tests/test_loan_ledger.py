@@ -16,7 +16,9 @@ Run just this file:
     source .venv/bin/activate && \
         python -m pytest tests/test_loan_ledger.py -p no:warnings -q
 """
+import importlib.util
 from datetime import date, datetime, timezone
+from pathlib import Path
 
 from app.services import loan_ledger
 from app.services.loan_servicing import compute_payoff, record_payment
@@ -379,3 +381,16 @@ def test_compute_payoff_uses_the_actuals_ledger():
         quote.principal_cents + quote.accrued_interest_cents
         + quote.fees_due_cents + quote.add_on_balance_cents
     )
+
+# --- migration chain pin (merge-train convention) ------------------------------
+
+
+def test_migration_chain():
+    """Pin 049_loan_ledger's place in the migration chain — the merge train
+    re-chains down_revisions, and a silent fork would split the alembic head."""
+    path = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "049_loan_ledger.py"
+    spec = importlib.util.spec_from_file_location("migration_049", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod.revision == "049_loan_ledger"
+    assert mod.down_revision == "048_underwriting_ops"
