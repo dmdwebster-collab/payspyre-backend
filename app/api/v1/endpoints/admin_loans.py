@@ -18,6 +18,7 @@ from app.core.auth import get_current_user, require_roles
 from app.db.base import get_db
 from app.models.loan import Vendor
 from app.models.platform.credit_application import PlatformCreditApplication
+from app.models.platform.event import PlatformEvent
 from app.models.platform.loan import (
     PlatformLoan,
     PlatformLoanPayment,
@@ -25,6 +26,7 @@ from app.models.platform.loan import (
     PlatformLoanStatement,
 )
 from app.models.platform.patient import PlatformPatient
+from app.services import auto_collection
 from app.services import loan_ledger as ledger_service
 from app.services.loan_servicing import get_loan_status
 
@@ -107,11 +109,119 @@ def get_loan(
     _user=Depends(get_current_user),
 ):
     """Full servicing detail — reuses loan_servicing.get_loan_status (schedule,
-    payments, balances). 404 if the loan doesn't exist."""
+    payments, balances) plus the auto-charge switch state (WS-G). 404 if the
+    loan doesn't exist."""
     detail = get_loan_status(db, loan_id)
     if detail is None:
         raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="Loan not found")
+    loan = db.query(PlatformLoan).filter(PlatformLoan.id == loan_id).first()
+    detail["auto_charge"] = {
+        # Raw per-loan switch: True / False / None (None = inherit platform default).
+        "enabled": loan.auto_charge_enabled,
+        # What the engine actually does for this loan (per-loan switch resolved
+        # against the platform default; the AUTO_COLLECTION_ENABLED feature
+        # flag still gates the engine globally).
+        "effective_enabled": auto_collection.effective_auto_charge(loan),
+        "disabled_reason": loan.auto_charge_disabled_reason,
+    }
     return detail
+
+
+# --- WS-G: Disable / re-enable auto-charges (Turnkey Servicing parity) -------
+
+
+class AutoChargeDisableBody(BaseModel):
+    # Mandatory: why auto-charges are being stopped (dead account, blanket
+    # stop-payment, borrower request, …) — audited verbatim.
+    reason: str
+
+
+@router.post("/{loan_id}/auto-charge/disable")
+def disable_auto_charge(
+    loan_id: UUID,
+    body: AutoChargeDisableBody,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Disable scheduled auto-charges for a loan (the "Disable Auto-Charges"
+    kill switch). Reason is REQUIRED and the change is audited via
+    platform_events. Idempotent — disabling an already-disabled loan just
+    refreshes the reason."""
+    loan = db.query(PlatformLoan).filter(PlatformLoan.id == loan_id).first()
+    if loan is None:
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="Loan not found")
+    reason = (body.reason or "").strip()
+    if not reason:
+        raise HTTPException(
+            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="A reason is required to disable auto-charges",
+        )
+    before = loan.auto_charge_enabled
+    loan.auto_charge_enabled = False
+    loan.auto_charge_disabled_reason = reason[:500]
+    actor = str(getattr(user, "id", "") or "unknown")
+    db.add(
+        PlatformEvent(
+            event_type=auto_collection.AUTO_CHARGE_DISABLED_EVENT,
+            actor=actor,
+            application_id=loan.application_id,
+            payload={
+                "v": 1,
+                "actor": {"type": "staff", "id": actor},
+                "loan_id": str(loan.id),
+                "application_id": str(loan.application_id) if loan.application_id else None,
+                "before": {"auto_charge_enabled": before},
+                "after": {"auto_charge_enabled": False},
+                "reason": reason[:500],
+                "disabled_by": f"staff:{actor}",
+            },
+        )
+    )
+    db.commit()
+    return {
+        "loan_id": str(loan.id),
+        "auto_charge_enabled": False,
+        "disabled_reason": loan.auto_charge_disabled_reason,
+    }
+
+
+@router.post("/{loan_id}/auto-charge/enable")
+def enable_auto_charge(
+    loan_id: UUID,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Re-enable scheduled auto-charges (e.g. after a new default bank account
+    is on file). Clears the disabled reason; audited. Idempotent."""
+    loan = db.query(PlatformLoan).filter(PlatformLoan.id == loan_id).first()
+    if loan is None:
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="Loan not found")
+    before = loan.auto_charge_enabled
+    previous_reason = loan.auto_charge_disabled_reason
+    loan.auto_charge_enabled = True
+    loan.auto_charge_disabled_reason = None
+    actor = str(getattr(user, "id", "") or "unknown")
+    db.add(
+        PlatformEvent(
+            event_type=auto_collection.AUTO_CHARGE_ENABLED_EVENT,
+            actor=actor,
+            application_id=loan.application_id,
+            payload={
+                "v": 1,
+                "actor": {"type": "staff", "id": actor},
+                "loan_id": str(loan.id),
+                "application_id": str(loan.application_id) if loan.application_id else None,
+                "before": {
+                    "auto_charge_enabled": before,
+                    "disabled_reason": previous_reason,
+                },
+                "after": {"auto_charge_enabled": True},
+                "enabled_by": f"staff:{actor}",
+            },
+        )
+    )
+    db.commit()
+    return {"loan_id": str(loan.id), "auto_charge_enabled": True, "disabled_reason": None}
 
 
 def _require_loan(db: Session, loan_id: UUID) -> None:

@@ -170,6 +170,17 @@ class Settings(BaseSettings):
         "magic_link_issued"
     )
 
+    # Auto-collection engine (WS-G, Turnkey parity P0) — MONEY-PATH MASTER FLAG.
+    # When False (the default), the scheduled auto-collection job
+    # (app/jobs/auto_collection.py) exits as a strict no-op: no PAD pulls, no
+    # PAD pre-notifications, no NSF fees, zero DB writes. Flip on only once
+    # (a) Dave signs off the retry / pre-notification policy defaults in
+    # app/services/auto_collection.py, and (b) the Zumrails integration_settings
+    # row points at real (or deliberately sandbox) credentials — the engine
+    # charges through whatever adapter that row builds, so "real adapters on"
+    # is governed by integration_settings, not this flag.
+    AUTO_COLLECTION_ENABLED: bool = False
+
     # Collections / delinquency policy — vendor-dashboard KPIs (spec §4).
     # Grace window in days: an overdue installment is "late" while
     # 1 <= days_past_due <= GRACE_DAYS, and "delinquent" (bureau-reportable,
