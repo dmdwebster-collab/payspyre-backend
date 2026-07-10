@@ -151,6 +151,14 @@ class PlatformLoan(Base):
         cascade="all, delete-orphan",
         order_by="PlatformLoanStatement.period_start",
     )
+    # The immutable money ledger (WS-A). Ordered exactly as the actuals engine
+    # replays it: effective date first, then per-loan sequence for same-day rows.
+    transactions = relationship(
+        "PlatformLoanTransaction",
+        back_populates="loan",
+        cascade="all, delete-orphan",
+        order_by="PlatformLoanTransaction.effective_date, PlatformLoanTransaction.seq",
+    )
 
     def __repr__(self) -> str:
         return (
@@ -234,6 +242,117 @@ class PlatformLoanPayment(Base):
         return (
             f"<PlatformLoanPayment(loan_id={self.loan_id}, "
             f"amount_cents={self.amount_cents}, method={self.method})>"
+        )
+
+
+class PlatformLoanTransaction(Base):
+    """One IMMUTABLE row of the loan money ledger (Dave's "ledger, not
+    transactions" mandate — WS-A, migration 044).
+
+    Rows are never updated or deleted (DB WORM trigger enforces it) —
+    corrections are compensating ``reversal`` rows referencing the original.
+
+    * ``reference`` — Dave's auto-generated ``{vendor_id}-{loan_id}-{seq}``
+      (each component independently filterable; ``seq`` is per-loan, 1-based).
+    * ``effective_date`` vs ``processing_date`` — the dual-date mandate: the
+      date money is TREATED as applied vs the date it was recorded. Equal by
+      default; permission-bounded backdating is a later workstream.
+    * Allocation columns split ``amount_cents`` across the ledger's category
+      buckets (principal / interest / fees / non-accruing add-on).
+    * Money is integer cents; no PII beyond the acting staff id.
+    """
+
+    __tablename__ = "platform_loan_transactions"
+    __table_args__ = (
+        UniqueConstraint("loan_id", "seq", name="uq_platform_loan_txn_loan_seq"),
+        CheckConstraint("amount_cents >= 0", name="ck_platform_loan_txn_amount_nonneg"),
+        # A reversal must point at the row it reverses.
+        CheckConstraint(
+            "txn_type != 'reversal' OR reverses_transaction_id IS NOT NULL",
+            name="ck_platform_loan_txn_reversal_ref",
+        ),
+        Index("ix_platform_loan_txn_loan_effective", "loan_id", "effective_date"),
+        Index("ix_platform_loan_txn_reference", "reference"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    loan_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("platform_loans.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    # Per-loan monotonically increasing sequence (1-based); unique per loan.
+    seq = Column(Integer, nullable=False)
+    # `{vendor_id}-{loan_id}-{seq}` ("none" when the loan has no vendor).
+    reference = Column(String, nullable=False)
+
+    txn_type = Column(
+        ENUM(
+            "payment",
+            "disbursement",
+            "fee",
+            "adjustment",
+            "reversal",
+            name="platform_loan_txn_type",
+            create_type=False,
+        ),
+        nullable=False,
+    )
+    # Reconciliation dimension (Dave: payment-mix metrics). NULL for non-cash rows.
+    payment_type = Column(
+        ENUM(
+            "cash",
+            "check",
+            "eft",
+            "credit_card",
+            "adjustment",
+            name="platform_loan_payment_type",
+            create_type=False,
+        ),
+        nullable=True,
+    )
+    # Repayment modes are wired in a later workstream; the column exists now so
+    # the ledger never needs a money-table migration to add them.
+    repayment_mode = Column(
+        ENUM(
+            "regular",
+            "add_on",
+            "special",
+            "payoff",
+            name="platform_loan_repayment_mode",
+            create_type=False,
+        ),
+        nullable=True,
+    )
+
+    amount_cents = Column(BigInteger, nullable=False)
+    # Allocation buckets — how amount_cents splits across the ledger categories.
+    principal_cents = Column(BigInteger, nullable=False, default=0, server_default="0")
+    interest_cents = Column(BigInteger, nullable=False, default=0, server_default="0")
+    fees_cents = Column(BigInteger, nullable=False, default=0, server_default="0")
+    add_on_cents = Column(BigInteger, nullable=False, default=0, server_default="0")
+
+    effective_date = Column(Date, nullable=False)
+    processing_date = Column(Date, nullable=False)
+
+    # The row this reversal compensates (NULL for non-reversal rows).
+    reverses_transaction_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("platform_loan_transactions.id"),
+        nullable=True,
+    )
+
+    created_by = Column(String, nullable=False)
+    comment = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    loan = relationship("PlatformLoan", back_populates="transactions")
+
+    def __repr__(self) -> str:
+        return (
+            f"<PlatformLoanTransaction(reference={self.reference}, "
+            f"txn_type={self.txn_type}, amount_cents={self.amount_cents})>"
         )
 
 

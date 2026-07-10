@@ -13,6 +13,7 @@ from app.models.platform.loan import (
     PlatformLoanScheduleItem,
     PlatformLoanPayment,
     PlatformLoanStatement,
+    PlatformLoanTransaction,
 )
 from app.models.platform.clinic_membership import PlatformClinicMembership
 from app.models.platform.marketplace import (
@@ -41,6 +42,7 @@ __all__ = [
     "PlatformLoanScheduleItem",
     "PlatformLoanPayment",
     "PlatformLoanStatement",
+    "PlatformLoanTransaction",
     "PlatformClinicMembership",
     "PlatformMarketplaceListing",
     "PlatformMarketplaceVendorInterest",
