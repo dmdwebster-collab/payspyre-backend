@@ -73,6 +73,13 @@ NOTIFICATION_TYPES: dict[str, NotificationSpec] = {
             "{{ account_url }}"
         ),
     ),
+    # WS-E: non-credit cancellation (staff Cancel action). Deliberately NOT the
+    # adverse-action template — cancellation is not a credit decision.
+    "application_cancelled": NotificationSpec(
+        email_template="application_cancelled.html",
+        email_subject="Your PaySpyre application has been cancelled",
+        sms_template=None,  # email-only; the notice carries reason wording
+    ),
     "payment_due_reminder": NotificationSpec(
         email_template="payment_due_reminder.html",
         email_subject="Payment reminder — {{ payment_amount }} due {{ due_date }}",

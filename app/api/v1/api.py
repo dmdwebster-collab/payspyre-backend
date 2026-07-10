@@ -10,6 +10,7 @@ from app.api.v1.endpoints import (
     admin_collections,
     admin_config,
     admin_dashboard,
+    admin_decision_reasons,
     admin_loans,
     admin_system,
     admin_vendor_changes,
@@ -44,6 +45,10 @@ api_router.include_router(admin_actions.router, prefix="/admin", tags=["admin-ac
 api_router.include_router(admin_analytics.router, prefix="/admin/analytics", tags=["admin-analytics"])
 # Phase 3 — config surfaces (RBAC visibility). Products reuse /credit-products. Read-only, admin.
 api_router.include_router(admin_config.router, prefix="/admin/config", tags=["admin-config"])
+# WS-E — reject/cancel decision-reason directory (admin CRUD, soft-deactivate only).
+api_router.include_router(
+    admin_decision_reasons.router, prefix="/admin/decision-reasons", tags=["admin-config"]
+)
 # System mode (Simulation vs Live) — read-only, admin/staff, for the cockpit banner.
 api_router.include_router(admin_system.router, prefix="/admin/system", tags=["admin-system"])
 # Embedded pre-qual widget intake (server-to-server, X-Widget-Key gated; inert until

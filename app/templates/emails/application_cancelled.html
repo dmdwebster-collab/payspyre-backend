@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Application Cancelled</title>
+    <style>
+        body {
+            font-family: 'Work Sans', Arial, sans-serif;
+            line-height: 1.6;
+            color: #1a1a1a;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .header {
+            background: #1a1a1a;
+            color: #fff;
+            padding: 28px;
+            text-align: center;
+            border-radius: 20px 20px 0 0;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 22px;
+        }
+        .content {
+            background: #faf9f6;
+            padding: 30px;
+            border-radius: 0 0 20px 20px;
+        }
+        .info-box {
+            background: #fff;
+            border-left: 4px solid #1a1a1a;
+            padding: 16px;
+            margin: 20px 0;
+            border-radius: 8px;
+        }
+        .footer {
+            text-align: center;
+            margin-top: 28px;
+            color: #666;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Application Cancelled</h1>
+    </div>
+
+    <div class="content">
+        <p>Dear {{ borrower_name }},</p>
+
+        <p>This is to confirm that your PaySpyre credit application
+        (Reference: {{ application_id }}) has been cancelled.</p>
+
+        <div class="info-box">
+            <p>{{ cancel_reason_text }}</p>
+        </div>
+
+        <p>A cancellation is an administrative closure of your application — it is
+        not a credit decision, and it does not affect your credit standing with us.
+        If this cancellation was unexpected, or if you would like to apply again,
+        please contact us or your treatment provider.</p>
+
+        <div class="footer">
+            <p>PaySpyre Financial | Kelowna, BC</p>
+            <p>This is an automated message. Please do not reply to this email.</p>
+            <p>Questions? Contact us at support@payspyre.com</p>
+        </div>
+    </div>
+</body>
+</html>

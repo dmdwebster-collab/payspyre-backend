@@ -25,6 +25,7 @@ from app.models.platform.profile_change_request import (
 from app.models.platform.notification_outbox import PlatformNotificationOutbox
 from app.models.platform.notification_cursor import PlatformNotificationCursor
 from app.models.platform.notification_rule import PlatformNotificationRule
+from app.models.platform.decision_reason import PlatformDecisionReason
 
 __all__ = [
     "PlatformPatient",
@@ -48,4 +49,5 @@ __all__ = [
     "PlatformNotificationOutbox",
     "PlatformNotificationCursor",
     "PlatformNotificationRule",
+    "PlatformDecisionReason",
 ]

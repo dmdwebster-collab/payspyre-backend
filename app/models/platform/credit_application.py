@@ -71,6 +71,14 @@ class PlatformCreditApplication(Base):
     decision_at = Column(DateTime(timezone=True), nullable=True)
     decision_by = Column(String, nullable=True)
 
+    # Underwriting queue assignment (migration 048). Nullable: unassigned is the
+    # default. SET NULL on user delete — the assignment history lives in
+    # platform_events, not here.
+    assigned_to_user_id = Column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    assigned_at = Column(DateTime(timezone=True), nullable=True)
+
     # Self-reported overrides
     self_reported = Column(JSONB, nullable=False, default=lambda: {})
 
