@@ -152,6 +152,33 @@ def test_adjustment_rows_reduce_like_payments():
     assert view.outstanding_principal_cents == 90_000
 
 
+def test_cutover_reconciliation_adjustment_ties_ledger_to_stored_balance():
+    # Migration 044's cutover row: a non-cash adjustment that (a) clears the
+    # replayed accrued interest and (b) moves outstanding onto the operational
+    # balance. Here: stored balance 40_000 while the naive replay says 100_000
+    # with 3_000 accrued (30 days x 100/day) -> row carries
+    # principal_cents=+60_000, interest_cents=3_000 at the cutover date.
+    loan = _Loan(transactions=[
+        _Txn("adjustment", D(2026, 1, 31), amount=63_000,
+             principal=60_000, interest=3_000, payment_type="adjustment"),
+    ])
+    view = loan_ledger.loan_balances(loan, as_of=D(2026, 1, 31))
+    assert view.outstanding_principal_cents == 40_000
+    assert view.interest_due_cents == 0
+    # The sanctioned NEGATIVE direction: principal_cents < 0 raises outstanding
+    # (drift can go either way; only amount_cents is constrained non-negative).
+    loan2 = _Loan(transactions=[
+        _Txn("adjustment", D(2026, 1, 31), amount=8_000,
+             principal=-5_000, interest=3_000, payment_type="adjustment"),
+    ])
+    view2 = loan_ledger.loan_balances(loan2, as_of=D(2026, 1, 31))
+    assert view2.outstanding_principal_cents == 105_000
+    assert view2.interest_due_cents == 0
+    # Accrual continues on the reconciled balance: 10 days x 105/day.
+    view3 = loan_ledger.loan_balances(loan2, as_of=D(2026, 2, 10))
+    assert view3.interest_due_cents == 1_050
+
+
 def test_disbursement_rows_are_informational_never_double_counted():
     # The principal advance is anchored on loan.principal_cents; a disbursement
     # ledger row must not add on top.

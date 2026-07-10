@@ -449,17 +449,18 @@ def record_payment(
        ``platform_loan_transactions`` row is appended for every applied
        payment, allocated by the actuals-based daily-simple-interest engine in
        Turnkey "Regular" mode: accrued interest → principal → fees.
-       ``loan.principal_balance_cents`` is set to the ledger's outstanding
-       principal AFTER this payment (a late payment therefore repays slightly
-       less principal — the extra per-diem days ate more interest — and an
-       early payment slightly more).
+       ``loan.principal_balance_cents`` is decremented by the ledger's
+       PRINCIPAL allocation (a late payment therefore repays slightly less
+       principal — the extra per-diem days ate more interest — and an early
+       payment slightly more).
 
     Side effects:
       * Inserts a PlatformLoanPayment row (the cash receipt / audit trail).
       * Appends the immutable ledger row (dual dates: effective = processing =
         the received date; backdating is a later, permission-gated workstream).
       * Updates installment ``paid_cents``/status per the plan (see 1).
-      * Sets ``loan.principal_balance_cents`` from the actuals ledger (see 2).
+      * Decrements ``loan.principal_balance_cents`` by the actuals-allocated
+        principal (see 2).
       * Flips the loan to ``paid_off`` once every installment is fully paid.
 
     Overpayment beyond everything owed is recorded on the payment/ledger rows
@@ -533,11 +534,15 @@ def record_payment(
     loan.transactions.append(txn)  # keeps the in-session ledger view consistent
     db.add(txn)
 
-    # Outstanding principal now follows the LEDGER (clamped at zero; any
-    # overpayment slice inside allocation.principal_cents cannot drive it
-    # negative).
+    # Outstanding principal moves by the LEDGER allocation (decrement, clamped
+    # at zero). Decrement — rather than overwrite with the ledger-derived
+    # figure — so a loan whose stored balance was established outside the
+    # ledger (e.g. a migrated book before its cutover reconciliation row)
+    # can never have its balance silently "healed" upward by a payment; for
+    # ledger-consistent loans the two are identical (migration 044 reconciles
+    # every pre-existing loan at cutover).
     loan.principal_balance_cents = max(
-        0, balances_before.outstanding_principal_cents - allocation.principal_cents
+        0, loan.principal_balance_cents - allocation.principal_cents
     )
 
     # ---- SCHEDULE (as-agreed plan): installment status flipping ------------

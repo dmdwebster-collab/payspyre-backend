@@ -19,12 +19,19 @@ IMMUTABILITY: rows are WORM — a DB trigger (same pattern as migrations 021/025
 rejects UPDATE and DELETE. Corrections are compensating ``reversal`` rows that
 reference the original via ``reverses_transaction_id``.
 
-BACKFILL: existing ``platform_loan_payments`` rows are replayed into ledger
-rows (txn_type='payment', effective = processing = received date). The
-principal/interest split is reconstructed by replaying the exact allocation
-``record_payment`` used historically (oldest unpaid installment first,
-principal before interest within an installment) — the only historical truth
-available. Fees/add-on are 0 (no fee machinery existed before this ledger).
+BACKFILL (two steps):
+1. Existing ``platform_loan_payments`` rows are replayed into ledger rows
+   (txn_type='payment', effective = processing = received date). The
+   principal/interest split is reconstructed by replaying the exact allocation
+   ``record_payment`` used historically (oldest unpaid installment first,
+   principal before interest within an installment) — the only historical
+   truth available. Fees/add-on are 0 (no fee machinery existed before).
+2. CUTOVER RECONCILIATION: for every pre-existing loan whose actuals-engine
+   replay disagrees with the stored ``principal_balance_cents`` (migrated
+   book, schedule-vs-ACT/365 drift) or carries replayed accrued interest, one
+   non-cash ``adjustment`` row ties ledger outstanding to the operational
+   balance and restarts interest accrual at the cutover date. See
+   ``_reconcile_balances_at_cutover``.
 
 Money is integer cents throughout (repo convention).
 """
@@ -149,6 +156,7 @@ def upgrade() -> None:
     )
 
     _backfill_from_payments(bind)
+    _reconcile_balances_at_cutover(bind)
 
 
 def _backfill_from_payments(bind) -> None:
@@ -250,6 +258,146 @@ def _backfill_from_payments(bind) -> None:
                     "created_at": created_at,
                 },
             )
+
+
+def _accrue_cents(outstanding: int, rate_bps: int, days: int) -> int:
+    """ACT/365 simple interest for a span, round-half-even — the exact math of
+    app.services.interest_engine.accrue_interest_cents, reimplemented here so
+    the migration never imports app code (migrations must stay frozen)."""
+    if days <= 0 or outstanding <= 0 or rate_bps <= 0:
+        return 0
+    numerator = outstanding * rate_bps * days
+    denominator = 10_000 * 365
+    quotient, remainder = divmod(numerator, denominator)
+    doubled = remainder * 2
+    if doubled > denominator or (doubled == denominator and quotient % 2 == 1):
+        quotient += 1
+    return quotient
+
+
+def _reconcile_balances_at_cutover(bind) -> None:
+    """CUTOVER RECONCILIATION: tie every pre-existing loan's ledger to its
+    operational balance, and restart interest accrual at the cutover date.
+
+    Pre-existing loans fall into two camps the actuals engine cannot fully
+    reconstruct on its own:
+
+      * migrated / legacy loans (e.g. turnkey_migration): their
+        ``principal_balance_cents`` was established OUTSIDE the payments table
+        (no ledger history exists), so a pure replay would report the ORIGINAL
+        principal as outstanding and years of phantom per-diem interest;
+      * natively-serviced loans: their historical payments were allocated by
+        the schedule engine (period interest), so a pure ACT/365 replay can
+        drift from the operational balance by cents and carry a retroactive
+        interest residue.
+
+    For every loan where the engine's replay at the cutover date disagrees with
+    the stored balance (or carries accrued interest), ONE non-cash
+    ``adjustment`` row is appended, effective at the cutover date, that:
+
+      * clears the replayed accrued interest (interest_cents), and
+      * moves outstanding principal onto the stored ``principal_balance_cents``
+        (principal_cents; NEGATIVE when outstanding must move UP — allocation
+        columns are signed, only amount_cents is constrained non-negative).
+
+    After the row: ledger outstanding == stored balance and interest due == 0.
+    Everything forward is pure actuals. Interest accrued before cutover is the
+    schedule engine's business (already embedded in the stored balance /
+    historical allocations) — flagged for Dave in the PR.
+    """
+    from datetime import date as _date
+
+    cutover = _date.today()
+
+    loans = bind.execute(
+        sa.text(
+            """
+            SELECT l.id, l.principal_cents, l.principal_balance_cents,
+                   l.annual_rate_bps, l.disbursed_at, a.vendor_id
+            FROM platform_loans l
+            LEFT JOIN platform_credit_applications a ON a.id = l.application_id
+            """
+        )
+    ).fetchall()
+
+    insert = sa.text(
+        """
+        INSERT INTO platform_loan_transactions
+            (id, loan_id, seq, reference, txn_type, payment_type, repayment_mode,
+             amount_cents, principal_cents, interest_cents, fees_cents, add_on_cents,
+             effective_date, processing_date, created_by, comment)
+        VALUES
+            (:id, :loan_id, :seq, :reference, 'adjustment', 'adjustment', NULL,
+             :amount_cents, :principal_cents, :interest_cents, 0, 0,
+             :effective_date, :effective_date, 'migration_044_backfill', :comment)
+        """
+    )
+    comment = (
+        "Ledger cutover reconciliation (non-cash): ties actuals-engine "
+        "outstanding to the operational balance and restarts interest accrual "
+        "at cutover"
+    )
+
+    for loan_id, principal_cents, stored_balance, rate_bps, disbursed_at, vendor_id in loans:
+        rows = bind.execute(
+            sa.text(
+                """
+                SELECT effective_date, principal_cents, interest_cents, seq
+                FROM platform_loan_transactions
+                WHERE loan_id = :loan_id AND txn_type IN ('payment', 'adjustment')
+                ORDER BY effective_date, seq
+                """
+            ),
+            {"loan_id": loan_id},
+        ).fetchall()
+
+        # Replay the engine's walk (same semantics as interest_engine
+        # .compute_balances: accrue per span, interest first, excess interest
+        # redirects to principal, clamps at zero).
+        accrual_start = disbursed_at.date() if disbursed_at is not None else None
+        outstanding = max(0, principal_cents)
+        interest_due = 0
+        cursor = accrual_start
+        for eff, prin_paid, int_paid, _seq in rows:
+            if eff > cutover:
+                continue
+            if cursor is not None and eff > cursor:
+                interest_due += _accrue_cents(outstanding, rate_bps, (eff - cursor).days)
+                cursor = eff
+            excess = max(0, (int_paid or 0) - interest_due)
+            interest_due = max(0, interest_due - (int_paid or 0))
+            outstanding = max(0, outstanding - (prin_paid or 0) - excess)
+        if cursor is not None and cutover > cursor:
+            interest_due += _accrue_cents(outstanding, rate_bps, (cutover - cursor).days)
+
+        principal_gap = outstanding - stored_balance  # >0: reduce; <0: raise
+        if principal_gap == 0 and interest_due == 0:
+            continue  # already consistent — no reconciliation row
+
+        seq = (
+            bind.execute(
+                sa.text(
+                    "SELECT COALESCE(MAX(seq), 0) FROM platform_loan_transactions "
+                    "WHERE loan_id = :loan_id"
+                ),
+                {"loan_id": loan_id},
+            ).scalar()
+            + 1
+        )
+        bind.execute(
+            insert,
+            {
+                "id": str(uuid4()),
+                "loan_id": loan_id,
+                "seq": seq,
+                "reference": f"{vendor_id or 'none'}-{loan_id}-{seq}",
+                "amount_cents": abs(principal_gap) + interest_due,
+                "principal_cents": principal_gap,
+                "interest_cents": interest_due,
+                "effective_date": cutover,
+                "comment": comment,
+            },
+        )
 
 
 def _payment_type_for_method(method) -> str:

@@ -62,9 +62,12 @@ class LedgerEvent:
     """One money event, already mapped from a ledger row (or synthesized).
 
     ``*_paid_cents`` reduce the respective bucket (cash in / adjustments);
-    ``*_charged_cents`` increase it (fee assessments). All values are
-    non-negative; direction is carried by which field is used — a reversal is
-    mapped by the caller into the opposite fields of the original event.
+    ``*_charged_cents`` increase it (fee assessments). Values are normally
+    non-negative — direction is carried by which field is used (a reversal is
+    mapped by the caller into the opposite fields of the original event). The
+    one sanctioned exception: a cutover-reconciliation ADJUSTMENT row may carry
+    a negative ``principal_paid_cents`` to move outstanding principal UP onto
+    the operational balance (migration 044).
     """
 
     effective_date: date
