@@ -85,6 +85,10 @@ app.add_middleware(
         "X-Request-ID",
         "X-Didit-Signature",
         "X-Persona-Signature",
+        "Idempotency-Key",
+        "X-Alvero-Tenant",
+        "X-Alvero-Timestamp",
+        "X-Alvero-Signature",
     ],
     expose_headers=_CORS_EXPOSE_HEADERS,
     max_age=600,
@@ -232,3 +236,8 @@ app.include_router(webhook_router, prefix="/api/webhooks/v1")
 from app.api.metrics import metrics_router  # noqa: E402
 
 app.include_router(metrics_router)
+
+# Alvero server-to-server API (HMAC-authenticated).
+from app.api.alvero import router as alvero_router  # noqa: E402
+
+app.include_router(alvero_router)

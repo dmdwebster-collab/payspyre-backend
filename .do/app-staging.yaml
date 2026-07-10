@@ -73,7 +73,14 @@ services:
     value: "30"
   - key: CORS_ORIGINS
     scope: RUN_TIME
-    value: http://localhost:3000   # add the staging frontend origin once deployed
+    value: https://staging.payspyre.com,http://localhost:3000
+  - key: ALVERO_TENANT_KEY_KDC
+    scope: RUN_TIME
+    type: SECRET
+    value: ${alvero.ALVERO_TENANT_KEY_KDC}
+  - key: PAYSPYRE_PORTAL_BASE_URL
+    scope: RUN_TIME
+    value: https://staging.payspyre.com
 
 # Run DB migrations to head BEFORE the new service goes live (else a fresh
 # managed Postgres has no tables and every request 500s). `python -m alembic`
@@ -104,3 +111,6 @@ databases:
   engine: PG
   version: "16"
   production: false
+  cluster_name: payspyre-db-staging
+  db_name: payspyre_staging
+  db_user: payspyre

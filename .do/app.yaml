@@ -46,6 +46,13 @@ services:
   - key: CORS_ORIGINS
     scope: RUN_TIME
     value: https://payspyre.com
+  - key: ALVERO_TENANT_KEY_KDC
+    scope: RUN_TIME
+    type: SECRET
+    value: ${alvero.ALVERO_TENANT_KEY_KDC}
+  - key: PAYSPYRE_PORTAL_BASE_URL
+    scope: RUN_TIME
+    value: https://portal.payspyre.app
 
 # Run DB migrations to head BEFORE the new service goes live (else a fresh
 # managed Postgres has no tables and every request 500s). DATABASE_URL binds
