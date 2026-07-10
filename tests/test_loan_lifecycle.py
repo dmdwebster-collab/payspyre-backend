@@ -123,6 +123,7 @@ class _Loan:
         self.disbursed_at = None
         self.schedule = schedule or []
         self.payments = payments or []
+        self.transactions = []  # WS-A actuals ledger
 
 
 def _dt(y, m, d):
@@ -573,54 +574,48 @@ def test_run_delinquency_aging_skips_non_active_loans():
 # ===========================================================================
 
 
-def test_compute_payoff_principal_plus_accrued_interest():
-    # 3 installments due monthly; as_of after installments 1 & 2 are due.
-    sched = [
-        _Item(1, 100, 10, due_date=date(2026, 4, 1), status="paid", paid=110),
-        _Item(2, 100, 10, due_date=date(2026, 5, 1), status="scheduled", paid=0),
-        _Item(3, 100, 10, due_date=date(2026, 6, 1), status="scheduled", paid=0),
-    ]
-    # Installment 1 fully paid -> principal balance reduced by 100 -> 200 left.
-    loan = _Loan(schedule=sched, principal_cents=300, principal_balance_cents=200)
+def test_compute_payoff_principal_plus_accrued_per_diem_interest():
+    # WS-A actuals engine: payoff = outstanding principal + daily simple
+    # interest accrued from the DISBURSEMENT date to as_of (per-diem on the
+    # ledger's actual history — the schedule no longer drives payoff).
+    # 100_000 cents at 3650 bps -> per-diem = 100_000 * 0.365 / 365 = 100/day.
+    loan = _Loan(principal_cents=100_000, principal_balance_cents=100_000,
+                 annual_rate_bps=3650, status="active")
+    loan.disbursed_at = datetime(2026, 4, 1, tzinfo=timezone.utc)
 
-    # as_of covers installments 1 & 2 (due <= as_of), not 3.
-    quote = compute_payoff(None, loan, as_of=date(2026, 5, 15))
+    quote = compute_payoff(None, loan, as_of=date(2026, 5, 1))  # 30 days
 
     assert isinstance(quote, PayoffQuote)
-    assert quote.principal_cents == 200
-    # Accrued interest = unpaid interest of installments 1 & 2.
-    # Inst 1 fully paid (interest covered). Inst 2 unpaid -> 10 accrued.
-    assert quote.accrued_interest_cents == 10
-    assert quote.payoff_cents == 210
+    assert quote.principal_cents == 100_000
+    assert quote.accrued_interest_cents == 3_000  # 30 days x 100/day
+    assert quote.fees_due_cents == 0
+    assert quote.add_on_balance_cents == 0
+    assert quote.payoff_cents == 103_000
 
 
 def test_compute_payoff_excludes_future_interest():
-    sched = [
-        _Item(1, 100, 10, due_date=date(2026, 4, 1), status="scheduled", paid=0),
-        _Item(2, 100, 10, due_date=date(2026, 7, 1), status="scheduled", paid=0),
-    ]
-    loan = _Loan(schedule=sched, principal_cents=200, principal_balance_cents=200)
+    # Payoff on the disbursement day itself carries ZERO interest — the actuals
+    # engine never charges unearned future interest (0% future interest).
+    loan = _Loan(principal_cents=200_000, principal_balance_cents=200_000,
+                 annual_rate_bps=1299, status="active")
+    loan.disbursed_at = datetime(2026, 5, 1, tzinfo=timezone.utc)
 
     quote = compute_payoff(None, loan, as_of=date(2026, 5, 1))
 
-    # Only installment 1 has accrued (due before as_of); installment 2 is future.
-    assert quote.accrued_interest_cents == 10
-    assert quote.payoff_cents == 210
+    assert quote.accrued_interest_cents == 0
+    assert quote.payoff_cents == 200_000
 
 
-def test_compute_payoff_partial_payment_fills_principal_before_interest():
-    # Installment due & partially paid: 50 paid, principal 100 -> all 50 to
-    # principal, interest 10 still fully unpaid.
-    sched = [
-        _Item(1, 100, 10, due_date=date(2026, 4, 1), status="partial", paid=50),
-    ]
-    loan = _Loan(schedule=sched, principal_cents=100, principal_balance_cents=50)
+def test_compute_payoff_no_disbursement_accrues_nothing():
+    # A loan whose money never went out accrues no interest at all.
+    loan = _Loan(principal_cents=100_000, principal_balance_cents=100_000,
+                 annual_rate_bps=2999)
+    assert loan.disbursed_at is None
 
-    quote = compute_payoff(None, loan, as_of=date(2026, 5, 1))
+    quote = compute_payoff(None, loan, as_of=date(2027, 1, 1))
 
-    assert quote.principal_cents == 50
-    assert quote.accrued_interest_cents == 10
-    assert quote.payoff_cents == 60
+    assert quote.accrued_interest_cents == 0
+    assert quote.payoff_cents == 100_000
 
 
 # ===========================================================================

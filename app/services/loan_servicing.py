@@ -34,7 +34,10 @@ from app.models.platform.loan import (
     PlatformLoanPayment,
     PlatformLoanScheduleItem,
     PlatformLoanStatement,
+    PlatformLoanTransaction,
 )
+from app.services import loan_ledger
+from app.services.interest_engine import allocate_regular_payment
 from app.services.loan_quote import (
     CRIMINAL_RATE_CAP_BPS,
     compute_apr_bps,
@@ -428,24 +431,40 @@ def record_payment(
     received_at: datetime,
     method: str,
     external_ref: Optional[str] = None,
+    *,
+    created_by: str = "system",
+    comment: Optional[str] = None,
 ) -> PlatformLoanPayment:
-    """Apply a received payment to a loan.
+    """Apply a received payment to a loan. MONEY-PATH (WS-A actuals engine).
 
-    APPLICATION ORDER: oldest unpaid/partial installment first (by
-    installment_number). The payment is consumed across installments until the
-    funds are exhausted; each installment is filled up to its ``total_cents``.
+    TWO parallel books are updated, with distinct jobs:
+
+    1. THE SCHEDULE (the as-agreed PLAN) — unchanged behaviour: the payment
+       fills the oldest unpaid/partial installment first (by
+       installment_number), flipping installment statuses (``paid`` /
+       ``partial``), curing delinquency, and flipping the loan to ``paid_off``
+       when every installment is covered. This drives DPD/status only.
+
+    2. THE LEDGER (the MONEY TRUTH) — an immutable
+       ``platform_loan_transactions`` row is appended for every applied
+       payment, allocated by the actuals-based daily-simple-interest engine in
+       Turnkey "Regular" mode: accrued interest → principal → fees.
+       ``loan.principal_balance_cents`` is set to the ledger's outstanding
+       principal AFTER this payment (a late payment therefore repays slightly
+       less principal — the extra per-diem days ate more interest — and an
+       early payment slightly more).
 
     Side effects:
       * Inserts a PlatformLoanPayment row (the cash receipt / audit trail).
-      * Increments ``paid_cents`` on the installments it covers and flips their
-        status: ``paid`` when fully covered, ``partial`` otherwise.
-      * Reduces ``loan.principal_balance_cents`` by the PRINCIPAL portion of the
-        installments covered (interest does not reduce principal balance).
+      * Appends the immutable ledger row (dual dates: effective = processing =
+        the received date; backdating is a later, permission-gated workstream).
+      * Updates installment ``paid_cents``/status per the plan (see 1).
+      * Sets ``loan.principal_balance_cents`` from the actuals ledger (see 2).
       * Flips the loan to ``paid_off`` once every installment is fully paid.
 
-    Overpayment beyond the final installment is recorded on the payment row but
-    not auto-refunded (out of scope for the spine) — it simply leaves the loan
-    paid off with the receipt on file.
+    Overpayment beyond everything owed is recorded on the payment/ledger rows
+    but not auto-refunded (flagged for Dave; refund policy is a later
+    workstream).
     """
     if amount_cents <= 0:
         raise ValueError("amount_cents must be positive")
@@ -476,7 +495,54 @@ def record_payment(
     )
     db.add(payment)
 
-    # Schedule rows in due order. Use the relationship if loaded; otherwise query.
+    # ---- LEDGER (money truth): actuals-based allocation --------------------
+    # Balances as of the payment's EFFECTIVE date (per-diem interest accrued
+    # from the previous ledger event on actual calendar days), then Regular-mode
+    # waterfall: accrued interest → principal → fees.
+    effective_date = received_at.date()
+    balances_before = loan_ledger.loan_balances(loan, as_of=effective_date)
+    allocation = allocate_regular_payment(amount_cents, balances_before)
+
+    vendor_id = None
+    if getattr(loan, "application_id", None) is not None:
+        app_row = (
+            db.query(PlatformCreditApplication)
+            .filter(PlatformCreditApplication.id == loan.application_id)
+            .first()
+        )
+        vendor_id = getattr(app_row, "vendor_id", None)
+
+    seq = loan_ledger.next_seq(loan)
+    txn = PlatformLoanTransaction(
+        loan_id=loan.id,
+        seq=seq,
+        reference=loan_ledger.build_reference(vendor_id, loan.id, seq),
+        txn_type="payment",
+        payment_type=loan_ledger.payment_type_for_method(method),
+        repayment_mode="regular",
+        amount_cents=amount_cents,
+        principal_cents=allocation.principal_cents,
+        interest_cents=allocation.interest_cents,
+        fees_cents=allocation.fees_cents,
+        add_on_cents=allocation.add_on_cents,
+        effective_date=effective_date,
+        processing_date=effective_date,
+        created_by=created_by,
+        comment=comment,
+    )
+    loan.transactions.append(txn)  # keeps the in-session ledger view consistent
+    db.add(txn)
+
+    # Outstanding principal now follows the LEDGER (clamped at zero; any
+    # overpayment slice inside allocation.principal_cents cannot drive it
+    # negative).
+    loan.principal_balance_cents = max(
+        0, balances_before.outstanding_principal_cents - allocation.principal_cents
+    )
+
+    # ---- SCHEDULE (as-agreed plan): installment status flipping ------------
+    # Unchanged behaviour: fill oldest unpaid installment first. This no longer
+    # moves money — it only tracks plan progress for DPD / statuses.
     schedule = sorted(
         loan.schedule,
         key=lambda s: s.installment_number,
@@ -496,13 +562,6 @@ def record_payment(
 
         applied = min(remaining, outstanding)
 
-        # Principal portion of THIS applied amount: principal is filled before
-        # interest within the installment's own (principal, interest) split.
-        principal_outstanding = max(
-            0, item.principal_cents - max(0, item.paid_cents)
-        )
-        principal_applied = min(applied, principal_outstanding)
-
         item.paid_cents += applied
         remaining -= applied
 
@@ -511,14 +570,13 @@ def record_payment(
         else:
             item.status = "partial"
 
-        loan.principal_balance_cents = max(
-            0, loan.principal_balance_cents - principal_applied
-        )
-
     # Loan-level status transitions.
     if all(s.status in ("paid", "waived") for s in schedule) and schedule:
+        # The plan is complete → paid_off (existing behaviour). NOTE: the
+        # actuals ledger may carry a small residue (per-diem interest vs the
+        # schedule's period interest); closure/true-up is the Payoff repayment
+        # mode (later workstream). Flagged for Dave.
         loan.status = "paid_off"
-        loan.principal_balance_cents = 0
     elif loan.status == "delinquent":
         # Delinquency cure: a delinquent loan returns to ``active`` once it has no
         # overdue, unpaid installment left — the exact inverse of the condition
@@ -554,6 +612,15 @@ def record_payment(
                     "method": method,
                     "loan_status": loan.status,
                     "principal_balance_cents": loan.principal_balance_cents,
+                    # WS-A ledger row (actuals allocation): ids + cents only.
+                    "ledger_reference": txn.reference,
+                    "allocation": {
+                        "interest_cents": allocation.interest_cents,
+                        "principal_cents": allocation.principal_cents,
+                        "fees_cents": allocation.fees_cents,
+                        "add_on_cents": allocation.add_on_cents,
+                        "overpayment_cents": allocation.overpayment_cents,
+                    },
                 },
             },
         )
@@ -830,46 +897,34 @@ class PayoffQuote:
     principal_cents: int
     accrued_interest_cents: int
     payoff_cents: int
+    fees_due_cents: int = 0
+    add_on_balance_cents: int = 0
 
 
 def compute_payoff(db: Session, loan: PlatformLoan, as_of: date) -> PayoffQuote:
     """Compute the amount required to fully pay off ``loan`` as of ``as_of``.
 
-    payoff = remaining principal + accrued interest.
+    ACTUALS ENGINE (WS-A — Turnkey parity, Dave's spec):
 
-    * REMAINING PRINCIPAL is ``loan.principal_balance_cents`` (the spine reduces
-      it by the principal portion of each payment).
-    * ACCRUED INTEREST is the unpaid interest on every installment whose
-      ``due_date <= as_of`` — interest that has already accrued (the borrower
-      has reached that period) but has not yet been covered by payments. For
-      each such installment, the unpaid interest is the installment's interest
-      minus the interest portion already paid into it; partial payments fill
-      principal before interest (mirrors ``record_payment``), so a partially
-      paid installment may still owe some or all of its interest.
+        payoff = 100% outstanding principal
+               + daily simple interest accrued to ``as_of`` (per-diem on the
+                 ACTUAL payment history in the ledger — NOT the schedule)
+               + fees due
+               + add-on balance
+        …and 0% future interest, by construction (interest is accrued only up
+        to ``as_of``).
 
-    Future installments (due after ``as_of``) contribute no accrued interest —
-    the borrower pays off early and is not charged unearned future interest.
+    The header-math invariant (04__WP_Collections) holds exactly:
+    principal + interest due + fees due + add-on balance == payoff.
 
     Pure read: no writes, no commit.
     """
-    schedule = sorted(loan.schedule, key=lambda s: s.installment_number)
-
-    accrued_interest = 0
-    for item in schedule:
-        if item.due_date > as_of:
-            continue
-        if item.status == "waived":
-            continue
-        # Of what's been paid into this installment, principal is satisfied
-        # first; the remainder (if any) covers interest.
-        interest_paid = max(0, item.paid_cents - item.principal_cents)
-        unpaid_interest = max(0, item.interest_cents - interest_paid)
-        accrued_interest += unpaid_interest
-
-    principal = max(0, loan.principal_balance_cents)
+    balances = loan_ledger.loan_balances(loan, as_of=as_of)
     return PayoffQuote(
         as_of=as_of,
-        principal_cents=principal,
-        accrued_interest_cents=accrued_interest,
-        payoff_cents=principal + accrued_interest,
+        principal_cents=balances.outstanding_principal_cents,
+        accrued_interest_cents=balances.interest_due_cents,
+        payoff_cents=balances.payoff_cents,
+        fees_due_cents=balances.fees_due_cents,
+        add_on_balance_cents=balances.add_on_balance_cents,
     )
