@@ -368,7 +368,10 @@ class PayNowResponse(BaseModel):
     transaction_id: str
     status: str
     amount_cents: int
-    repayment_mode: str
+    # Defaulted, not required: the pre-WS-F contract (3 fields) must keep
+    # working unchanged for existing callers/stubs of the service layer; the
+    # real service always populates the mode.
+    repayment_mode: str = "regular"
 
 
 class PaymentOptions(BaseModel):
