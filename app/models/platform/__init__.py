@@ -3,6 +3,10 @@ from app.models.platform.patient_field import PlatformPatientField
 from app.models.platform.credit_product import PlatformCreditProduct
 from app.models.platform.credit_application import PlatformCreditApplication
 from app.models.platform.secondary_income import PlatformApplicationSecondaryIncome
+from app.models.platform.application_history import (
+    PlatformApplicationAddressHistory,
+    PlatformApplicationEmploymentHistory,
+)
 from app.models.platform.verification import PlatformVerification
 from app.models.platform.consent import PlatformConsent
 from app.models.platform.application_document import PlatformApplicationDocument
@@ -33,6 +37,8 @@ __all__ = [
     "PlatformCreditProduct",
     "PlatformCreditApplication",
     "PlatformApplicationSecondaryIncome",
+    "PlatformApplicationAddressHistory",
+    "PlatformApplicationEmploymentHistory",
     "PlatformVerification",
     "PlatformConsent",
     "PlatformApplicationDocument",

@@ -177,6 +177,34 @@ class Settings(BaseSettings):
     # collections policy can tune the grace window without a code change.
     GRACE_DAYS: int = 15
 
+    # --- Intake policy (P0 schema pack, Dave's mandates) ---------------------
+    # Income types acceptable on NEW intake (CSV of platform_income_type values).
+    # Dave removed EI ("Employment insurance is not a valid source of income")
+    # and Student ("not a valid income source") — so 'employment_insurance' is
+    # deliberately absent here and 'student' was never an enum value. STORAGE
+    # stays permissive (the DB enum keeps 'employment_insurance' for legacy
+    # rows); this allowlist gates request validation only. Config-driven so
+    # policy can change without a code change.
+    INTAKE_INCOME_TYPE_ALLOWLIST: str = (
+        "employed_full_time,employed_part_time,employed_seasonal,"
+        "self_employed,retirement_pension,disability,other"
+    )
+    # Rejected free-text income labels for the manual-application path (which
+    # accepts human labels, not enum values). Normalized (lowercase, non-alnum
+    # collapsed to '_') before comparison.
+    INTAKE_INCOME_TYPE_BLOCKLIST: str = "employment_insurance,ei,student"
+
+    # History coverage policy (3-year address + employment history).
+    # Required window = HISTORY_YEARS_REQUIRED back from today, shortened to the
+    # applicant's age of majority when they are younger than majority + years.
+    # DEFAULTS FLAGGED FOR DAVE: age of majority is 19 in BC (18 in AB/ON/…) —
+    # 18 is the stricter default (demands more history from 19-21 year olds).
+    # GAP_TOLERANCE allows month-granularity fuzziness between consecutive
+    # entries without failing coverage.
+    HISTORY_YEARS_REQUIRED: int = 3
+    HISTORY_AGE_OF_MAJORITY_YEARS: int = 18
+    HISTORY_GAP_TOLERANCE_DAYS: int = 31
+
     # CORS
     CORS_ORIGINS: str = "http://localhost:3000,https://payspyre.com"
 

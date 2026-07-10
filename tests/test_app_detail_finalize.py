@@ -173,8 +173,10 @@ def test_finalize_body_exclude_unset_only_reports_sent_fields():
 
 def test_finalize_columns_cover_every_writable_canonical_column():
     """Every column the finalize body can set must be listed in _FINALIZE_COLUMNS
-    (minus secondary_incomes, handled separately) — a drift guard."""
-    body_fields = set(FinalizeApplicationBody.model_fields.keys()) - {"secondary_incomes"}
+    (minus the child-row collections, handled separately) — a drift guard."""
+    body_fields = set(FinalizeApplicationBody.model_fields.keys()) - set(
+        finalize_module._COLLECTION_FIELDS
+    )
     assert body_fields == set(finalize_module._FINALIZE_COLUMNS)
 
 

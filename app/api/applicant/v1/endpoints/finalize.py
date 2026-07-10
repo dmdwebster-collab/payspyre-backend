@@ -47,9 +47,20 @@ from app.api.platform_application_serialization import (
     CanonicalApplicationDetail,
     build_canonical_detail,
 )
+from app.core.application_history import (
+    ADDRESS_SNAPSHOT_FIELDS,
+    EMPLOYMENT_SNAPSHOT_FIELDS,
+    snapshot_prior_address,
+    snapshot_prior_employment,
+    validate_history_entries,
+)
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.base import get_db
+from app.models.platform.application_history import (
+    PlatformApplicationAddressHistory,
+    PlatformApplicationEmploymentHistory,
+)
 from app.models.platform.credit_application import PlatformCreditApplication
 from app.models.platform.event import PlatformEvent
 from app.models.platform.patient import PlatformPatient
@@ -79,7 +90,12 @@ _FINALIZE_COLUMNS = (
     # Financial
     "number_of_credit_accounts", "car_ownership", "monthly_car_payment_cents",
     "non_discretionary_expenses_cents",
+    # Co-borrower separate-file linking metadata (migration 046)
+    "relationship_to_primary",
 )
+
+# Body fields handled as child-row collections, not scalar columns.
+_COLLECTION_FIELDS = ("secondary_incomes", "address_history", "employment_history")
 
 # Statuses from which the applicant may finalize: the pre-decision states plus an
 # idempotent re-finalize while already routed (under_review / verifying /
@@ -104,7 +120,11 @@ def get_application_detail(
     application = (
         db.query(PlatformCreditApplication)
         .filter(PlatformCreditApplication.id == application_id)
-        .options(joinedload(PlatformCreditApplication.secondary_incomes))
+        .options(
+            joinedload(PlatformCreditApplication.secondary_incomes),
+            joinedload(PlatformCreditApplication.address_history),
+            joinedload(PlatformCreditApplication.employment_history),
+        )
         .first()
     )
     if application is None:
@@ -114,7 +134,17 @@ def get_application_detail(
         .filter(PlatformPatient.id == application.patient_id)
         .first()
     )
-    return build_canonical_detail(application, patient)
+    # Co-borrower separate-file linking: a primary file lists its linked
+    # co-borrower application files (each a full application of its own).
+    linked_ids = [
+        row[0]
+        for row in db.query(PlatformCreditApplication.id)
+        .filter(
+            PlatformCreditApplication.co_applicant_of_application_id == application_id
+        )
+        .all()
+    ]
+    return build_canonical_detail(application, patient, linked_application_ids=linked_ids)
 
 
 @router.post("/{application_id}/finalize", response_model=FinalizeApplicationResponse)
@@ -154,7 +184,36 @@ def finalize_application(
         )
 
     now = datetime.now(timezone.utc)
+    today = now.date()
     provided = body.model_dump(exclude_unset=True)
+
+    # --- validate 3-year history coverage (when history lists are sent) ------
+    # Coverage window: 3 years back (config) or since age of majority. DOB comes
+    # from the payload when sent, else the stored canonical column.
+    dob = provided.get("date_of_birth", application.date_of_birth)
+    history_errors: list[str] = []
+    if body.address_history is not None:
+        history_errors += validate_history_entries(
+            body.address_history, today=today, date_of_birth=dob, label="address_history"
+        )
+    if body.employment_history is not None:
+        history_errors += validate_history_entries(
+            body.employment_history, today=today, date_of_birth=dob, label="employment_history"
+        )
+    if history_errors:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=history_errors
+        )
+
+    # Capture the prior CURRENT address/employment values before applying the
+    # edit, so an edited current entry is VERSIONED into history, not lost.
+    prior_address = {col: getattr(application, col) for col in ADDRESS_SNAPSHOT_FIELDS}
+    prior_employment = {
+        col: getattr(application, col) for col in EMPLOYMENT_SNAPSHOT_FIELDS
+    }
+    prior_employment["income_type"] = (
+        str(application.income_type) if application.income_type is not None else None
+    )
 
     # --- persist scalar canonical fields (only those the client sent) --------
     changed_fields: list[str] = []
@@ -162,6 +221,25 @@ def finalize_application(
         if col in provided:
             setattr(application, col, provided[col])
             changed_fields.append(col)
+
+    # --- version-not-overwrite: snapshot the prior current entry -------------
+    # Only when the client did NOT send an explicit history list in the same
+    # request (an explicit list is the applicant's full declared picture and
+    # replaces the applicant-declared rows below).
+    if body.address_history is None:
+        snap = snapshot_prior_address(prior_address, provided, today=today)
+        if snap is not None:
+            application.address_history.append(
+                PlatformApplicationAddressHistory(application_id=application.id, **snap)
+            )
+            changed_fields.append("address_history_versioned")
+    if body.employment_history is None:
+        snap = snapshot_prior_employment(prior_employment, provided, today=today)
+        if snap is not None:
+            application.employment_history.append(
+                PlatformApplicationEmploymentHistory(application_id=application.id, **snap)
+            )
+            changed_fields.append("employment_history_versioned")
 
     # --- secondary-income child rows (replace-on-present) --------------------
     if body.secondary_incomes is not None:
@@ -177,6 +255,38 @@ def finalize_application(
                 )
             )
         changed_fields.append("secondary_incomes")
+
+    # --- history child rows (replace-on-present, preserving versioned rows) --
+    if body.address_history is not None:
+        application.address_history = [
+            row for row in application.address_history
+            if row.entry_source == "versioned_edit"
+        ]
+        db.flush()
+        for entry in body.address_history:
+            application.address_history.append(
+                PlatformApplicationAddressHistory(
+                    application_id=application.id,
+                    entry_source="applicant",
+                    **entry.model_dump(exclude_unset=False),
+                )
+            )
+        changed_fields.append("address_history")
+    if body.employment_history is not None:
+        application.employment_history = [
+            row for row in application.employment_history
+            if row.entry_source == "versioned_edit"
+        ]
+        db.flush()
+        for entry in body.employment_history:
+            application.employment_history.append(
+                PlatformApplicationEmploymentHistory(
+                    application_id=application.id,
+                    entry_source="applicant",
+                    **entry.model_dump(exclude_unset=False),
+                )
+            )
+        changed_fields.append("employment_history")
 
     # --- route into the decision/underwriting flow ---------------------------
     # A test/mock application (simulation mode: no real vendor will return a
