@@ -67,7 +67,7 @@ class LedgerEvent:
     mapped by the caller into the opposite fields of the original event). The
     one sanctioned exception: a cutover-reconciliation ADJUSTMENT row may carry
     a negative ``principal_paid_cents`` to move outstanding principal UP onto
-    the operational balance (migration 044).
+    the operational balance (migration 049).
     """
 
     effective_date: date

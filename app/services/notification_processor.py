@@ -56,9 +56,16 @@ SKIPPED_EVENT_TYPE = "notification_skipped"
 DASHBOARD_EVENT_TYPE = "dashboard_notification"
 DASHBOARD_CHANNEL = "dashboard"
 
-# Event types the processor reacts to. decision_made is transactional; the two
-# payment_* types are the synthetic events WS3's dunning job emits.
-TRIGGER_EVENT_TYPES = ("decision_made", "payment_due_reminder", "payment_overdue")
+# Event types the processor reacts to. decision_made and application_cancelled
+# (WS-E staff Cancel — a non-credit closure, so NOT an adverse-action notice)
+# are transactional; the two payment_* types are the synthetic events WS3's
+# dunning job emits.
+TRIGGER_EVENT_TYPES = (
+    "decision_made",
+    "application_cancelled",
+    "payment_due_reminder",
+    "payment_overdue",
+)
 
 
 @dataclass(frozen=True)
@@ -222,6 +229,8 @@ class NotificationProcessor:
         etype = ev["event_type"]
         if etype == "decision_made":
             return self._plan_decision(ev)
+        if etype == "application_cancelled":
+            return self._plan_cancelled(ev)
         if etype in ("payment_due_reminder", "payment_overdue"):
             return self._plan_passthrough(ev)
         return []
@@ -240,6 +249,34 @@ class NotificationProcessor:
         # manual_review (under_review) → deferred: the under-review template
         # needs a review-SLA business input + bespoke fields. Tracked follow-up.
         return []
+
+    def _plan_cancelled(self, ev) -> list[NotificationPlan]:
+        """WS-E staff Cancel — notify the applicant of the NON-CREDIT closure.
+
+        The event payload carries the reason directory's borrower_facing_text as
+        snapshotted at cancel time (never PII); the borrower's name is looked up
+        at send time like the approval path does. Email-only."""
+        from app.models.platform.patient import PlatformPatient
+
+        payload = ev["payload"] or {}
+        reason_text = payload.get("borrower_facing_text") or "Your application has been cancelled."
+        patient = (
+            self.db.query(PlatformPatient)
+            .filter(PlatformPatient.id == ev["patient_id"])
+            .first()
+        )
+        name = " ".join(
+            p for p in (
+                getattr(patient, "legal_first_name", None),
+                getattr(patient, "legal_last_name", None),
+            ) if p
+        ).strip() or "there"
+        context = {
+            "borrower_name": name,
+            "application_id": str(ev["application_id"]),
+            "cancel_reason_text": reason_text,
+        }
+        return [NotificationPlan("application_cancelled", "email", context)]
 
     def _plan_passthrough(self, ev) -> list[NotificationPlan]:
         """Synthetic dunning events (WS3) carry their own render context +

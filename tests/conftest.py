@@ -168,6 +168,18 @@ def db_session():
                 "pc": '{"term_options": [24, 36, 48, 60], "apr_range": [7.99, 28.99], "origination_fee_pct": 0.025}',
             })
 
+            # Re-seed the decision-reason directory after TRUNCATE (mirrors
+            # alembic migration 048_underwriting_ops). The WS-E decline/cancel
+            # endpoints validate reason codes against this directory, so any
+            # DB-backed test posting a decline or cancel needs the seed rows.
+            # seed_defaults is idempotent (ON CONFLICT (kind, code) DO NOTHING).
+            # Existence-checked (NOT try/except): an error inside this begin()
+            # block would poison the transaction and silently roll back the
+            # credit-product seed above on pre-048 schemas.
+            if "platform_decision_reasons" in all_tables:
+                from app.services.decision_reasons import seed_defaults
+                seed_defaults(conn)
+
     session = TestingSessionLocal()
     try:
         yield session

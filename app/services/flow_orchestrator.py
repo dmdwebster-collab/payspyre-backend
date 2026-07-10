@@ -237,6 +237,20 @@ def mark_underwriting(application: PlatformCreditApplication) -> None:
     application.status_updated_at = datetime.now(timezone.utc)
 
 
+def mark_cancelled(application: PlatformCreditApplication) -> None:
+    """Terminal NON-CREDIT closure — the staff "Cancel" action (WS-E).
+
+    Cancellation is an administrative termination (customer request, duplicate,
+    vendor request, expired offer/verification), distinct from a credit decline:
+    it maps onto the existing ``withdrawn`` terminal status and therefore never
+    triggers the adverse-action path (which fires only on ``declined``). The
+    caller owns the reason-code validation, audit event, and notification.
+    """
+    _assert_not_terminal(application, "withdrawn")
+    application.status = "withdrawn"
+    application.status_updated_at = datetime.now(timezone.utc)
+
+
 class FlowOrchestrator:
     def __init__(
         self,
@@ -883,8 +897,16 @@ class FlowOrchestrator:
             bureau=ReplayBureauAdapter(stored),
             bank=ReplayBankAdapter(stored),
         )
+        # WS-E: a vendor-override flag on the application routes the
+        # recently-discharged-bankruptcy case to manual_review instead of decline
+        # (never an auto-approve). Derived here so the engine stays pure
+        # (flag in, decision out). Set by the vendor-origination path (WS-I).
+        vendor_override = bool((application.flow_state or {}).get("vendor_override"))
         flow_decision: FlowDecision = asyncio.run(
-            run_flow(application, decision_product, profile, adapters)
+            run_flow(
+                application, decision_product, profile, adapters,
+                vendor_override=vendor_override,
+            )
         )
 
         before_status = application.status

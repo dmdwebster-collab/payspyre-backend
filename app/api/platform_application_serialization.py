@@ -99,6 +99,47 @@ class FinancialSection(BaseModel):
     non_discretionary_expenses_cents: Optional[int] = None
 
 
+class AddressHistoryItem(BaseModel):
+    id: UUID
+    street: Optional[str] = None
+    unit: Optional[str] = None
+    city: Optional[str] = None
+    province: Optional[str] = None
+    postal_code: Optional[str] = None
+    residential_status: Optional[str] = None
+    monthly_housing_payment_cents: Optional[int] = None
+    from_date: Optional[date] = None
+    to_date: Optional[date] = None
+    is_current: bool = False
+    entry_source: str = "applicant"
+
+
+class EmploymentHistoryItem(BaseModel):
+    id: UUID
+    employer_name: Optional[str] = None
+    job_title: Optional[str] = None
+    employment_type: Optional[str] = None
+    income_type: Optional[str] = None
+    net_monthly_income_cents: Optional[int] = None
+    pay_frequency: Optional[str] = None
+    from_date: Optional[date] = None
+    to_date: Optional[date] = None
+    is_current: bool = False
+    entry_source: str = "applicant"
+
+
+class CoBorrowerSection(BaseModel):
+    """Separate-file co-borrower linkage (Dave: each co-applicant is a fully
+    separate application file, linked to the primary)."""
+
+    applicant_role: str = "primary"
+    # Set on a CO-BORROWER file: the primary application it belongs to.
+    co_applicant_of_application_id: Optional[UUID] = None
+    relationship_to_primary: Optional[str] = None
+    # Set on a PRIMARY file: its linked co-borrower application files.
+    linked_application_ids: list[UUID] = []
+
+
 class CanonicalApplicationDetail(BaseModel):
     """The full canonical field set for the applications workspace."""
 
@@ -116,6 +157,10 @@ class CanonicalApplicationDetail(BaseModel):
     primary_income: PrimaryIncomeSection
     secondary_incomes: list[SecondaryIncomeItem]
     financial: FinancialSection
+    # 3-year histories (migration 046) — sorted current-first, then most recent.
+    address_history: list[AddressHistoryItem] = []
+    employment_history: list[EmploymentHistoryItem] = []
+    co_borrower: CoBorrowerSection = CoBorrowerSection()
 
 
 # ---------------------------------------------------------------------------
@@ -152,14 +197,59 @@ _FINANCIAL = (
     "number_of_credit_accounts", "car_ownership", "monthly_car_payment_cents",
     "non_discretionary_expenses_cents",
 )
+_ADDRESS_HISTORY = (
+    "street", "unit", "city", "province", "postal_code", "residential_status",
+    "monthly_housing_payment_cents", "from_date", "to_date", "is_current",
+)
+_EMPLOYMENT_HISTORY = (
+    "employer_name", "job_title", "employment_type", "income_type",
+    "net_monthly_income_cents", "pay_frequency", "from_date", "to_date",
+    "is_current",
+)
+# String-typed fields that may come back enum-ish from the DB — coerce to str.
+_HISTORY_ENUMISH = ("employment_type", "income_type")
+
+
+def _history_sort_key(row: Any) -> tuple:
+    """Current entries first, then most recent from_date (None last)."""
+    from_date = getattr(row, "from_date", None)
+    return (
+        0 if getattr(row, "is_current", False) else 1,
+        -(from_date.toordinal()) if from_date is not None else 0,
+    )
+
+
+def _history_items(
+    rows: Any, item_cls: type[BaseModel], fields: tuple[str, ...]
+) -> list[BaseModel]:
+    items = []
+    for row in sorted(rows or [], key=_history_sort_key):
+        kwargs = {f: getattr(row, f, None) for f in fields}
+        for enumish in _HISTORY_ENUMISH:
+            if kwargs.get(enumish) is not None:
+                kwargs[enumish] = str(kwargs[enumish])
+        items.append(
+            item_cls(
+                id=row.id,
+                entry_source=str(getattr(row, "entry_source", None) or "applicant"),
+                **kwargs,
+            )
+        )
+    return items
 
 
 def build_canonical_detail(
-    application: PlatformCreditApplication, patient: Any
+    application: PlatformCreditApplication,
+    patient: Any,
+    linked_application_ids: Optional[list[UUID]] = None,
 ) -> CanonicalApplicationDetail:
-    """Project an application (+ its patient + secondary-income rows) into the
-    full canonical detail. ``patient`` may be None (SIN section then reports no
-    SIN). Enum columns come back as their string value.
+    """Project an application (+ its patient + secondary-income + history rows)
+    into the full canonical detail. ``patient`` may be None (SIN section then
+    reports no SIN). Enum columns come back as their string value.
+
+    ``linked_application_ids``: co-borrower application files linked to this
+    (primary) file — computed by the caller (a query), since the serializer is
+    session-agnostic. Defaults to none.
 
     SIN: only ``patient.sin_last3`` + the collected/declined flags are read — the
     encrypted token is never touched.
@@ -192,4 +282,20 @@ def build_canonical_detail(
         primary_income=_copy(PrimaryIncomeSection, application, _PRIMARY_INCOME),
         secondary_incomes=secondary,
         financial=_copy(FinancialSection, application, _FINANCIAL),
+        address_history=_history_items(
+            getattr(application, "address_history", None), AddressHistoryItem, _ADDRESS_HISTORY
+        ),
+        employment_history=_history_items(
+            getattr(application, "employment_history", None),
+            EmploymentHistoryItem,
+            _EMPLOYMENT_HISTORY,
+        ),
+        co_borrower=CoBorrowerSection(
+            applicant_role=str(application.applicant_role),
+            co_applicant_of_application_id=getattr(
+                application, "co_applicant_of_application_id", None
+            ),
+            relationship_to_primary=getattr(application, "relationship_to_primary", None),
+            linked_application_ids=linked_application_ids or [],
+        ),
     )

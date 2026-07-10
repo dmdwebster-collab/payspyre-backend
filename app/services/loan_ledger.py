@@ -10,7 +10,7 @@ Split of responsibilities (flow_engine idiom):
     and DB-free-testable; callers own commits.
   * ``loan_servicing``    — writes (record_payment appends ledger rows).
 
-The ledger is IMMUTABLE (DB WORM trigger, migration 044): corrections are
+The ledger is IMMUTABLE (DB WORM trigger, migration 049): corrections are
 ``reversal`` rows referencing the original via ``reverses_transaction_id``.
 """
 from __future__ import annotations

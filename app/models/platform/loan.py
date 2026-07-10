@@ -58,6 +58,17 @@ class PlatformLoan(Base):
         nullable=True,
     )
 
+    # The borrower this loan belongs to. Natively-originated loans reach their
+    # borrower via application_id -> patient; MIGRATED loans (application_id NULL)
+    # need this direct link, populated by the cutover import from the loans CSV's
+    # customer legacy id (migration 047). Nullable — pre-047 rows and loans whose
+    # customer wasn't imported have no value.
+    patient_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("platform_patients.id"),
+        nullable=True,
+    )
+
     # Provenance: 'application' (default — originated through the PaySpyre flow) or
     # 'turnkey_migration' (imported from the legacy Turnkey book).
     source = Column(String, nullable=False, server_default="application")
@@ -247,7 +258,7 @@ class PlatformLoanPayment(Base):
 
 class PlatformLoanTransaction(Base):
     """One IMMUTABLE row of the loan money ledger (Dave's "ledger, not
-    transactions" mandate — WS-A, migration 044).
+    transactions" mandate — WS-A, migration 049).
 
     Rows are never updated or deleted (DB WORM trigger enforces it) —
     corrections are compensating ``reversal`` rows referencing the original.

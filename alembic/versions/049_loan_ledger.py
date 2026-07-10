@@ -1,7 +1,7 @@
 """Immutable loan ledger — platform_loan_transactions (WS-A, Turnkey parity P0)
 
-Revision ID: 044_loan_ledger
-Revises: 043_canonical_credit_application
+Revision ID: 049_loan_ledger
+Revises: 048_underwriting_ops
 Create Date: 2026-07-10
 
 Dave's mandate #6 ("Ledger, not 'transactions'"): an immutable money ledger per
@@ -44,8 +44,8 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 
-revision: str = "044_loan_ledger"
-down_revision: Union[str, None] = "043_canonical_credit_application"
+revision: str = "049_loan_ledger"
+down_revision: Union[str, None] = "048_underwriting_ops"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
@@ -187,7 +187,7 @@ def _backfill_from_payments(bind) -> None:
         VALUES
             (:id, :loan_id, :seq, :reference, 'payment', :payment_type, 'regular',
              :amount_cents, :principal_cents, :interest_cents, 0, 0,
-             :effective_date, :processing_date, 'migration_044_backfill',
+             :effective_date, :processing_date, 'migration_049_backfill',
              'Backfilled from platform_loan_payments (schedule-replay allocation)',
              :created_at)
         """
@@ -329,7 +329,7 @@ def _reconcile_balances_at_cutover(bind) -> None:
         VALUES
             (:id, :loan_id, :seq, :reference, 'adjustment', 'adjustment', NULL,
              :amount_cents, :principal_cents, :interest_cents, 0, 0,
-             :effective_date, :effective_date, 'migration_044_backfill', :comment)
+             :effective_date, :effective_date, 'migration_049_backfill', :comment)
         """
     )
     comment = (
