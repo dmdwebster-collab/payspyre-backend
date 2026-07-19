@@ -33,6 +33,7 @@ from app.models.platform.notification_cursor import PlatformNotificationCursor
 from app.models.platform.notification_rule import PlatformNotificationRule
 from app.models.platform.decision_reason import PlatformDecisionReason
 from app.models.platform.import_batch import PlatformImportBatch
+from app.models.platform.hardship import PlatformHardshipRequest
 
 __all__ = [
     "PlatformPatient",
@@ -62,4 +63,5 @@ __all__ = [
     "PlatformNotificationRule",
     "PlatformDecisionReason",
     "PlatformImportBatch",
+    "PlatformHardshipRequest",
 ]

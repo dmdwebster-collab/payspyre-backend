@@ -24,7 +24,7 @@ from pydantic import BaseModel, EmailStr
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.auth import require_roles
+from app.core.auth import require_permission_or_admin, require_roles
 from app.core.config import settings
 from app.core.security import create_access_token, get_password_hash
 from app.db.base import get_db
@@ -61,6 +61,49 @@ def mark_loan_signed(loan_id: UUID, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(loan)
     return MarkLoanSignedResponse(loan_id=str(loan.id), agreement_status=loan.agreement_status)
+
+
+@router.post(
+    "/hardship/{request_id}/force-sign",
+    dependencies=[Depends(require_permission_or_admin("hardship", "apply"))],
+)
+def force_sign_hardship(request_id: UUID, db: Session = Depends(get_db)):
+    """DEV/staging: substitute for the borrower's e-signature on a hardship
+    amendment (WS-J simulation mode — no SignNow adapter configured).
+
+    Runs the SAME path as the real SignNow completion webhook
+    (``hardship.mark_signed``): sets ``signed_at`` first, then applies the
+    change via the WS-F surgery primitives. Gated on the dedicated
+    hardship/apply permission (admin implicit) and only mounted off-prod —
+    in production the borrower's real signature is the ONLY way a hardship
+    change applies.
+    """
+    from app.models.platform.hardship import PlatformHardshipRequest
+    from app.services import hardship as hardship_service
+
+    request = (
+        db.query(PlatformHardshipRequest)
+        .filter(PlatformHardshipRequest.id == request_id)
+        .first()
+    )
+    if request is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Hardship request not found"
+        )
+    loan = db.query(PlatformLoan).filter(PlatformLoan.id == request.loan_id).first()
+    if loan is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Loan not found")
+    try:
+        hardship_service.mark_signed(db, request, loan, actor="dev:force-sign")
+    except hardship_service.HardshipError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    db.commit()
+    return {
+        "hardship_request_id": str(request.id),
+        "status": request.status,
+        "signed_at": request.signed_at.isoformat() if request.signed_at else None,
+        "applied_at": request.applied_at.isoformat() if request.applied_at else None,
+    }
 
 
 class RunDemoBody(BaseModel):

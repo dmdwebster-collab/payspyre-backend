@@ -96,6 +96,13 @@ NOTIFICATION_TYPES: dict[str, NotificationSpec] = {
             "overdue. Please make your payment: {{ payment_url }}"
         ),
     ),
+    # WS-J: hardship amendment awaiting the borrower's e-signature. Email-only —
+    # a legal amendment summary does not fit / belong in SMS.
+    "hardship_agreement_sent": NotificationSpec(
+        email_template="hardship_agreement.html",
+        email_subject="Action required — sign your loan amendment ({{ kind_label }})",
+        sms_template=None,
+    ),
 }
 
 

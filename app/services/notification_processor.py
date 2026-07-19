@@ -65,6 +65,9 @@ TRIGGER_EVENT_TYPES = (
     "application_cancelled",
     "payment_due_reminder",
     "payment_overdue",
+    # WS-J: hardship amendment sent for e-signature — borrower must be told
+    # (email; the payload carries channels+context, passthrough shape).
+    "hardship_agreement_sent",
 )
 
 
@@ -231,7 +234,7 @@ class NotificationProcessor:
             return self._plan_decision(ev)
         if etype == "application_cancelled":
             return self._plan_cancelled(ev)
-        if etype in ("payment_due_reminder", "payment_overdue"):
+        if etype in ("payment_due_reminder", "payment_overdue", "hardship_agreement_sent"):
             return self._plan_passthrough(ev)
         return []
 

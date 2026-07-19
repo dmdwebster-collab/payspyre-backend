@@ -11,6 +11,7 @@ from app.api.v1.endpoints import (
     admin_config,
     admin_dashboard,
     admin_decision_reasons,
+    admin_hardship,
     admin_import,
     admin_loans,
     admin_system,
@@ -38,6 +39,10 @@ api_router.include_router(
 api_router.include_router(admin_dashboard.router, prefix="/admin/dashboard", tags=["admin-cockpit"])
 api_router.include_router(admin_applications.router, prefix="/admin/applications", tags=["admin-cockpit"])
 api_router.include_router(admin_loans.router, prefix="/admin/loans", tags=["admin-cockpit"])
+# WS-J — Hardship v1 (deferment / due-date change; e-sign gated). Deliberately
+# NOT plain-staff: requires the dedicated hardship/create permission (admin
+# implicitly allowed) — Dave's "user-defined availability" mandate.
+api_router.include_router(admin_hardship.router, prefix="/admin/loans", tags=["admin-hardship"])
 api_router.include_router(admin_collections.router, prefix="/admin/collections", tags=["admin-cockpit"])
 api_router.include_router(admin_audit.router, prefix="/admin/audit", tags=["admin-cockpit"])
 # Phase 2 — write actions (decision/payment/payoff) + maker-checker (charge-off/disburse).
