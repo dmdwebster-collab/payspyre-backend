@@ -214,6 +214,12 @@ class Settings(BaseSettings):
     TWILIO_AUTH_TOKEN: str = ""
     TWILIO_FROM_NUMBER: str = ""
 
+    # Where "a clinic sent PaySpyre a message" pings go (the ops inbox that
+    # replaced the shared Slack channel). Empty → those pings are skipped
+    # (messages still post + show in-app); admin→vendor pings go to the clinic's
+    # own staff regardless. Only used when USE_REAL_NOTIFICATIONS is on.
+    PLATFORM_MESSAGES_INBOX: str = ""
+
     NOTIFICATION_QUEUE_PROCESSING_INTERVAL: int = 60
     NOTIFICATION_MAX_RETRIES: int = 3
     NOTIFICATION_RETRY_DELAYS: str = "5,15,30"
