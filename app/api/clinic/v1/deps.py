@@ -40,6 +40,10 @@ class ClinicPrincipal:
     user: object
     vendor_id: UUID
     role: str = "staff"
+    # WS-G 9-role permission matrix (``platform_clinic_memberships.roles``).
+    # ``None`` = legacy membership = full access (see
+    # ``app.services.clinic_permissions.has_clinic_permission``).
+    roles: tuple[str, ...] | None = None
 
     @property
     def user_id(self):
@@ -62,10 +66,12 @@ def get_current_clinic_user(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User is not a member of any clinic",
         )
+    raw_roles = getattr(membership, "roles", None)
     return ClinicPrincipal(
         user=user,
         vendor_id=membership.vendor_id,
         role=membership.role or "staff",
+        roles=tuple(raw_roles) if raw_roles is not None else None,
     )
 
 

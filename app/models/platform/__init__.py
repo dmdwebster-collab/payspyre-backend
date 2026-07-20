@@ -60,6 +60,16 @@ from app.models.platform.scorecard import (
 from app.models.platform.flag import (
     PlatformFlagAssignment,
     PlatformFlagDefinition,
+from app.models.platform.crm import (
+    PlatformClinicRole,
+    PlatformCustomerBlock,
+    PlatformCustomerBlockReason,
+    PlatformIndustryCategory,
+    PlatformVendorBankAccount,
+    PlatformVendorContact,
+    PlatformVendorDocument,
+    PlatformVendorDocumentExpiryAlert,
+    PlatformVendorOnboarding,
 )
 
 __all__ = [
@@ -111,4 +121,13 @@ __all__ = [
     "PlatformVendorScorecard",
     "PlatformFlagAssignment",
     "PlatformFlagDefinition",
+    "PlatformClinicRole",
+    "PlatformCustomerBlock",
+    "PlatformCustomerBlockReason",
+    "PlatformIndustryCategory",
+    "PlatformVendorBankAccount",
+    "PlatformVendorContact",
+    "PlatformVendorDocument",
+    "PlatformVendorDocumentExpiryAlert",
+    "PlatformVendorOnboarding",
 ]
