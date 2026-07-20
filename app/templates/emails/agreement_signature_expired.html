@@ -1,0 +1,21 @@
+{% extends "_base.html" %}
+
+{% block title %}Loan Agreement Signature Period Expired{% endblock %}
+
+{% block header_title %}Signature period expired{% endblock %}
+{% block header_subtitle %}<p>Your loan application has been cancelled</p>{% endblock %}
+
+{% block badge %}<div class="badge badge-alert">EXPIRED</div>{% endblock %}
+
+{% block content %}
+    <div class="info-box">
+        <p><strong>Loan ID:</strong> {{ loan_id }}</p>
+        <p><strong>Vendor:</strong> {{ vendor_name }}</p>
+    </div>
+
+    <p>Unfortunately, the loan agreement for loan <strong>{{ loan_id }}</strong> was not signed within the
+        required time frame. The signature period has expired, and the loan application has been cancelled.</p>
+
+    <p>Should you wish to re-apply for a loan, please do so through your
+        <a href="{{ dashboard_url }}">dashboard</a>.</p>
+{% endblock %}

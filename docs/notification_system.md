@@ -1,5 +1,24 @@
 # Notification System
 
+> **2026-07 — Dave-template integration.** The template catalog now carries all
+> 47 notification types from Dave's canonical docs (docs/notifications_source/):
+> customer lifecycle + servicing, tiered dunning, and 17 internal back-office/
+> vendor notices. Key pieces:
+> * `app/templates/emails/_base.html` — shared branded layout; global default
+>   greeting/signature per Dave's Global Defaults doc.
+> * `app/services/notification_render.py` — registry of all types;
+>   `_global_context()` auto-injects company fields (support email, URLs).
+> * `app/services/notification_internal.py` — internal-notice catalog (all 17
+>   render through `internal_notice.html`).
+> * `app/services/notification_processor.py` — event wiring incl. loan
+>   lifecycle (disbursed/payment/paid-off/charged-off/agreement events).
+> * Cockpit config: `GET/PUT /api/v1/admin/config/notification-rules` — full
+>   catalog with per-type cadence, channel toggles, Jinja content overrides
+>   (validated at save). No seeding required.
+> * Coverage: `tests/test_notification_templates.py` renders every type against
+>   its sample context (StrictUndefined) from `tests/fixtures/notification_manifests/`.
+> See docs/notifications_source/INTEGRATION_STATUS.md for wired-vs-pending.
+
 ## Overview
 
 The PaySpyre notification system provides comprehensive email, SMS, and webhook notification capabilities with queue-based async delivery, retry logic, and delivery tracking.

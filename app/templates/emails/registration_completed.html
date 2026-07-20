@@ -1,0 +1,60 @@
+{% extends "_base.html" %}
+{% block title %}PaySpyre Registration Completed{% endblock %}
+
+{% block header_title %}Registration completed{% endblock %}
+{% block header_subtitle %}<p>Your PaySpyre account is ready</p>{% endblock %}
+
+{% block badge %}<div class="badge">ACCOUNT READY</div>{% endblock %}
+
+{% block greeting %}<p>Greetings {{ full_name }}, thank you for registering with {{ company_name }}.</p>{% endblock %}
+
+{% block content %}
+    <p>Welcome to <a href="{{ website_url }}">PaySpyre</a> — a revolutionary financing platform created for the
+        modern consumer. Our goal is to help you access the products and services you want and the care you need.</p>
+
+    <p>Your account has been created for you. Use the secure link below to sign in for the first time:</p>
+    <a href="{{ login_url }}" class="button">Sign in to my dashboard</a>
+
+    <div class="info-box">
+        <p><strong>Your login:</strong> {{ email }}</p>
+        <p><strong>Signing in:</strong> no password needed. Whenever you want to sign in, enter your email on the
+            sign-in page and we'll email you a secure, single-use sign-in link.</p>
+    </div>
+
+    <p><strong>You can use your dashboard to:</strong></p>
+    <ol class="steps" style="list-style-position: inside; padding-left: 16px;">
+        <li>View status updates on loan requests</li>
+        <li>Complete bank verification requests</li>
+        <li>Review and accept loan offers</li>
+        <li>Make payments on open loans</li>
+    </ol>
+
+    <p><strong>Additional dashboard uses include:</strong></p>
+    <ul>
+        <li>Submit a new loan request</li>
+        <li>View notifications for any open loans</li>
+        <li>View the repayment schedule of any open loans</li>
+        <li>View the transaction history of any open loans</li>
+        <li>Upload documents</li>
+    </ul>
+
+    <div class="note">
+        <p><strong>By using our finance platform, you:</strong></p>
+        <ul>
+            <li>Attest that you will not share access to your account or sign-in links with anyone.</li>
+            <li>Attest that the information provided is true and accurate.</li>
+            <li>Authorize and agree to the verification of information provided on any application(s).</li>
+            <li>Are not currently involved in insolvency proceedings, including consumer proposal, bankruptcy, or credit counselling.</li>
+            <li>Have reached the age of majority in the province where you are located.</li>
+            <li>Agree to receive communications from us via phone, email, and SMS (message frequency varies; message and data rates may apply).</li>
+            <li>Accept and agree to our <a href="{{ terms_url }}">Terms &amp; Conditions</a> and <a href="{{ privacy_url }}">Privacy Policy</a>.</li>
+        </ul>
+        <p><strong>All credit applications are subject to approval by {{ company_name }} and the associated Vendor.</strong></p>
+    </div>
+{% endblock %}
+
+{% block footer_extra %}
+    <p>Know of a business that could benefit from our services?
+        Nominate them to become a PaySpyre Vendor <a href="{{ nominate_url }}">here</a>.</p>
+    <p>Climb High, Dream Big with PaySpyre</p>
+{% endblock %}

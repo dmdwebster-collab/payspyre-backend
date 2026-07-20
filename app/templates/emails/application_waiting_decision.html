@@ -1,0 +1,21 @@
+{% extends "_base.html" %}
+{% block title %}Loan Application Submitted{% endblock %}
+
+{% block header_title %}Application submitted{% endblock %}
+{% block header_subtitle %}<p>Your loan application is now under review</p>{% endblock %}
+
+{% block badge %}<div class="badge">UNDER REVIEW</div>{% endblock %}
+
+{% block content %}
+    <p>Thank you for applying with {{ company_name }} for your financing needs. Your loan application has been
+        submitted for review and will be processed shortly.</p>
+
+    <div class="info-box">
+        <p><strong>Vendor:</strong> {{ vendor_name }}</p>
+        <p><strong>Application #:</strong> {{ loan_id }}</p>
+    </div>
+
+    <p>In the event we require clarification or additional information, we may reach out to you.</p>
+
+    <p>Thank you for choosing us.</p>
+{% endblock %}

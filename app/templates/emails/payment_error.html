@@ -1,0 +1,26 @@
+{% extends "_base.html" %}
+
+{% block title %}Notice of Payment Error{% endblock %}
+
+{% block header_title %}Payment not processed{% endblock %}
+{% block header_subtitle %}<p>Your automatic payment could not be completed</p>{% endblock %}
+
+{% block badge %}<div class="badge badge-alert">PAYMENT ERROR</div>{% endblock %}
+
+{% block content %}
+    <div class="info-box">
+        <p><strong>Loan ID:</strong> {{ loan_id }}</p>
+        <p><strong>Vendor:</strong> {{ vendor_name }}</p>
+    </div>
+
+    <p>Our records indicate that your most recent payment was not processed successfully — the automatic
+        payment failed.</p>
+
+    <p>Please sign in to your <a href="{{ dashboard_url }}">dashboard</a> and verify that your banking details
+        are correct. From your dashboard you can also make a payment to cover the amount due.</p>
+
+    <a href="{{ dashboard_url }}" class="button">Verify banking details</a>
+
+    <p>If your banking details appear to be correct, please contact us at
+        <a href="mailto:{{ support_email }}">{{ support_email }}</a> so we can investigate this further for you.</p>
+{% endblock %}

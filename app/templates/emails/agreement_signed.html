@@ -1,0 +1,27 @@
+{% extends "_base.html" %}
+
+{% block title %}Loan Agreement Signed{% endblock %}
+
+{% block header_title %}Loan agreement signed{% endblock %}
+{% block header_subtitle %}<p>Your pre-approved loan agreement has been signed</p>{% endblock %}
+
+{% block badge %}<div class="badge">AGREEMENT SIGNED</div>{% endblock %}
+
+{% block content %}
+    <p>Your pre-approved loan agreement has been signed for:</p>
+
+    <div class="info-box">
+        <p><strong>Loan ID:</strong> {{ loan_id }}</p>
+        <p><strong>Vendor:</strong> {{ vendor_name }}</p>
+    </div>
+
+    <p>You can view your repayment schedule on your <a href="{{ dashboard_url }}">dashboard</a>.</p>
+
+    <div class="note">
+        <p><em>Please note: until the Vendor approves and activates the loan, it may still be rejected or
+            cancelled. Upon Vendor approval and activation, this agreement comes into full effect as per the
+            terms and conditions contained within the agreement.</em></p>
+    </div>
+
+    <p>Thank you for choosing us.</p>
+{% endblock %}
