@@ -136,6 +136,7 @@ api_router.include_router(admin_system.router, prefix="/admin/system", tags=["ad
 api_router.include_router(admin_crm_vendors.router, prefix="/admin/crm", tags=["admin-crm-vendors"])
 api_router.include_router(
     admin_crm_customers.router, prefix="/admin/crm/customers", tags=["admin-crm-customers"]
+)
 # WS-J borrower-portal depth, staff-only halves: audited ID-document reads,
 # bank-account add/remove, per-patient 2FA enforcement, payout-request queue.
 api_router.include_router(

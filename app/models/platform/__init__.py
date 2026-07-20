@@ -47,19 +47,23 @@ from app.models.platform.communication import PlatformCommunicationLog
 from app.models.platform.document_template import (
     PlatformDocumentTemplate,
     PlatformLoanDocument,
+)
 from app.models.platform.collections_work import (
     PlatformCollectorAssignment,
     PlatformCollectionActionType,
     PlatformCollectionAction,
     PlatformPromiseToPay,
     PlatformInsolvencyMaintenanceFee,
+)
 from app.models.platform.loan_offer import PlatformLoanOffer
 from app.models.platform.scorecard import (
     PlatformScorecard,
     PlatformVendorScorecard,
+)
 from app.models.platform.flag import (
     PlatformFlagAssignment,
     PlatformFlagDefinition,
+)
 from app.models.platform.crm import (
     PlatformClinicRole,
     PlatformCustomerBlock,
@@ -70,6 +74,7 @@ from app.models.platform.crm import (
     PlatformVendorDocument,
     PlatformVendorDocumentExpiryAlert,
     PlatformVendorOnboarding,
+)
 from app.models.platform.report_schedule import (
     PlatformReportDefinition,
     PlatformReportSchedule,
