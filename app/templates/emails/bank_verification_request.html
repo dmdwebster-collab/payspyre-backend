@@ -1,0 +1,51 @@
+{% extends "_base.html" %}
+
+{% block title %}Bank Account Verification Required{% endblock %}
+
+{% block header_title %}Bank account verification{% endblock %}
+{% block header_subtitle %}<p>A quick, secure step to keep your application moving</p>{% endblock %}
+
+{% block badge %}<div class="badge">VERIFICATION REQUIRED</div>{% endblock %}
+
+{% block content %}
+    <div class="info-box">
+        <p><strong>Application #:</strong> {{ loan_id }}</p>
+        <p><strong>Vendor:</strong> {{ vendor_name }}</p>
+    </div>
+
+    <p>As part of the underwriting process for your loan application, and to comply with Canadian payments
+        industry regulations, we must verify your bank account.</p>
+
+    <p><strong>To complete bank account verification securely:</strong></p>
+    <ol class="steps">
+        <li>Sign in to your <a href="{{ dashboard_url }}">PaySpyre dashboard</a></li>
+        <li>Open the <strong>Bank Details</strong> section</li>
+        <li>Follow the instructions in the bank verification box</li>
+    </ol>
+
+    <a href="{{ dashboard_url }}" class="button">Verify my bank account</a>
+
+    <div class="note note-alert">
+        <p><strong>Important:</strong> please do <strong>NOT</strong> manually add bank account numbers, as this
+            may conflict with the automated verification process.</p>
+    </div>
+
+    <div class="note">
+        <p><strong><u>What the bank verification does NOT provide:</u></strong></p>
+        <ul>
+            <li>We do <strong>NOT</strong> receive your online banking login or password information</li>
+            <li>We can<strong>NOT</strong> create or modify information or transactions</li>
+        </ul>
+        <p><strong><u>What the bank verification does provide:</u></strong></p>
+        <ul>
+            <li>Account owner(s) information (name, email, phone number, and address)</li>
+            <li>Account information (institution name and number, account name, account type, and account and routing numbers)</li>
+            <li>Account transaction information (amount, date, type, and description)</li>
+            <li>Account balance information (current and available balance)</li>
+            <li>Credit account(s) information (due dates and balance owed, payment amounts and dates, transaction history, and interest)</li>
+            <li>Loan account(s) information (due dates, balances, payment amounts and dates, interest, loan type, payment plan, and term)</li>
+        </ul>
+        <p>To understand why and how we use this information, please see our
+            <a href="{{ privacy_url }}">privacy policy</a>.</p>
+    </div>
+{% endblock %}

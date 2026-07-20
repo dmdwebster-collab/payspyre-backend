@@ -98,6 +98,33 @@ def require_permission(resource: str, action: str):
     return permission_checker
 
 
+def require_permission_or_admin(resource: str, action: str):
+    """Permission gate with an implicit admin allowance (WS-J hardship model).
+
+    Dave's mandate for restricted servicing surfaces (hardship, write-off):
+    "user-defined availability so that junior staff members can't …" — a plain
+    ``staff`` role is NOT enough; the user needs the specific Role→Permission
+    grant (resource/action) OR the ``admin`` role, which is implicitly allowed
+    everywhere.
+    """
+
+    def permission_checker(current_user=Depends(get_current_user)):
+        user_roles = {user_role.role.name for user_role in current_user.roles}
+        if "admin" in user_roles:
+            return current_user
+        for user_role in current_user.roles:
+            for role_perm in user_role.role.permissions:
+                perm = role_perm.permission
+                if perm.resource == resource and perm.action == action:
+                    return current_user
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"User does not have permission: {action} on {resource}",
+        )
+
+    return permission_checker
+
+
 # P8.1 (H-4) — removed the broken X-API-Key authentication path (`get_api_user` +
 # `get_current_user_or_api_key`). It compared the raw `X-API-Key` header directly
 # against the bcrypt `ApiKey.key_hash`, so it could never match a correctly-created

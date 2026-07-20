@@ -190,7 +190,7 @@ class TestPassthroughDunning:
         ctx = dict(borrower_name="Jordan", loan_id="L-1", payment_amount="$250.00",
                    due_date="2026-08-01", payment_method="PAD",
                    payment_url="https://app.payspyre.com/pay/x", late_fee="$25.00",
-                   account_url="https://app.payspyre.com/acct", days_until_due="3 days")
+                   account_url="https://app.payspyre.com/acct", days_until_due=3)
         sid = _emit(db_session, event_type="payment_due_reminder", app_id=app_id,
                     patient_id=p.id,
                     payload={"loan_id": "L-1", "channels": ["email", "sms"], "context": ctx})
@@ -206,7 +206,7 @@ class TestPassthroughDunning:
         ctx = dict(borrower_name="Jordan", loan_id="L-1", payment_amount="$250.00",
                    due_date="2026-08-01", payment_method="PAD",
                    payment_url="https://app.payspyre.com/pay/x", late_fee="$25.00",
-                   account_url="https://app.payspyre.com/acct", days_until_due="3 days")
+                   account_url="https://app.payspyre.com/acct", days_until_due=3)
         sid = _emit(db_session, event_type="payment_due_reminder", app_id=app_id,
                     patient_id=p.id,
                     payload={"loan_id": "L-1", "channels": ["email", "sms"], "context": ctx})
@@ -269,3 +269,99 @@ class TestCursorBounds:
         db_session.commit()
         res = NotificationProcessor(db_session).run()
         assert res.scanned == 0
+
+
+class TestLoanLifecycleMapping:
+    """Dave Customer v1.0 wiring: lifecycle events → customer notifications."""
+
+    def _seed(self, db):
+        p = _patient(db, email=f"lc-{uuid.uuid4().hex[:8]}@example.com")
+        app_id = _application(db, p)
+        loan = _book_loan(db, app_id)
+        return p, app_id, loan
+
+    def _sent_types(self, db, sid):
+        rows = db.execute(
+            text("SELECT payload FROM platform_events WHERE event_type='notification_sent' "
+                 "AND payload->>'source_event_id' = :s"),
+            {"s": str(sid)},
+        ).all()
+        return sorted(r[0]["notification_type"] for r in rows)
+
+    def test_loan_disbursed_sends_activation(self, db_session: Session):
+        p, app_id, loan = self._seed(db_session)
+        sid = _emit(db_session, event_type="loan_disbursed", app_id=app_id,
+                    patient_id=p.id,
+                    payload={"loan_id": str(loan.id), "after": {"status": "active"}})
+        res = NotificationProcessor(db_session).run()
+        assert res.sent == 1
+        assert self._sent_types(db_session, sid) == ["loan_activated"]
+
+    def test_payment_recorded_sends_receipt(self, db_session: Session):
+        p, app_id, loan = self._seed(db_session)
+        sid = _emit(db_session, event_type="loan_payment_recorded", app_id=app_id,
+                    patient_id=p.id,
+                    payload={"loan_id": str(loan.id),
+                             "after": {"amount_cents": 111800, "loan_status": "active"}})
+        res = NotificationProcessor(db_session).run()
+        assert res.sent == 1
+        assert self._sent_types(db_session, sid) == ["payment_received"]
+
+    def test_final_payment_fans_out_receipt_and_repaid(self, db_session: Session):
+        p, app_id, loan = self._seed(db_session)
+        sid = _emit(db_session, event_type="loan_payment_recorded", app_id=app_id,
+                    patient_id=p.id,
+                    payload={"loan_id": str(loan.id),
+                             "after": {"amount_cents": 111800, "loan_status": "paid_off"}})
+        res = NotificationProcessor(db_session).run()
+        assert res.sent == 2
+        assert self._sent_types(db_session, sid) == ["loan_repaid", "payment_received"]
+
+    def test_charged_off_sends_written_off(self, db_session: Session):
+        p, app_id, loan = self._seed(db_session)
+        sid = _emit(db_session, event_type="loan_charged_off", app_id=app_id,
+                    patient_id=p.id,
+                    payload={"loan_id": str(loan.id), "after": {"status": "charged_off"}})
+        res = NotificationProcessor(db_session).run()
+        assert res.sent == 1
+        assert self._sent_types(db_session, sid) == ["loan_written_off"]
+
+    def test_agreement_events_map(self, db_session: Session):
+        p, app_id, loan = self._seed(db_session)
+        s1 = _emit(db_session, event_type="loan_agreement_sent", app_id=app_id,
+                   patient_id=p.id, payload={"loan_id": str(loan.id), "after": {}})
+        s2 = _emit(db_session, event_type="loan_agreement_signed", app_id=app_id,
+                   patient_id=p.id, payload={"loan_id": str(loan.id), "after": {}})
+        res = NotificationProcessor(db_session).run()
+        assert res.sent == 2
+        assert self._sent_types(db_session, s1) == ["offer_accepted_signing"]
+        assert self._sent_types(db_session, s2) == ["agreement_signed"]
+
+    def test_rule_disabled_suppresses_lifecycle_send(self, db_session: Session):
+        from app.models.platform.notification_rule import PlatformNotificationRule
+
+        db_session.merge(PlatformNotificationRule(
+            notification_type="loan_activated", offsets=[],
+            email_enabled=True, dashboard_enabled=False, sms_enabled=False,
+            enabled=False, content_overrides={},
+        ))
+        db_session.commit()
+        try:
+            p, app_id, loan = self._seed(db_session)
+            sid = _emit(db_session, event_type="loan_disbursed", app_id=app_id,
+                        patient_id=p.id,
+                        payload={"loan_id": str(loan.id), "after": {"status": "active"}})
+            res = NotificationProcessor(db_session).run()
+            assert res.sent == 0
+            assert self._sent_types(db_session, sid) == []
+        finally:
+            db_session.execute(text(
+                "DELETE FROM platform_notification_rules WHERE notification_type='loan_activated'"))
+            db_session.commit()
+
+    def test_missing_loan_skips_quietly(self, db_session: Session):
+        p, app_id, _ = self._seed(db_session)
+        _emit(db_session, event_type="loan_disbursed", app_id=app_id, patient_id=p.id,
+              payload={"loan_id": str(uuid.uuid4()), "after": {}})
+        res = NotificationProcessor(db_session).run()
+        assert res.sent == 0 and res.failed == 0

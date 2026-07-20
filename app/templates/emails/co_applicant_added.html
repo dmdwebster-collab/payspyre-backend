@@ -1,0 +1,14 @@
+{% extends "_base.html" %}
+{% block title %}Co-Applicant Added{% endblock %}
+
+{% block header_title %}You've been added as a co-applicant{% endblock %}
+{% block header_subtitle %}<p>A loan application now includes you</p>{% endblock %}
+
+{% block badge %}<div class="badge">CO-APPLICANT</div>{% endblock %}
+
+{% block greeting %}<p>Greetings, {{ co_applicant_name }}!</p>{% endblock %}
+
+{% block content %}
+    <p>Please be informed that borrower <strong>{{ full_name }}</strong> has added you as a co-applicant for
+        loan <strong>{{ loan_id }}</strong>.</p>
+{% endblock %}

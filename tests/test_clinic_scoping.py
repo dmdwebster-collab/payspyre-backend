@@ -61,20 +61,43 @@ class TestGetCurrentClinicUser:
     def test_resolves_principal_for_member(self, monkeypatch):
         vendor_id = uuid.uuid4()
         user = SimpleNamespace(id=uuid.uuid4())
+        membership = SimpleNamespace(vendor_id=vendor_id, role="staff")
         monkeypatch.setattr(
-            clinic_deps, "resolve_clinic_vendor_id", lambda db, user_id: vendor_id
+            clinic_deps, "resolve_clinic_membership", lambda db, user_id: membership
         )
 
         principal = get_current_clinic_user(user=user, db=MagicMock())
         assert isinstance(principal, ClinicPrincipal)
         assert principal.vendor_id == vendor_id
+        assert principal.role == "staff"
         assert principal.user is user
         assert principal.user_id == user.id
+
+    def test_membership_role_lands_on_principal(self, monkeypatch):
+        # WS-I: the clinic-side role gates rate-editing on vendor intake.
+        membership = SimpleNamespace(vendor_id=uuid.uuid4(), role="admin")
+        monkeypatch.setattr(
+            clinic_deps, "resolve_clinic_membership", lambda db, user_id: membership
+        )
+        principal = get_current_clinic_user(
+            user=SimpleNamespace(id=uuid.uuid4()), db=MagicMock()
+        )
+        assert principal.role == "admin"
+
+    def test_null_role_falls_back_to_staff(self, monkeypatch):
+        membership = SimpleNamespace(vendor_id=uuid.uuid4(), role=None)
+        monkeypatch.setattr(
+            clinic_deps, "resolve_clinic_membership", lambda db, user_id: membership
+        )
+        principal = get_current_clinic_user(
+            user=SimpleNamespace(id=uuid.uuid4()), db=MagicMock()
+        )
+        assert principal.role == "staff"
 
     def test_403_when_user_has_no_clinic(self, monkeypatch):
         user = SimpleNamespace(id=uuid.uuid4())
         monkeypatch.setattr(
-            clinic_deps, "resolve_clinic_vendor_id", lambda db, user_id: None
+            clinic_deps, "resolve_clinic_membership", lambda db, user_id: None
         )
 
         with pytest.raises(HTTPException) as exc:
@@ -87,9 +110,9 @@ class TestGetCurrentClinicUser:
 
         def _fake(db, user_id):
             seen["user_id"] = user_id
-            return uuid.uuid4()
+            return SimpleNamespace(vendor_id=uuid.uuid4(), role="staff")
 
-        monkeypatch.setattr(clinic_deps, "resolve_clinic_vendor_id", _fake)
+        monkeypatch.setattr(clinic_deps, "resolve_clinic_membership", _fake)
         get_current_clinic_user(user=user, db=MagicMock())
         assert seen["user_id"] == user.id
 

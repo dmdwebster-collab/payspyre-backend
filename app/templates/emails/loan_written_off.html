@@ -1,0 +1,35 @@
+{% extends "_base.html" %}
+{% block title %}Loan Written Off{% endblock %}
+
+{% block header_title %}Loan written off{% endblock %}
+{% block header_subtitle %}<p>Important notice regarding your loan account</p>{% endblock %}
+
+{% block badge %}<div class="badge badge-alert">WRITTEN OFF</div>{% endblock %}
+
+{% block greeting %}<p>Regarding: {{ vendor_name }} loan write-off</p>{% endblock %}
+
+{% block content %}
+    <div class="info-box">
+        <p><strong>Name:</strong> {{ full_name }}</p>
+        <p><strong>Loan ID:</strong> {{ loan_id }}</p>
+        <p><strong>Days past due:</strong> {{ days_overdue }}</p>
+        <p><strong>Outstanding balance:</strong> {{ outstanding_balance }}</p>
+    </div>
+
+    <p>Without prejudice,</p>
+
+    <p>This email serves to inform you that, after a thorough review of your loan account,
+        {{ vendor_name }} has made the decision to write off your loan on {{ current_date }} in the amount of
+        <strong>{{ written_off_amount }}</strong>.</p>
+
+    <div class="note note-alert">
+        <strong>Please be aware that the loan write-off does <u>not</u> absolve you of the debt.
+            We encourage you to contact {{ vendor_name }} directly for further assistance or questions regarding
+            your financial obligations.</strong>
+    </div>
+{% endblock %}
+
+{% block signature %}<div class="signature">
+    <p>Respectfully,</p>
+    <p>Customer Care Department<br>{{ company_name }}</p>
+</div>{% endblock %}

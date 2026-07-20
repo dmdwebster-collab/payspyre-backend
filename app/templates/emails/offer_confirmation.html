@@ -1,0 +1,37 @@
+{% extends "_base.html" %}
+{% block title %}Loan Pre-Approved — Acceptance Required{% endblock %}
+
+{% block header_title %}You're pre-approved!{% endblock %}
+{% block header_subtitle %}<p>A loan offer is waiting for your review</p>{% endblock %}
+
+{% block badge %}<div class="badge">PRE-APPROVED &mdash; ACTION REQUIRED</div>{% endblock %}
+
+{% block content %}
+    <div class="info-box">
+        <p><strong>Application #:</strong> {{ loan_id }}</p>
+        <p><strong>Vendor:</strong> {{ vendor_name }}</p>
+    </div>
+
+    <p>We are pleased to advise that your loan application has been <em>pre-approved!</em>
+        A loan offer has been prepared and awaits your review and acceptance.</p>
+
+    <p><em>In the event of multiple offers, please accept the one offer you wish to proceed with.</em></p>
+
+    <p><strong>To review and accept your loan offer:</strong></p>
+    <ol class="steps">
+        <li>Sign in to your PaySpyre <a href="{{ dashboard_url }}">dashboard</a>.</li>
+        <li>Open your loan offer.</li>
+        <li>Thoroughly review the details.</li>
+        <li>Click <strong>Accept</strong> on the offer you wish to proceed with.</li>
+    </ol>
+
+    <a href="{{ dashboard_url }}" class="button">Review my offer</a>
+
+    <p>Offers expire after 10 days; offers not accepted will be automatically cancelled.</p>
+
+    <div class="note">
+        <strong>Important reminder:</strong> this is a pre-approved offer. Final approval is granted by the
+        Vendor. Until the Vendor approves and activates the loan offer, it remains subject to cancellation or
+        rejection.
+    </div>
+{% endblock %}

@@ -1,0 +1,23 @@
+{% extends "_base.html" %}
+
+{% block title %}Promise to Pay Recorded{% endblock %}
+
+{% block header_title %}Promise to pay recorded{% endblock %}
+{% block header_subtitle %}<p>We've noted your upcoming payment</p>{% endblock %}
+
+{% block badge %}<div class="badge">PROMISE TO PAY</div>{% endblock %}
+
+{% block content %}
+    <div class="info-box">
+        <p><strong>Loan ID:</strong> {{ loan_id }}</p>
+        <p><strong>Vendor:</strong> {{ vendor_name }}</p>
+    </div>
+
+    <p>A promise to pay has been recorded on your account in the amount of <strong>{{ ptp_amount }}</strong>,
+        expected on <strong>{{ ptp_date }}</strong>.</p>
+
+    <p>We look forward to receiving this payment as indicated.</p>
+
+    <p>If you have any questions or concerns, or are experiencing difficulties making your loan payments,
+        please contact us at <a href="mailto:{{ support_email }}">{{ support_email }}</a>.</p>
+{% endblock %}

@@ -15,6 +15,7 @@ from app.models.platform.integration_settings import PlatformIntegrationSettings
 from app.models.platform.loan import (
     PlatformLoan,
     PlatformLoanCustomTransaction,
+    PlatformLoanDelinquencySnapshot,
     PlatformLoanScheduleItem,
     PlatformLoanPayment,
     PlatformLoanStatement,
@@ -34,6 +35,7 @@ from app.models.platform.notification_cursor import PlatformNotificationCursor
 from app.models.platform.notification_rule import PlatformNotificationRule
 from app.models.platform.decision_reason import PlatformDecisionReason
 from app.models.platform.import_batch import PlatformImportBatch
+from app.models.platform.hardship import PlatformHardshipRequest
 from app.models.platform.message import (
     PlatformApplicationMessage,
     PlatformApplicationMessageRead,
@@ -54,6 +56,7 @@ __all__ = [
     "PlatformIntegrationSettings",
     "PlatformLoan",
     "PlatformLoanCustomTransaction",
+    "PlatformLoanDelinquencySnapshot",
     "PlatformLoanScheduleItem",
     "PlatformLoanPayment",
     "PlatformLoanStatement",
@@ -68,6 +71,7 @@ __all__ = [
     "PlatformNotificationRule",
     "PlatformDecisionReason",
     "PlatformImportBatch",
+    "PlatformHardshipRequest",
     "PlatformApplicationMessage",
     "PlatformApplicationMessageRead",
 ]

@@ -3,6 +3,9 @@
 Endpoints (all staff-authenticated via the platform JWT):
     GET  /clinic/v1/products
     GET  /clinic/v1/applications
+    POST /clinic/v1/applications                      (WS-I vendor intake)
+    POST /clinic/v1/applications/preview              (WS-I live payment preview)
+    POST /clinic/v1/applications/{id}/request-reprocessing  (WS-I)
     GET  /clinic/v1/dashboard/summary
     GET  /clinic/v1/dashboard/overview
     GET  /clinic/v1/dashboard/applications/timeseries
@@ -27,12 +30,16 @@ from app.api.clinic.v1.endpoints import (
     messages,
     products,
     report_exports,
+    vendor_origination,
 )
 from app.core.config import settings
 
 clinic_router = APIRouter()
 clinic_router.include_router(products.router)
 clinic_router.include_router(applications.router)
+# WS-I vendor origination: intake + preview + request-reprocessing. Mounted
+# BEFORE the shared prefix-less applications GET is unaffected (distinct methods).
+clinic_router.include_router(vendor_origination.router)
 clinic_router.include_router(financing_links.router)
 clinic_router.include_router(marketplace.router)
 # Vendor⇄PaySpyre application messaging (in-app Slack replacement), vendor-scoped.

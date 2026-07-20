@@ -1,0 +1,6 @@
+# False positives, one gitleaks fingerprint per line
+# (commit:file:rule:line — see gitleaks docs).
+
+# JSON manifest field literally named "key" holding a notification-registry
+# identifier ("application_rejected_v2") — not a credential.
+832c81d0a42ed274f27947492732cc403ec9eb1d:tests/fixtures/notification_manifests/customer_lifecycle.json:generic-api-key:130

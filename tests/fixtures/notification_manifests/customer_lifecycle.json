@@ -1,0 +1,153 @@
+{
+  "types": [
+    {
+      "key": "welcome",
+      "email_template": "welcome.html",
+      "email_subject": "Welcome to PaySpyre",
+      "sms_template": null,
+      "sample_context": {
+        "full_name": "Jordan Smith",
+        "email": "jordan.smith@example.com"
+      }
+    },
+    {
+      "key": "registration_completed",
+      "email_template": "registration_completed.html",
+      "email_subject": "PaySpyre - Registration Completed",
+      "sms_template": null,
+      "sample_context": {
+        "full_name": "Jordan Smith",
+        "email": "jordan.smith@example.com",
+        "login_url": "https://portal.payspyre.com/login/magic/abc123"
+      }
+    },
+    {
+      "key": "login_link_request",
+      "email_template": "login_link_request.html",
+      "email_subject": "PaySpyre - Your Sign-In Link",
+      "sms_template": null,
+      "sample_context": {
+        "full_name": "Jordan Smith",
+        "login_url": "https://portal.payspyre.com/login/magic/abc123"
+      }
+    },
+    {
+      "key": "offer_confirmation",
+      "email_template": "offer_confirmation.html",
+      "email_subject": "PaySpyre - Loan Pre-Approved - Acceptance Required",
+      "sms_template": "PaySpyre: Great news {{ full_name }} - your loan application {{ loan_id }} is pre-approved! Sign in to review and accept your offer (expires in 10 days): {{ dashboard_url }}",
+      "sample_context": {
+        "full_name": "Jordan Smith",
+        "loan_id": "A1B2C3D4",
+        "vendor_name": "New Teeth Today"
+      }
+    },
+    {
+      "key": "offer_accepted_signing",
+      "email_template": "offer_accepted_signing.html",
+      "email_subject": "PaySpyre - Loan Offer Accepted - Signing Required",
+      "sms_template": "PaySpyre: Offer accepted for application {{ loan_id }}. Check your email for the e-signature request to sign your loan agreement. Details: {{ dashboard_url }}",
+      "sample_context": {
+        "full_name": "Jordan Smith",
+        "loan_id": "A1B2C3D4",
+        "vendor_name": "New Teeth Today"
+      }
+    },
+    {
+      "key": "offer_expired",
+      "email_template": "offer_expired.html",
+      "email_subject": "PaySpyre - {{ vendor_name }} Loan Offer Expired",
+      "sms_template": null,
+      "sample_context": {
+        "full_name": "Jordan Smith",
+        "loan_id": "A1B2C3D4",
+        "vendor_name": "New Teeth Today"
+      }
+    },
+    {
+      "key": "loan_activated",
+      "email_template": "loan_activated.html",
+      "email_subject": "PaySpyre - Application Approved & Activated",
+      "sms_template": "PaySpyre: Your loan {{ loan_id }} is now active. First payment of {{ first_payment_amount }} is due {{ first_payment_date }}. View your schedule: {{ dashboard_url }}",
+      "sample_context": {
+        "full_name": "Jordan Smith",
+        "loan_id": "A1B2C3D4",
+        "vendor_name": "New Teeth Today",
+        "first_payment_amount": "$212.34",
+        "first_payment_date": "August 15, 2026"
+      }
+    },
+    {
+      "key": "loan_repaid",
+      "email_template": "loan_repaid.html",
+      "email_subject": "PaySpyre - Loan Paid in Full",
+      "sms_template": null,
+      "sample_context": {
+        "full_name": "Jordan Smith",
+        "loan_id": "A1B2C3D4",
+        "vendor_name": "New Teeth Today"
+      }
+    },
+    {
+      "key": "loan_cancelled",
+      "email_template": "loan_cancelled.html",
+      "email_subject": "PaySpyre - Loan Application Cancelled",
+      "sms_template": null,
+      "sample_context": {
+        "full_name": "Jordan Smith",
+        "loan_id": "A1B2C3D4",
+        "vendor_name": "New Teeth Today",
+        "cancel_reason": "Cancelled at borrower's request"
+      }
+    },
+    {
+      "key": "loan_written_off",
+      "email_template": "loan_written_off.html",
+      "email_subject": "PaySpyre - Loan Written Off",
+      "sms_template": null,
+      "sample_context": {
+        "full_name": "Jordan Smith",
+        "loan_id": "A1B2C3D4",
+        "vendor_name": "New Teeth Today",
+        "days_overdue": 124,
+        "outstanding_balance": "$3,412.90",
+        "written_off_amount": "$3,412.90",
+        "current_date": "July 19, 2026"
+      }
+    },
+    {
+      "key": "application_waiting_decision",
+      "email_template": "application_waiting_decision.html",
+      "email_subject": "PaySpyre - Loan Application Submitted",
+      "sms_template": null,
+      "sample_context": {
+        "full_name": "Jordan Smith",
+        "loan_id": "A1B2C3D4",
+        "vendor_name": "New Teeth Today"
+      }
+    },
+    {
+      "key": "application_rejected_v2",
+      "email_template": "application_rejected_v2.html",
+      "email_subject": "PaySpyre - Application Rejection",
+      "sms_template": null,
+      "sample_context": {
+        "full_name": "Jordan Smith",
+        "loan_id": "A1B2C3D4",
+        "vendor_name": "New Teeth Today",
+        "rejection_reason": "Debt service ratio exceeds program limit"
+      }
+    },
+    {
+      "key": "co_applicant_added",
+      "email_template": "co_applicant_added.html",
+      "email_subject": "Co-Applicant for Loan {{ loan_id }}",
+      "sms_template": null,
+      "sample_context": {
+        "full_name": "Jordan Smith",
+        "co_applicant_name": "Taylor Nguyen",
+        "loan_id": "A1B2C3D4"
+      }
+    }
+  ]
+}

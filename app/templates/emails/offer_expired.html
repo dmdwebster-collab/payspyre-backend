@@ -1,0 +1,20 @@
+{% extends "_base.html" %}
+{% block title %}Loan Offer Expired{% endblock %}
+
+{% block header_title %}Loan offer expired{% endblock %}
+{% block header_subtitle %}<p>The acceptance period has ended</p>{% endblock %}
+
+{% block badge %}<div class="badge badge-alert">OFFER EXPIRED</div>{% endblock %}
+
+{% block content %}
+    <div class="info-box">
+        <p><strong>Vendor:</strong> {{ vendor_name }}</p>
+        <p><strong>Loan ID:</strong> {{ loan_id }}</p>
+    </div>
+
+    <p>Unfortunately, your loan offer was not accepted within the specified time frame. The acceptance period
+        has now expired and the loan application has been cancelled.</p>
+
+    <p>If you wish to submit a new application, please do so through your
+        <a href="{{ dashboard_url }}">dashboard</a>.</p>
+{% endblock %}

@@ -24,12 +24,12 @@ from pydantic import BaseModel, EmailStr
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.auth import require_roles
+from app.core.auth import require_permission_or_admin, require_roles
 from app.core.config import settings
 from app.core.security import create_access_token, get_password_hash
 from app.db.base import get_db
 from app.models.platform.loan import PlatformLoan
-from app.models.user import Role, User, UserRoleLink
+from app.models.user import Permission, Role, RolePermission, User, UserRoleLink
 from app.services import demo_simulation, dev_seed_collections
 
 router = APIRouter(prefix="/dev", tags=["admin-dev"])
@@ -61,6 +61,49 @@ def mark_loan_signed(loan_id: UUID, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(loan)
     return MarkLoanSignedResponse(loan_id=str(loan.id), agreement_status=loan.agreement_status)
+
+
+@router.post(
+    "/hardship/{request_id}/force-sign",
+    dependencies=[Depends(require_permission_or_admin("hardship", "apply"))],
+)
+def force_sign_hardship(request_id: UUID, db: Session = Depends(get_db)):
+    """DEV/staging: substitute for the borrower's e-signature on a hardship
+    amendment (WS-J simulation mode — no SignNow adapter configured).
+
+    Runs the SAME path as the real SignNow completion webhook
+    (``hardship.mark_signed``): sets ``signed_at`` first, then applies the
+    change via the WS-F surgery primitives. Gated on the dedicated
+    hardship/apply permission (admin implicit) and only mounted off-prod —
+    in production the borrower's real signature is the ONLY way a hardship
+    change applies.
+    """
+    from app.models.platform.hardship import PlatformHardshipRequest
+    from app.services import hardship as hardship_service
+
+    request = (
+        db.query(PlatformHardshipRequest)
+        .filter(PlatformHardshipRequest.id == request_id)
+        .first()
+    )
+    if request is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Hardship request not found"
+        )
+    loan = db.query(PlatformLoan).filter(PlatformLoan.id == request.loan_id).first()
+    if loan is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Loan not found")
+    try:
+        hardship_service.mark_signed(db, request, loan, actor="dev:force-sign")
+    except hardship_service.HardshipError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    db.commit()
+    return {
+        "hardship_request_id": str(request.id),
+        "status": request.status,
+        "signed_at": request.signed_at.isoformat() if request.signed_at else None,
+        "applied_at": request.applied_at.isoformat() if request.applied_at else None,
+    }
 
 
 class RunDemoBody(BaseModel):
@@ -111,7 +154,10 @@ class SeedAdminRequest(BaseModel):
     # the email) — reject it here as a 422 instead.
     email: Optional[EmailStr] = None
     password: Optional[str] = None
-    role: str = "admin"  # "admin" (full cockpit) or "staff" (read + servicing)
+    # "admin" (full cockpit), "staff" (read + servicing), or "hardship_officer"
+    # (staff + the dedicated hardship/create + hardship/apply Role→Permission
+    # grants — WS-J; lets staging exercise the non-admin permission gate).
+    role: str = "admin"
 
 
 class SeedAdminResponse(BaseModel):
@@ -132,8 +178,11 @@ def seed_admin(body: SeedAdminRequest, db: Session = Depends(get_db)):
     accepts directly; the email/password also work at ``POST /api/v1/auth/login``.
     """
     role_name = (body.role or "admin").strip().lower()
-    if role_name not in ("admin", "staff"):
-        raise HTTPException(status_code=422, detail="role must be 'admin' or 'staff'")
+    if role_name not in ("admin", "staff", "hardship_officer"):
+        raise HTTPException(
+            status_code=422,
+            detail="role must be 'admin', 'staff' or 'hardship_officer'",
+        )
 
     suffix = secrets.token_hex(4)
     email = body.email or f"admin-{suffix}@example.com"
@@ -144,6 +193,36 @@ def seed_admin(body: SeedAdminRequest, db: Session = Depends(get_db)):
     if role is None:
         role = Role(name=role_name, description=f"{role_name} (seeded)", is_system=True)
         db.add(role)
+        db.flush()
+
+    if role_name == "hardship_officer":
+        # WS-J: attach the dedicated hardship permissions to the role
+        # (find-or-create both the Permission rows and the links).
+        for action in ("create", "apply"):
+            perm = (
+                db.query(Permission)
+                .filter(Permission.resource == "hardship", Permission.action == action)
+                .first()
+            )
+            if perm is None:
+                perm = Permission(
+                    name=f"hardship:{action}",
+                    description=f"Hardship v1 — {action} (seeded)",
+                    resource="hardship",
+                    action=action,
+                )
+                db.add(perm)
+                db.flush()
+            link = (
+                db.query(RolePermission)
+                .filter(
+                    RolePermission.role_id == role.id,
+                    RolePermission.permission_id == perm.id,
+                )
+                .first()
+            )
+            if link is None:
+                db.add(RolePermission(role_id=role.id, permission_id=perm.id))
         db.flush()
 
     user = User(
