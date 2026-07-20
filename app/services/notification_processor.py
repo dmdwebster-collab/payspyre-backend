@@ -40,6 +40,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.models.platform.notification_cursor import PlatformNotificationCursor
+from app.services import flags as flags_service
 from app.services.real_notification_dispatcher import (
     PermanentNotificationError,
     TransientNotificationError,
@@ -135,6 +136,8 @@ class NotificationProcessor:
         # Wall-clock used for the per-province send-window gate. Injectable for
         # deterministic tests; defaults to now (UTC) per run.
         self._now = now
+        # WS-E flag-suppression memo: (patient_id, loan_id) -> bool, per run.
+        self._flag_suppression_cache: dict[tuple, bool] = {}
         # Same selector the applicant API uses; injectable for tests.
         if dispatcher is not None:
             self.dispatcher = dispatcher
@@ -186,6 +189,20 @@ class NotificationProcessor:
                     self._record_dashboard(ev, plan)
                     self.db.commit()
                     result.dashboard += 1
+                    continue
+
+                # WS-E customer/loan flags: an active suppress-notifications
+                # flag on the borrower or the loan blocks VENDOR sends only —
+                # the skip is still audited (suppress sends, still log). The
+                # dashboard branch above is exempt: an in-app record is the
+                # log, not an outbound send. Adverse-action + magic-link never
+                # route through this processor and are never suppressed.
+                if self._flag_suppressed(ev["patient_id"], plan.loan_id):
+                    self._record_skipped(
+                        ev, plan, reason=flags_service.SUPPRESSION_SKIP_REASON
+                    )
+                    self.db.commit()
+                    result.skipped += 1
                     continue
 
                 # Vendor channels (email/sms): gate on the borrower's per-province
@@ -524,6 +541,20 @@ class NotificationProcessor:
             "agreement_url": f"{base}/loans/{loan.id}/agreement",
             "_loan_id": str(loan.id),
         }
+
+    # -- WS-E flag suppression ----------------------------------------------
+
+    def _flag_suppressed(self, patient_id, loan_id) -> bool:
+        """Memoized per-run check of the customer/loan suppression flags."""
+        key = (
+            str(patient_id) if patient_id is not None else None,
+            str(loan_id) if loan_id is not None else None,
+        )
+        if key not in self._flag_suppression_cache:
+            self._flag_suppression_cache[key] = flags_service.notification_suppressed(
+                self.db, patient_id=patient_id, loan_id=loan_id
+            )
+        return self._flag_suppression_cache[key]
 
     # -- dedup + skip audit -------------------------------------------------
 

@@ -1,17 +1,20 @@
 """Admin applications work-queue + account-360 (read-only, Phase 1).
 
-Lender/admin portal M2. The whole-book application queue (no vendor scoping) with
-filters, and a detail view carrying the decision context. Write actions
-(decision/override/offers) are Phase 2.
+Lender/admin portal M2 + WS-E pipeline depth: the whole-book application queue
+with the full TL filter set (status / branch / product / assignee / vendor /
+province / time-in-status) and sortable waiting-time + assignee columns, plus
+a detail view carrying the decision context. Write actions live in
+``admin_actions`` (decision) and ``admin_originations`` (edit/offer/flags).
 """
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Optional
+from datetime import datetime, timedelta, timezone
+from typing import Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
+from sqlalchemy import func as sa_func
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.platform_application_serialization import (
@@ -23,7 +26,9 @@ from app.db.base import get_db
 from app.models.loan import Vendor
 from app.models.platform.application_document import PlatformApplicationDocument
 from app.models.platform.credit_application import PlatformCreditApplication
+from app.models.user import User
 from app.services import document_storage
+from app.services.originations_admin import waiting_seconds
 
 router = APIRouter(dependencies=[Depends(require_roles("admin", "staff"))])
 
@@ -43,9 +48,14 @@ class AdminApplicationRow(BaseModel):
     income_type: Optional[str] = None
     net_monthly_income_cents: Optional[int] = None
     decision_at: Optional[datetime] = None
-    # WS-E: underwriting queue assignment.
+    # WS-E: underwriting queue assignment (sortable assignee column).
     assigned_to_user_id: Optional[UUID] = None
+    assigned_to_email: Optional[str] = None
     assigned_at: Optional[datetime] = None
+    # WS-E pipeline columns: branch + time-in-status (sortable waiting time).
+    branch: Optional[str] = None
+    status_updated_at: Optional[datetime] = None
+    time_in_status_seconds: Optional[int] = None
     # WS-I: the vendor asked for the deal back / another look (their one action).
     vendor_reprocessing_requested: bool = False
     created_at: datetime
@@ -73,6 +83,8 @@ class AdminApplicationDetail(BaseModel):
     consent_count: int
     assigned_to_user_id: Optional[UUID] = None
     assigned_at: Optional[datetime] = None
+    branch: Optional[str] = None
+    status_updated_at: Optional[datetime] = None
     vendor_reprocessing_requested: bool = False
     created_at: datetime
     # The canonical Personal / ID / Residence / income / Financial field set.
@@ -97,10 +109,26 @@ def _vendor_name(db: Session, vendor_id) -> str:
     return v[0] if v else "—"
 
 
+#: Expression anchoring "time in current status" — status_updated_at is
+#: stamped by every audited transition; created_at is the pre-043 fallback.
+_WAITING_ANCHOR = sa_func.coalesce(
+    PlatformCreditApplication.status_updated_at, PlatformCreditApplication.created_at
+)
+
+
 @router.get("", response_model=list[AdminApplicationRow])
 def list_applications(
     status_filter: Optional[str] = Query(None, alias="status"),
     vendor_id: Optional[UUID] = Query(None),
+    product_id: Optional[UUID] = Query(
+        None, description="Only applications for this credit product (TL pipeline filter)."
+    ),
+    branch: Optional[str] = Query(
+        None, description="Only applications tagged with this branch label."
+    ),
+    province: Optional[str] = Query(
+        None, description="Only applications whose residence province matches (e.g. 'BC')."
+    ),
     assigned_to: Optional[UUID] = Query(
         None, description="Only applications assigned to this staff user (WS-E queue lane)."
     ),
@@ -111,13 +139,28 @@ def list_applications(
         False,
         description="Only applications where the vendor requested reprocessing (WS-I lane).",
     ),
+    min_waiting_hours: Optional[int] = Query(
+        None, ge=0, description="Only applications in their current status at least this long."
+    ),
+    max_waiting_hours: Optional[int] = Query(
+        None, ge=0, description="Only applications in their current status at most this long."
+    ),
+    sort: Literal["created_at", "waiting_time", "assignee"] = Query(
+        "created_at",
+        description="Sort column: created_at (default), waiting_time (time in "
+        "current status), or assignee (assigned user's email).",
+    ),
+    order: Literal["asc", "desc"] = Query(
+        "desc", description="Sort direction (waiting_time desc = longest-waiting first)."
+    ),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
     _user=Depends(get_current_user),
 ):
-    """Whole-book application queue, newest first. Optional status / vendor /
-    assignment filters."""
+    """Whole-book pipeline queue with the full TL filter set — status / branch /
+    product / assignee / vendor / province / time-in-status — and sortable
+    waiting-time + assignee columns (WS-E)."""
     q = db.query(PlatformCreditApplication).options(
         joinedload(PlatformCreditApplication.patient),
         joinedload(PlatformCreditApplication.credit_product),
@@ -126,18 +169,53 @@ def list_applications(
         q = q.filter(PlatformCreditApplication.status == status_filter)
     if vendor_id is not None:
         q = q.filter(PlatformCreditApplication.vendor_id == vendor_id)
+    if product_id is not None:
+        q = q.filter(PlatformCreditApplication.credit_product_id == product_id)
+    if branch:
+        q = q.filter(PlatformCreditApplication.branch == branch)
+    if province:
+        q = q.filter(
+            sa_func.upper(PlatformCreditApplication.residence_province) == province.upper()
+        )
     if assigned_to is not None:
         q = q.filter(PlatformCreditApplication.assigned_to_user_id == assigned_to)
     elif unassigned:
         q = q.filter(PlatformCreditApplication.assigned_to_user_id.is_(None))
     if reprocessing_requested:
         q = q.filter(PlatformCreditApplication.vendor_reprocessing_requested.is_(True))
-    rows = (
-        q.order_by(PlatformCreditApplication.created_at.desc())
-        .offset(offset)
-        .limit(limit)
-        .all()
-    )
+
+    now = datetime.now(timezone.utc)
+    if min_waiting_hours is not None:
+        q = q.filter(_WAITING_ANCHOR <= now - timedelta(hours=min_waiting_hours))
+    if max_waiting_hours is not None:
+        q = q.filter(_WAITING_ANCHOR >= now - timedelta(hours=max_waiting_hours))
+
+    if sort == "waiting_time":
+        # Longest-waiting = oldest anchor, so desc(waiting) == asc(anchor).
+        order_col = _WAITING_ANCHOR.asc() if order == "desc" else _WAITING_ANCHOR.desc()
+        q = q.order_by(order_col, PlatformCreditApplication.created_at.desc())
+    elif sort == "assignee":
+        q = q.outerjoin(User, User.id == PlatformCreditApplication.assigned_to_user_id)
+        email_col = sa_func.lower(User.email)
+        order_col = email_col.asc().nullslast() if order == "asc" else email_col.desc().nullslast()
+        q = q.order_by(order_col, PlatformCreditApplication.created_at.desc())
+    else:
+        order_col = (
+            PlatformCreditApplication.created_at.asc()
+            if order == "asc"
+            else PlatformCreditApplication.created_at.desc()
+        )
+        q = q.order_by(order_col)
+
+    rows = q.offset(offset).limit(limit).all()
+
+    # Assignee display column, batch-resolved (no N+1).
+    assignee_ids = {r.assigned_to_user_id for r in rows if r.assigned_to_user_id}
+    emails: dict = {}
+    if assignee_ids:
+        emails = dict(
+            db.query(User.id, User.email).filter(User.id.in_(assignee_ids)).all()
+        )
     return [
         AdminApplicationRow(
             id=r.id,
@@ -154,7 +232,11 @@ def list_applications(
             net_monthly_income_cents=r.net_monthly_income_cents,
             decision_at=r.decision_at,
             assigned_to_user_id=r.assigned_to_user_id,
+            assigned_to_email=emails.get(r.assigned_to_user_id),
             assigned_at=r.assigned_at,
+            branch=r.branch,
+            status_updated_at=r.status_updated_at,
+            time_in_status_seconds=waiting_seconds(r.status_updated_at, r.created_at, now),
             vendor_reprocessing_requested=bool(r.vendor_reprocessing_requested),
             created_at=r.created_at,
         )
@@ -205,6 +287,8 @@ def get_application(
         consent_count=len(app.consents or []),
         assigned_to_user_id=app.assigned_to_user_id,
         assigned_at=app.assigned_at,
+        branch=app.branch,
+        status_updated_at=app.status_updated_at,
         vendor_reprocessing_requested=bool(app.vendor_reprocessing_requested),
         created_at=app.created_at,
         canonical=build_canonical_detail(app, p),
