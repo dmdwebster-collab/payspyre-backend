@@ -1,0 +1,30 @@
+name: Delinquency bucket snapshot (month-end)
+
+# Assigns Dave's month-end delinquency buckets (current-month-late → POT
+# 30/60/90 → default, insolvency/written-off overrides) for the just-completed
+# month — the WS-H job (app/jobs/bucket_snapshot.py). Idempotent per month:
+# re-runs update the same snapshot rows; the job refuses incomplete months.
+# Requires:
+#   secret PROD_DATABASE_URL — the production DB connection string.
+#
+# PARKED like the other crons until a real DB secret is wired. Runs on the 1st
+# of each month, early morning Pacific, so collections queues and the aging
+# report reflect the new buckets on the first business day.
+on:
+  # schedule:
+  #   - cron: "0 14 1 * *"   # 1st of month ~07:00 Pacific — re-enable when DB secret is wired
+  workflow_dispatch: {}
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e .
+      - name: Run month-end bucket snapshot
+        env:
+          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+        run: python -m app.jobs.bucket_snapshot

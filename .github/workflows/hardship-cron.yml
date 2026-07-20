@@ -1,0 +1,28 @@
+name: Hardship maintenance (daily)
+
+# Expires hardship requests whose 30-day signature window has lapsed and
+# completes deferment windows that have passed — the WS-J maintenance pass
+# (app/jobs/hardship.py). Idempotent; safe to re-run. Never applies schedule
+# changes (that only ever happens via the borrower's e-signature webhook).
+# Requires:
+#   secret PROD_DATABASE_URL — the production DB connection string.
+#
+# PARKED like the other crons until a real DB secret is wired.
+on:
+  # schedule:
+  #   - cron: "30 15 * * *"   # ~08:30 Pacific — re-enable when DB secret is wired
+  workflow_dispatch: {}
+
+jobs:
+  maintain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e .
+      - name: Run hardship maintenance
+        env:
+          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+        run: python -m app.jobs.hardship
