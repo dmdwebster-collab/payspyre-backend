@@ -25,7 +25,8 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.api.v1.endpoints.admin_originations import require_assignment_or_override
-from app.core.auth import require_roles
+from app.core.auth import require_roles, user_has_permission, user_is_admin
+from app.core.config import settings as app_settings
 from app.db.base import get_db
 from app.models.platform.credit_application import PlatformCreditApplication
 from app.models.platform.event import PlatformEvent
@@ -47,6 +48,45 @@ _MAKER_CHECKER_ACTIONS = ("charge_off", "disburse")
 
 def _actor_id(user) -> str:
     return str(getattr(user, "id", "") or "unknown")
+
+
+def backdate_days(received_at: datetime, now: datetime) -> int:
+    """How many days in the past ``received_at`` is (UTC date arithmetic;
+    naive datetimes are treated as UTC). <= 0 means today/future. Pure —
+    pinned by the WS-F settings-suite tests."""
+    ra = received_at if received_at.tzinfo is not None else received_at.replace(tzinfo=timezone.utc)
+    return (now.astimezone(timezone.utc).date() - ra.astimezone(timezone.utc).date()).days
+
+
+def check_backdate_allowed(
+    received_at: Optional[datetime], now: datetime, *, window_days: int,
+    has_backdate_grant: bool,
+) -> Optional[tuple[int, str]]:
+    """WS-F transactions/backdate policy — pure. Returns None when allowed, or
+    (http_status, detail).
+
+    * today/future received_at → allowed for anyone (not a backdate);
+    * past received_at → requires the transactions/backdate grant (or admin);
+    * older than ``window_days`` → 422 for EVERYONE (admins included): postings
+      that old need a data-migration path, not a servicing write.
+    """
+    if received_at is None:
+        return None
+    days_back = backdate_days(received_at, now)
+    if days_back <= 0:
+        return None
+    if days_back > window_days:
+        return (
+            422,
+            f"received_at is {days_back} days in the past — beyond the "
+            f"{window_days}-day backdate window",
+        )
+    if not has_backdate_grant:
+        return (
+            403,
+            "backdating a transaction requires the transactions/backdate permission",
+        )
+    return None
 
 
 def _audit(db: Session, *, event_type: str, actor: str, payload: dict,
@@ -110,6 +150,17 @@ def decide(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Application already {app.status}; pass override=true to re-decide.",
+        )
+
+    # WS-F granular permissions: overriding an existing decision requires the
+    # decisions/override grant (or admin). Router currently admits admins only,
+    # so this is defense-in-depth for when the route widens to staff.
+    if body.override and not (
+        user_is_admin(user) or user_has_permission(user, "decisions", "override")
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="overriding an existing decision requires the decisions/override permission",
         )
 
     # Orphan-loan guard: overriding an APPROVED app away from "approved" would leave
@@ -445,6 +496,19 @@ def record_payment(
     loan = _get_loan(db, loan_id)
     if body.amount_cents <= 0:
         raise HTTPException(status_code=422, detail="amount_cents must be positive")
+    # WS-F granular permissions: a past-dated received_at is a BACKDATED posting —
+    # requires the transactions/backdate grant (or admin) and is bounded by the
+    # configured window even for admins.
+    violation = check_backdate_allowed(
+        body.received_at,
+        datetime.now(timezone.utc),
+        window_days=app_settings.TRANSACTION_BACKDATE_WINDOW_DAYS,
+        has_backdate_grant=(
+            user_is_admin(user) or user_has_permission(user, "transactions", "backdate")
+        ),
+    )
+    if violation is not None:
+        raise HTTPException(status_code=violation[0], detail=violation[1])
     # SPECIAL is permission-gated beyond the router's admin gate (Dave: 100%
     # principal, bypassing interest — a write-down lever). Explicit role check
     # so the gate survives if this endpoint is ever widened to staff.

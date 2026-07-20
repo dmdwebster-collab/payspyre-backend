@@ -70,6 +70,10 @@ TRIGGER_EVENT_TYPES = (
     # (email; the payload carries channels+context, passthrough shape).
     "hardship_agreement_sent",
     "pad_pre_notification",
+    # WS-F business calendar: due date on a non-business day → proactive
+    # processing-delay notice (passthrough shape, emitted by
+    # business_calendar.queue_payment_delay_notices).
+    "payment_delay_notice",
     # Loan lifecycle (Dave's Customer notification spec, 2026-07). Each maps to
     # a registry notification_type in _plan_loan_lifecycle below.
     "loan_disbursed",
@@ -281,6 +285,7 @@ class NotificationProcessor:
             "payment_overdue",
             "hardship_agreement_sent",
             "pad_pre_notification",
+            "payment_delay_notice",
         ):
             return self._plan_passthrough(ev)
         if etype in _LIFECYCLE_NOTIFICATION_MAP or etype == "loan_payment_recorded":
