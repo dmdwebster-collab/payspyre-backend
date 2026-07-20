@@ -41,6 +41,10 @@ from app.models.platform.message import (
     PlatformApplicationMessageRead,
 )
 from app.models.platform.communication import PlatformCommunicationLog
+from app.models.platform.document_template import (
+    PlatformDocumentTemplate,
+    PlatformLoanDocument,
+)
 
 __all__ = [
     "PlatformPatient",
@@ -76,4 +80,6 @@ __all__ = [
     "PlatformApplicationMessage",
     "PlatformApplicationMessageRead",
     "PlatformCommunicationLog",
+    "PlatformDocumentTemplate",
+    "PlatformLoanDocument",
 ]
