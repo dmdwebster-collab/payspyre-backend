@@ -36,6 +36,7 @@ from app.models.loan import Vendor
 from app.models.platform.credit_application import PlatformCreditApplication
 from app.models.platform.credit_product import PlatformCreditProduct
 from app.models.platform.loan import (
+    PlatformCollectionAttempt,
     PlatformLoan,
     PlatformLoanCustomTransaction,
     PlatformLoanPayment,
@@ -407,10 +408,57 @@ def test_payments_received_fallback_split_and_scoping(db_session):
     assert first[14] == "zr-1"
 
 
-def test_failed_report_is_headers_only(db_session):
-    result = generate_report(db_session, "payments-failed")
-    assert result.row_count == 0
-    assert _sheet_rows(result.content)[7][0] == "Vendor"
+def test_failed_report_lists_failed_collection_attempts(db_session):
+    vendor = _mk_vendor(db_session)
+    loan = _mk_loan(db_session, vendor, first="Ns", last="Eff", principal=3_000)
+    _mk_schedule(db_session, loan, [(1, date(2026, 7, 1), 900, 100),
+                                    (2, date(2026, 8, 1), 900, 100)])
+    items = sorted(loan.schedule, key=lambda i: i.installment_number)
+    failed_at = datetime(2026, 7, 3, 9, tzinfo=timezone.utc)
+    db_session.add(
+        PlatformCollectionAttempt(
+            loan_id=loan.id,
+            schedule_item_id=items[0].id,
+            attempt_number=1,
+            amount_cents=1_000,
+            client_transaction_id=f"autocol-{items[0].id}-1",
+            external_ref="zr-fail-1",
+            outcome="failed",
+            return_code="NSF",
+            initiated_at=failed_at,
+            completed_at=failed_at,
+        )
+    )
+    # A completed attempt must NOT appear on the failed report.
+    db_session.add(
+        PlatformCollectionAttempt(
+            loan_id=loan.id,
+            schedule_item_id=items[1].id,
+            attempt_number=1,
+            amount_cents=1_000,
+            client_transaction_id=f"autocol-{items[1].id}-1",
+            outcome="completed",
+            initiated_at=failed_at,
+        )
+    )
+    db_session.commit()
+
+    result = generate_report(db_session, "payments-failed", vendor_id=vendor.id)
+    data = _data_rows(result.content)
+    assert len(data) == 1
+    row = data[0]
+    assert row[5] == datetime(2026, 7, 3)   # failure date
+    assert row[6] == 10.00                  # attempted amount
+    assert row[11] == 0.0                   # nothing was actually paid
+    assert row[13] == "Bank Transfer"
+    assert row[14] == "zr-fail-1"
+
+    # Window excluding the failure date -> empty.
+    result2 = generate_report(
+        db_session, "payments-failed", vendor_id=vendor.id,
+        date_from=date(2026, 7, 10), date_to=date(2026, 7, 20),
+    )
+    assert _data_rows(result2.content) == []
 
 
 def test_loan_transactions_fallback_synthesis(db_session):

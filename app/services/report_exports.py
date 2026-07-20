@@ -20,6 +20,8 @@ WS-A / migration 049) is the source of truth for payment and transaction rows:
 it stores each row's principal / interest / fees allocation, Dave's
 ``{vendor}-{loan}-{seq}`` reference, the dual effective/processing dates, and
 compensating ``reversal`` rows — which is what makes the Reversed report real.
+Failed payments come from the WS-G auto-collection attempt spine
+(``platform_collection_attempts``, outcome='failed').
 Loans with NO ledger rows (a pre-cutover book that never got its
 reconciliation row) fall back to replaying ``platform_loan_payments`` against
 the schedule with exactly the allocation order of the pre-ledger
@@ -42,6 +44,7 @@ from app.core.config import settings
 from app.models.loan import Vendor
 from app.models.platform.credit_application import PlatformCreditApplication
 from app.models.platform.loan import (
+    PlatformCollectionAttempt,
     PlatformLoan,
     PlatformLoanPayment,
     PlatformLoanScheduleItem,
@@ -517,11 +520,61 @@ def _build_payments_received(db, vendor_id, date_from, date_to):
 
 
 def _build_payments_failed(db, vendor_id, date_from, date_to):
-    # GAP: failed collection attempts are not persisted (the ledger records
-    # money that MOVED; a failed pull moves nothing and no attempt table exists
-    # yet). Headers ship now so the ops workflow and frontend contract exist;
-    # rows appear when payment-attempt tracking lands (auto-collection WS).
-    return _PAYMENT_COLS, []
+    """Failed auto-collection attempts (WS-G ``platform_collection_attempts``,
+    outcome='failed'). Payment Amount is what was ATTEMPTED; nothing moved, so
+    the fee/interest/principal *paid* columns are zero (an NSF fee charged for
+    the failure is a separate ledger row and shows on Loan Transactions).
+    Windowed on when the attempt terminally failed."""
+    frm, to = _window_bounds(date_from, date_to)
+    q = (
+        db.query(
+            PlatformCollectionAttempt,
+            PlatformLoan,
+            PlatformCreditApplication,
+            Vendor,
+            PlatformPatient,
+        )
+        .join(PlatformLoan, PlatformCollectionAttempt.loan_id == PlatformLoan.id)
+        .outerjoin(
+            PlatformCreditApplication,
+            PlatformLoan.application_id == PlatformCreditApplication.id,
+        )
+        .outerjoin(Vendor, PlatformCreditApplication.vendor_id == Vendor.id)
+        .outerjoin(
+            PlatformPatient, PlatformCreditApplication.patient_id == PlatformPatient.id
+        )
+        .filter(PlatformCollectionAttempt.outcome == "failed")
+    )
+    if vendor_id is not None:
+        q = q.filter(PlatformCreditApplication.vendor_id == vendor_id)
+
+    rows = []
+    for attempt, loan, app, vendor, patient in q.all():
+        failed_at = attempt.completed_at or attempt.initiated_at
+        if (date_from or date_to) and not _in_window(failed_at, frm, to):
+            continue
+        vend, prov = _vendor_names(vendor)
+        rows.append(
+            [
+                vend,
+                prov,
+                _loan_display_id(loan),
+                _full_name(app, patient),
+                failed_at,
+                failed_at.date() if failed_at else None,
+                _dollars(attempt.amount_cents),
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                _dollars(loan.principal_balance_cents),
+                "Bank Transfer",  # auto-collection pulls are Zumrails PAD
+                attempt.external_ref or attempt.client_transaction_id,
+            ]
+        )
+    rows.sort(key=lambda r: (r[5], str(r[2])))
+    return _PAYMENT_COLS, rows
 
 
 def _build_payments_reversed(db, vendor_id, date_from, date_to):

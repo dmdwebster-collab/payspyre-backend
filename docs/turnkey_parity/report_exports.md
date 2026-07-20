@@ -64,12 +64,14 @@ principal before interest) — `allocate_payment_splits()`.
    `vendors` table. Provider column = `dba_name` for now. When a provider/store
    entity lands (same note as `admin_analytics.py`'s provider drill), swap
    `_vendor_names()`.
-2. **Failed payments are headers-only, and fees have one bucket.** The ledger
-   records money that *moved* — a failed pull moves nothing, and no
-   payment-attempt table exists yet, so `payments-failed` ships with correct
-   headers and no rows until attempt tracking lands (auto-collection WS). The
-   ledger's single `fees_cents` bucket also can't split admin vs penalty fees,
-   so the penalty column is 0 and fees ride in Admin Fees Pd.
+2. **Fees have one bucket.** The ledger's single `fees_cents` bucket can't
+   split admin vs penalty fees, so the penalty column is 0 and fees ride in
+   Admin Fees Pd. (Failed payments are NOT a gap anymore: `payments-failed`
+   reads WS-G's `platform_collection_attempts` with outcome `failed` —
+   attempted amount, failure datetime, rail reference; paid columns stay 0
+   because nothing moved, and any NSF fee charged is its own ledger row on
+   Loan Transactions. Manual/one-off rail failures outside auto-collection
+   are still not captured.)
 3. **Close Date is approximated** by the loan's last `updated_at` for terminal
    statuses. A dedicated `closed_at` column would make it exact.
 4. **Statuses in `scheduled-payments`** are derived live from due date + grace
@@ -78,7 +80,7 @@ principal before interest) — `allocate_payment_splits()`.
 
 ## Verification
 
-`tests/test_report_exports.py` (14 tests, live test DB): ledger-sourced payment
+`tests/test_report_exports.py` (14 tests, live test DB; failed-attempt sourcing included): ledger-sourced payment
 allocations + reversal routing (reversed payments leave the Received report and
 appear on the Reversed report), full ledger transaction dump, fallback
 split-replay math (principal-before-interest, waived installments,
