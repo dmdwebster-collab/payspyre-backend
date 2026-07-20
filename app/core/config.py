@@ -272,6 +272,14 @@ class Settings(BaseSettings):
     TWILIO_AUTH_TOKEN: str = ""
     TWILIO_FROM_NUMBER: str = ""
 
+    # WS-H profit-split reporting: vendor revenue-share overrides by product
+    # funding_source, as a JSON map of bps (10000 = 100% to the vendor), e.g.
+    # '{"clinic_self": 8500, "hybrid": 5000}'. Empty → the structural defaults
+    # in app/services/metrics/reports_depth.py (clinic_self → vendor, else
+    # PaySpyre). Values here are Dave's call — reporting only, never money
+    # movement.
+    PROFIT_SPLIT_VENDOR_SHARE_BPS: str = ""
+
     # Where "a clinic sent PaySpyre a message" pings go (the ops inbox that
     # replaced the shared Slack channel). Empty → those pings are skipped
     # (messages still post + show in-app); admin→vendor pings go to the clinic's

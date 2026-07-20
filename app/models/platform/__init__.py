@@ -70,6 +70,10 @@ from app.models.platform.crm import (
     PlatformVendorDocument,
     PlatformVendorDocumentExpiryAlert,
     PlatformVendorOnboarding,
+from app.models.platform.report_schedule import (
+    PlatformReportDefinition,
+    PlatformReportSchedule,
+    PlatformReportScheduleRun,
 )
 
 __all__ = [
@@ -130,4 +134,7 @@ __all__ = [
     "PlatformVendorDocument",
     "PlatformVendorDocumentExpiryAlert",
     "PlatformVendorOnboarding",
+    "PlatformReportDefinition",
+    "PlatformReportSchedule",
+    "PlatformReportScheduleRun",
 ]

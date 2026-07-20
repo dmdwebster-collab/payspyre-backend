@@ -5,6 +5,7 @@ from app.core.config import settings
 from app.api.v1.endpoints import (
     admin_actions,
     admin_analytics,
+    admin_analytics_depth,
     admin_applications,
     admin_audit,
     admin_collections,
@@ -24,6 +25,7 @@ from app.api.v1.endpoints import (
     admin_messages,
     admin_offers,
     admin_originations,
+    admin_report_builder,
     admin_report_exports,
     admin_scorecards,
     admin_settings,
@@ -97,8 +99,12 @@ api_router.include_router(admin_actions.router, prefix="/admin", tags=["admin-ac
 api_router.include_router(admin_import.router, prefix="/admin/import", tags=["admin-import"])
 # Phase 4 — advanced portfolio analytics (vintage / originations / CEI). Read-only.
 api_router.include_router(admin_analytics.router, prefix="/admin/analytics", tags=["admin-analytics"])
+# WS-H reports depth — profit split / buckets+debt-roll / overrides / AI-decisioning / geo.
+api_router.include_router(admin_analytics_depth.router, prefix="/admin/analytics", tags=["admin-analytics"])
 # Turnkey-parity XLSX report downloads (Dave's TL Smart Marker templates). Read-only.
 api_router.include_router(admin_report_exports.router, prefix="/admin/reports", tags=["admin-reports"])
+# WS-H — Excel report builder v1 + scheduled reports engine (definitions / schedules).
+api_router.include_router(admin_report_builder.router, prefix="/admin/reports", tags=["admin-reports"])
 # Phase 3 — config surfaces (RBAC visibility). Products reuse /credit-products. Read-only, admin.
 api_router.include_router(admin_config.router, prefix="/admin/config", tags=["admin-config"])
 # WS-F — settings suite (decision rules / company info / business calendar /

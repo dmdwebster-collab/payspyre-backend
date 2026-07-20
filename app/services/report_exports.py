@@ -258,15 +258,16 @@ def _reversed_txn_ids(txns: Iterable[PlatformLoanTransaction]) -> set:
 
 def _loan_rows(
     db: Session,
-    vendor_id: Optional[UUID],
+    vendor_ids: Optional[tuple[UUID, ...]],
 ) -> list[tuple[PlatformLoan, PlatformCreditApplication, Vendor, PlatformPatient]]:
     """(loan, application, vendor, patient) tuples, vendor-scoped when asked.
 
     Joins are OUTER so migrated loans without an application still export in
-    the all-vendors view; a vendor_id filter implies the application join and
-    therefore naturally excludes application-less loans (they belong to no
-    vendor). Collections (schedule / payments / ledger / custom txns) are
-    selectin-loaded — one extra query each instead of per-loan N+1.
+    the all-vendors view; a ``vendor_ids`` filter (one OR MANY vendors — Dave's
+    multi-location rollup) implies the application join and therefore naturally
+    excludes application-less loans (they belong to no vendor). Collections
+    (schedule / payments / ledger / custom txns) are selectin-loaded — one
+    extra query each instead of per-loan N+1.
     """
     q = (
         db.query(PlatformLoan, PlatformCreditApplication, Vendor, PlatformPatient)
@@ -285,9 +286,21 @@ def _loan_rows(
             selectinload(PlatformLoan.custom_transactions),
         )
     )
-    if vendor_id is not None:
-        q = q.filter(PlatformCreditApplication.vendor_id == vendor_id)
+    if vendor_ids:
+        q = q.filter(PlatformCreditApplication.vendor_id.in_(vendor_ids))
     return q.order_by(PlatformLoan.created_at.asc()).all()
+
+
+def _vendor_scope(
+    vendor_id: Optional[UUID], vendor_ids: Optional[Sequence[UUID]]
+) -> Optional[tuple[UUID, ...]]:
+    """Normalize the single-vendor param + the multi-select param into one
+    de-duplicated tuple (None = all vendors). Keeps the existing single
+    ``vendor_id`` callers working unchanged."""
+    ids: list[UUID] = list(vendor_ids or [])
+    if vendor_id is not None and vendor_id not in ids:
+        ids.append(vendor_id)
+    return tuple(ids) or None
 
 
 def _window_bounds(
@@ -332,30 +345,33 @@ def _date_in_window(value: Optional[date], date_from, date_to) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _build_borrower_data(db, vendor_id, date_from, date_to):
-    cols = [
-        Col("Vendor"),
-        Col("Provider"),
-        Col("Loan ID"),
-        Col("Full Name"),
-        Col("Email"),
-        Col("Phone"),
-        Col("Street"),
-        Col("City"),
-        Col("Province"),
-        Col("Postal Code"),
-        Col("Status"),
-        Col("Activation Date", "date"),
-        Col("Close Date", "date"),
-        Col("Loan Amount", "money", total=True),
-        Col("Average Installment", "money"),
-        Col("Interest Rate", "percent"),
-        Col("Loan Term"),
-        Col("Outstanding Principal", "money", total=True),
-    ]
+_BORROWER_COLS = [
+    Col("Vendor"),
+    Col("Provider"),
+    Col("Loan ID"),
+    Col("Full Name"),
+    Col("Email"),
+    Col("Phone"),
+    Col("Street"),
+    Col("City"),
+    Col("Province"),
+    Col("Postal Code"),
+    Col("Status"),
+    Col("Activation Date", "date"),
+    Col("Close Date", "date"),
+    Col("Loan Amount", "money", total=True),
+    Col("Average Installment", "money"),
+    Col("Interest Rate", "percent"),
+    Col("Loan Term"),
+    Col("Outstanding Principal", "money", total=True),
+]
+
+
+def _build_borrower_data(db, vendor_ids, date_from, date_to):
+    cols = _BORROWER_COLS
     frm, to = _window_bounds(date_from, date_to)
     rows = []
-    for loan, app, vendor, patient in _loan_rows(db, vendor_id):
+    for loan, app, vendor, patient in _loan_rows(db, vendor_ids):
         origin = loan.disbursed_at or loan.created_at
         if (date_from or date_to) and not _in_window(origin, frm, to):
             continue
@@ -387,22 +403,25 @@ def _build_borrower_data(db, vendor_id, date_from, date_to):
     return cols, rows
 
 
-def _build_loan_originations(db, vendor_id, date_from, date_to):
-    cols = [
-        Col("Vendor"),
-        Col("Provider"),
-        Col("Loan ID"),
-        Col("Full Name"),
-        Col("Activation Date", "date"),
-        Col("Loan Amount", "money", total=True),
-        Col("Average Installment", "money"),
-        Col("Interest Rate", "percent"),
-        Col("Loan Term"),
-        Col("Status"),
-    ]
+_ORIGINATION_COLS = [
+    Col("Vendor"),
+    Col("Provider"),
+    Col("Loan ID"),
+    Col("Full Name"),
+    Col("Activation Date", "date"),
+    Col("Loan Amount", "money", total=True),
+    Col("Average Installment", "money"),
+    Col("Interest Rate", "percent"),
+    Col("Loan Term"),
+    Col("Status"),
+]
+
+
+def _build_loan_originations(db, vendor_ids, date_from, date_to):
+    cols = _ORIGINATION_COLS
     frm, to = _window_bounds(date_from, date_to)
     rows = []
-    for loan, app, vendor, patient in _loan_rows(db, vendor_id):
+    for loan, app, vendor, patient in _loan_rows(db, vendor_ids):
         if loan.disbursed_at is None:
             continue
         if (date_from or date_to) and not _in_window(loan.disbursed_at, frm, to):
@@ -444,10 +463,10 @@ _PAYMENT_COLS = [
 ]
 
 
-def _build_payments_received(db, vendor_id, date_from, date_to):
+def _build_payments_received(db, vendor_ids, date_from, date_to):
     frm, to = _window_bounds(date_from, date_to)
     rows = []
-    for loan, app, vendor, patient in _loan_rows(db, vendor_id):
+    for loan, app, vendor, patient in _loan_rows(db, vendor_ids):
         vend, prov = _vendor_names(vendor)
         name = _full_name(app, patient)
         loan_id = _loan_display_id(loan)
@@ -519,7 +538,7 @@ def _build_payments_received(db, vendor_id, date_from, date_to):
     return _PAYMENT_COLS, rows
 
 
-def _build_payments_failed(db, vendor_id, date_from, date_to):
+def _build_payments_failed(db, vendor_ids, date_from, date_to):
     """Failed auto-collection attempts (WS-G ``platform_collection_attempts``,
     outcome='failed'). Payment Amount is what was ATTEMPTED; nothing moved, so
     the fee/interest/principal *paid* columns are zero (an NSF fee charged for
@@ -545,8 +564,8 @@ def _build_payments_failed(db, vendor_id, date_from, date_to):
         )
         .filter(PlatformCollectionAttempt.outcome == "failed")
     )
-    if vendor_id is not None:
-        q = q.filter(PlatformCreditApplication.vendor_id == vendor_id)
+    if vendor_ids:
+        q = q.filter(PlatformCreditApplication.vendor_id.in_(vendor_ids))
 
     rows = []
     for attempt, loan, app, vendor, patient in q.all():
@@ -577,10 +596,13 @@ def _build_payments_failed(db, vendor_id, date_from, date_to):
     return _PAYMENT_COLS, rows
 
 
-def _build_payments_reversed(db, vendor_id, date_from, date_to):
-    cols = [c for c in _PAYMENT_COLS if c.header != "Actual Time"]
+_REVERSED_COLS = [c for c in _PAYMENT_COLS if c.header != "Actual Time"]
+
+
+def _build_payments_reversed(db, vendor_ids, date_from, date_to):
+    cols = _REVERSED_COLS
     rows = []
-    for loan, app, vendor, patient in _loan_rows(db, vendor_id):
+    for loan, app, vendor, patient in _loan_rows(db, vendor_ids):
         txns = _ledger_rows(loan)
         if not txns:
             continue
@@ -623,25 +645,28 @@ def _build_payments_reversed(db, vendor_id, date_from, date_to):
     return cols, rows
 
 
-def _build_loan_transactions(db, vendor_id, date_from, date_to):
-    cols = [
-        Col("Vendor"),
-        Col("Provider"),
-        Col("Loan ID"),
-        Col("Full Name"),
-        Col("Transaction Date", "date"),
-        Col("Type"),
-        Col("Method"),
-        Col("Amount", "money", total=True),
-        Col("Interest", "money", total=True),
-        Col("Principal", "money", total=True),
-        Col("Fee", "money", total=True),
-        Col("*Outstanding Principal", "money"),
-        Col("Reference"),
-    ]
+_TXN_COLS = [
+    Col("Vendor"),
+    Col("Provider"),
+    Col("Loan ID"),
+    Col("Full Name"),
+    Col("Transaction Date", "date"),
+    Col("Type"),
+    Col("Method"),
+    Col("Amount", "money", total=True),
+    Col("Interest", "money", total=True),
+    Col("Principal", "money", total=True),
+    Col("Fee", "money", total=True),
+    Col("*Outstanding Principal", "money"),
+    Col("Reference"),
+]
+
+
+def _build_loan_transactions(db, vendor_ids, date_from, date_to):
+    cols = _TXN_COLS
     frm, to = _window_bounds(date_from, date_to)
     rows = []
-    for loan, app, vendor, patient in _loan_rows(db, vendor_id):
+    for loan, app, vendor, patient in _loan_rows(db, vendor_ids):
         vend, prov = _vendor_names(vendor)
         name = _full_name(app, patient)
         loan_id = _loan_display_id(loan)
@@ -725,19 +750,22 @@ def _build_loan_transactions(db, vendor_id, date_from, date_to):
     return cols, rows
 
 
-def _build_scheduled_payments(db, vendor_id, date_from, date_to):
-    cols = [
-        Col("Vendor"),
-        Col("Provider"),
-        Col("Loan ID"),
-        Col("Full Name"),
-        Col("Date", "date"),
-        Col("Amount", "money", total=True),
-        Col("Status"),
-    ]
+_SCHEDULED_COLS = [
+    Col("Vendor"),
+    Col("Provider"),
+    Col("Loan ID"),
+    Col("Full Name"),
+    Col("Date", "date"),
+    Col("Amount", "money", total=True),
+    Col("Status"),
+]
+
+
+def _build_scheduled_payments(db, vendor_ids, date_from, date_to):
+    cols = _SCHEDULED_COLS
     today = datetime.now(timezone.utc).date()
     rows = []
-    for loan, app, vendor, patient in _loan_rows(db, vendor_id):
+    for loan, app, vendor, patient in _loan_rows(db, vendor_ids):
         if loan.status in ("charged_off", "cancelled"):
             continue
         vend, prov = _vendor_names(vendor)
@@ -810,9 +838,36 @@ _REPORTS: dict[str, tuple[str, Callable]] = {
 
 REPORT_KEYS: tuple[str, ...] = tuple(_REPORTS)
 
+# Static column layout per dataset — the report-builder catalog. The builders
+# reference the SAME Col constants, so this cannot drift from what renders.
+_DATASET_COLS: dict[str, list[Col]] = {
+    "borrower-data": _BORROWER_COLS,
+    "loan-originations": _ORIGINATION_COLS,
+    "payments-received": _PAYMENT_COLS,
+    "payments-failed": _PAYMENT_COLS,
+    "payments-reversed": _REVERSED_COLS,
+    "loan-transactions": _TXN_COLS,
+    "scheduled-payments": _SCHEDULED_COLS,
+}
+
 
 def report_catalog() -> list[dict]:
     return [{"key": k, "title": t} for k, (t, _) in _REPORTS.items()]
+
+
+def dataset_columns(key: str) -> list[str]:
+    """Ordered column headers of one dataset (report-builder vocabulary)."""
+    if key not in _DATASET_COLS:
+        raise KeyError(f"Unknown report: {key!r}")
+    return [c.header for c in _DATASET_COLS[key]]
+
+
+def dataset_catalog() -> list[dict]:
+    """Report-builder catalog: every dataset with its selectable columns."""
+    return [
+        {"key": k, "title": t, "columns": dataset_columns(k)}
+        for k, (t, _) in _REPORTS.items()
+    ]
 
 
 _KIND_FORMATS = {
@@ -901,19 +956,23 @@ def generate_report(
     key: str,
     *,
     vendor_id: Optional[UUID] = None,
+    vendor_ids: Optional[Sequence[UUID]] = None,
     date_from: Optional[date] = None,
     date_to: Optional[date] = None,
 ) -> ReportResult:
     """Build one of the seven TL-parity reports as an XLSX byte blob.
 
     ``vendor_id`` scopes to a single vendor (the clinic surface forces it);
-    ``date_from``/``date_to`` are an inclusive date window on each report's
-    natural time axis (origination date, payment effective date, due date).
+    ``vendor_ids`` is the multi-select rollup (Dave's all-locations view) —
+    the two combine into one de-duplicated scope. ``date_from``/``date_to``
+    are an inclusive date window on each report's natural time axis
+    (origination date, payment effective date, due date).
     """
     if key not in _REPORTS:
         raise KeyError(f"Unknown report: {key!r}")
     title, builder = _REPORTS[key]
-    cols, rows = builder(db, vendor_id, date_from, date_to)
+    scope = _vendor_scope(vendor_id, vendor_ids)
+    cols, rows = builder(db, scope, date_from, date_to)
 
     if date_from or date_to:
         period_label = f"{date_from.isoformat() if date_from else '…'} to {date_to.isoformat() if date_to else '…'}"
@@ -925,4 +984,52 @@ def generate_report(
     filename = f"payspyre_{key.replace('-', '_')}_{stamp}.xlsx"
     return ReportResult(
         key=key, title=title, filename=filename, content=content, row_count=len(rows)
+    )
+
+
+def generate_custom_report(
+    db: Session,
+    *,
+    name: str,
+    base_dataset: str,
+    columns: Sequence[str],
+    vendor_ids: Optional[Sequence[UUID]] = None,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+) -> ReportResult:
+    """Excel report builder v1: render a SAVED report definition — a base
+    dataset with a caller-chosen ordered column subset + filters — through the
+    exact same XLSX machinery as the stock reports.
+
+    ``columns`` must be a non-empty, duplicate-free subset of the dataset's
+    headers (``dataset_columns``); raises ValueError otherwise (API → 422).
+    """
+    from app.services.metrics.reports_depth import column_indices, project_row
+
+    if base_dataset not in _REPORTS:
+        raise KeyError(f"Unknown report: {base_dataset!r}")
+    _title, builder = _REPORTS[base_dataset]
+    scope = _vendor_scope(None, vendor_ids)
+    cols, rows = builder(db, scope, date_from, date_to)
+
+    indices = column_indices([c.header for c in cols], columns)
+    sub_cols = [cols[i] for i in indices]
+    sub_rows = [project_row(r, indices) for r in rows]
+
+    if date_from or date_to:
+        period_label = f"{date_from.isoformat() if date_from else '…'} to {date_to.isoformat() if date_to else '…'}"
+    else:
+        period_label = ""
+
+    title = name.strip() or _title
+    content = _render_xlsx(title, period_label, sub_cols, sub_rows)
+    stamp = datetime.now(timezone.utc).date().isoformat()
+    safe = "".join(ch if ch.isalnum() else "_" for ch in title.lower()).strip("_") or "custom"
+    filename = f"payspyre_{safe}_{stamp}.xlsx"
+    return ReportResult(
+        key=base_dataset,
+        title=title,
+        filename=filename,
+        content=content,
+        row_count=len(sub_rows),
     )

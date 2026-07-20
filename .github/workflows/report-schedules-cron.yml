@@ -1,0 +1,30 @@
+name: Scheduled reports runner (daily)
+
+# Renders every due report schedule (WS-H, video 05 item 6) and emails the XLSX
+# with the artifact attached — headline case: the monthly vendor statement
+# fanned out per vendor (app/jobs/report_schedules.py). Idempotent per period
+# (each schedule advances its own last_period_key cursor); safe to re-run.
+# Delivery is INERT without SendGrid — schedules still render, nothing sends.
+# Requires:
+#   secret PROD_DATABASE_URL — the production DB connection string.
+#
+# PARKED like the other crons until a real DB secret is wired. Daily is the
+# natural cadence — the runner itself decides which schedules are due.
+on:
+  # schedule:
+  #   - cron: "0 13 * * *"   # ~06:00 Pacific — re-enable when DB secret is wired
+  workflow_dispatch: {}
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e .
+      - name: Run scheduled reports
+        env:
+          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+        run: python -m app.jobs.report_schedules
