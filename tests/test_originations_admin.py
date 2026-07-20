@@ -410,7 +410,7 @@ def test_migration_059_chain_pin():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     assert mod.revision == "059_originations_admin"
-    assert mod.down_revision == "054_hardship"
+    assert mod.down_revision == "058_underwriting_depth"
 
 
 # ---------------------------------------------------------------------------

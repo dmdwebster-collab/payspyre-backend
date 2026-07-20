@@ -38,7 +38,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "063_archive_misc"
-down_revision: Union[str, None] = "054_hardship"
+down_revision: Union[str, None] = "062_reports_depth"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

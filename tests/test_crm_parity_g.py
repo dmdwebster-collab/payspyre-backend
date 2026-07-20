@@ -44,7 +44,7 @@ def test_migration_061_down_revision():
     # Pinned to the single head at branch time. The merge train may re-chain
     # this onto the final wave-1 head — update BOTH this assert and the
     # migration's down_revision together.
-    assert mod.down_revision == "054_hardship"
+    assert mod.down_revision == "060_settings_suite"
 
 
 # ---------------------------------------------------------------------------

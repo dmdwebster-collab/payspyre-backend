@@ -566,4 +566,4 @@ def test_migration_063_chain_pin():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     assert mod.revision == "063_archive_misc"
-    assert mod.down_revision == "054_hardship"
+    assert mod.down_revision == "062_reports_depth"
