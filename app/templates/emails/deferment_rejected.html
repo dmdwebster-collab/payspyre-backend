@@ -1,0 +1,34 @@
+{% extends "_base.html" %}
+
+{% block title %}Deferment Declined{% endblock %}
+
+{% block header_title %}Deferment declined{% endblock %}
+{% block header_subtitle %}<p>Your payment deferment request could not be approved</p>{% endblock %}
+
+{% block badge %}<div class="badge badge-alert">DEFERMENT DECLINED</div>{% endblock %}
+
+{% block content %}
+    <div class="info-box">
+        <p><strong>Loan ID:</strong> {{ loan_id }}</p>
+        <p><strong>Vendor:</strong> {{ vendor_name }}</p>
+    </div>
+
+    <p>We have received your deferment request. Unfortunately, your request has been declined, and your payment
+        is expected as scheduled.</p>
+
+    <div class="note">
+        <p>Your request may have been declined for a number of reasons, including but not limited to:</p>
+        <ul>
+            <li>Maximum number of requests exceeded</li>
+            <li>Too many requests within a short period of time</li>
+            <li>Invalid reason</li>
+        </ul>
+    </div>
+
+    <p>While we want to do our best to assist borrowers with their repayment, there are limits. These limits are
+        in place to protect both Vendors and Borrowers — delaying too many payments can negatively affect your
+        overall cost of borrowing.</p>
+
+    <p>If you have any questions or concerns, or are experiencing difficulties making your loan payments,
+        please contact us at <a href="mailto:{{ support_email }}">{{ support_email }}</a>.</p>
+{% endblock %}

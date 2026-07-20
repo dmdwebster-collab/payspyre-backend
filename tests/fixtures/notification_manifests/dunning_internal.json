@@ -1,0 +1,310 @@
+{
+  "dunning": [
+    {
+      "key": "payment_due_reminder",
+      "email_template": "payment_due_reminder.html",
+      "email_subject": "PaySpyre - Payment Reminder: {% if days_until_due <= 2 %}Autopay in less than 48 hours{% else %}Autopay in {{ days_until_due }} Days{% endif %}",
+      "sms_template": "PaySpyre: your autopayment of {{ payment_amount }} is scheduled for {{ due_date }}. View your account: {{ payment_url }}",
+      "sample_contexts": [
+        {
+          "borrower_name": "Jordan Lee",
+          "loan_id": "a1b2c3d4",
+          "payment_amount": "$182.50",
+          "due_date": "July 26, 2026",
+          "days_until_due": 7,
+          "payment_url": "https://app.payspyre.com/account",
+          "account_url": "https://app.payspyre.com/account"
+        },
+        {
+          "borrower_name": "Jordan Lee",
+          "loan_id": "a1b2c3d4",
+          "payment_amount": "$182.50",
+          "due_date": "July 21, 2026",
+          "days_until_due": 2,
+          "payment_url": "https://app.payspyre.com/account",
+          "account_url": "https://app.payspyre.com/account"
+        }
+      ]
+    },
+    {
+      "key": "payment_overdue",
+      "email_template": "payment_overdue.html",
+      "email_subject": "{% if days_overdue >= 90 %}PaySpyre - ACCOUNT IN DEFAULT: Loan Past Due {{ days_overdue }} Days!{% else %}PaySpyre - Action Required: Loan Past Due {{ days_overdue }} Days{% endif %}",
+      "sms_template": "PaySpyre: your loan is {{ days_overdue }} day(s) past due. Amount due: {{ payment_amount }}. Make a payment: {{ payment_url }}",
+      "sample_contexts": [
+        {
+          "borrower_name": "Jordan Lee",
+          "loan_id": "a1b2c3d4",
+          "payment_amount": "$182.50",
+          "due_date": "July 12, 2026",
+          "days_overdue": 7,
+          "payment_url": "https://app.payspyre.com/account",
+          "account_url": "https://app.payspyre.com/account"
+        },
+        {
+          "borrower_name": "Jordan Lee",
+          "loan_id": "a1b2c3d4",
+          "payment_amount": "$182.50",
+          "due_date": "July 5, 2026",
+          "days_overdue": 14,
+          "payment_url": "https://app.payspyre.com/account",
+          "account_url": "https://app.payspyre.com/account"
+        },
+        {
+          "borrower_name": "Jordan Lee",
+          "loan_id": "a1b2c3d4",
+          "payment_amount": "$182.50",
+          "due_date": "June 19, 2026",
+          "days_overdue": 30,
+          "payment_url": "https://app.payspyre.com/account",
+          "account_url": "https://app.payspyre.com/account"
+        },
+        {
+          "borrower_name": "Jordan Lee",
+          "loan_id": "a1b2c3d4",
+          "payment_amount": "$182.50",
+          "due_date": "April 20, 2026",
+          "days_overdue": 90,
+          "payment_url": "https://app.payspyre.com/account",
+          "account_url": "https://app.payspyre.com/account"
+        }
+      ]
+    }
+  ],
+  "internal": [
+    {
+      "key": "bo_loan_unassigned",
+      "email_subject": "New unassigned loan in the system",
+      "notice_title": "New unassigned loan",
+      "intro": "There is a loan that doesn't have a staff member assigned to it.",
+      "detail_fields": ["loan_id", "loan_status", "customer_name"],
+      "audience": "back_office",
+      "sample_context": {
+        "loan_id": "a1b2c3d4",
+        "loan_status": "Processing",
+        "customer_name": "Jordan Lee"
+      }
+    },
+    {
+      "key": "bo_loan_assigned",
+      "email_subject": "Loan #{{ loan_id }} was assigned to you",
+      "notice_title": "Loan assigned to you",
+      "intro": "You were assigned a loan. To see if any particular actions need to be taken, open the loan application in one of the workplaces of your dashboard.",
+      "detail_fields": ["loan_id", "loan_status", "customer_name"],
+      "audience": "back_office",
+      "sample_context": {
+        "loan_id": "a1b2c3d4",
+        "loan_status": "Processing",
+        "customer_name": "Jordan Lee"
+      }
+    },
+    {
+      "key": "bo_repayment_failed",
+      "email_subject": "Unsuccessful loan repayment. Loan ID: {{ loan_id }}",
+      "notice_title": "Loan repayment failed",
+      "intro": "Please be informed that the loan repayment has failed.",
+      "detail_fields": ["loan_id", "loan_status", "customer_name", "payment_amount"],
+      "outro": "Please investigate further if this loan is assigned to you.",
+      "audience": "back_office",
+      "sample_context": {
+        "loan_id": "a1b2c3d4",
+        "loan_status": "Active",
+        "customer_name": "Jordan Lee",
+        "payment_amount": "$182.50"
+      }
+    },
+    {
+      "key": "bo_deferment_requested",
+      "email_subject": "New payment deferment request on Loan ID: {{ loan_id }}",
+      "notice_title": "Payment deferment request",
+      "intro": "Please be informed that there is a loan payment deferment request created by the customer.",
+      "detail_fields": ["loan_id", "loan_status", "customer_name", "due_date", "outstanding_principal", "outstanding_interest"],
+      "audience": "back_office",
+      "sample_context": {
+        "loan_id": "a1b2c3d4",
+        "loan_status": "Active",
+        "customer_name": "Jordan Lee",
+        "due_date": "July 26, 2026",
+        "outstanding_principal": "$3,240.00",
+        "outstanding_interest": "$118.72"
+      }
+    },
+    {
+      "key": "bo_ptp_fulfilled",
+      "email_subject": "Promise to pay fulfilled. Loan ID: {{ loan_id }}",
+      "notice_title": "Promise to pay fulfilled",
+      "intro": "The promised payment has been received.",
+      "detail_fields": ["loan_id", "loan_status", "customer_name", "ptp_amount", "ptp_date"],
+      "audience": "back_office",
+      "sample_context": {
+        "loan_id": "a1b2c3d4",
+        "loan_status": "Past Due",
+        "customer_name": "Jordan Lee",
+        "ptp_amount": "$182.50",
+        "ptp_date": "July 18, 2026"
+      }
+    },
+    {
+      "key": "bo_ptp_broken",
+      "email_subject": "A broken promise to pay. Loan ID: {{ loan_id }}",
+      "notice_title": "Promise to pay broken",
+      "intro": "The promised payment has failed.",
+      "detail_fields": ["loan_id", "loan_status", "customer_name", "ptp_amount", "ptp_date"],
+      "audience": "back_office",
+      "sample_context": {
+        "loan_id": "a1b2c3d4",
+        "loan_status": "Past Due",
+        "customer_name": "Jordan Lee",
+        "ptp_amount": "$182.50",
+        "ptp_date": "July 18, 2026"
+      }
+    },
+    {
+      "key": "bo_comment_added",
+      "email_subject": "New comment on a loan. Loan ID: {{ loan_id }}",
+      "notice_title": "New loan comment",
+      "intro": "A new internal comment has been added to a loan.",
+      "detail_fields": ["loan_id", "customer_name", "comment_author", "comment_text"],
+      "audience": "back_office",
+      "sample_context": {
+        "loan_id": "a1b2c3d4",
+        "customer_name": "Jordan Lee",
+        "comment_author": "Dana Smith",
+        "comment_text": "Borrower called; will pay Friday."
+      }
+    },
+    {
+      "key": "bo_comment_edited",
+      "email_subject": "Edited comment on a loan. Loan ID: {{ loan_id }}",
+      "notice_title": "Loan comment edited",
+      "intro": "An internal comment on a loan has been edited by its author.",
+      "detail_fields": ["loan_id", "customer_name", "comment_author", "comment_text"],
+      "audience": "back_office",
+      "sample_context": {
+        "loan_id": "a1b2c3d4",
+        "customer_name": "Jordan Lee",
+        "comment_author": "Dana Smith",
+        "comment_text": "Borrower called; will pay Monday (updated)."
+      }
+    },
+    {
+      "key": "bo_agreement_declined",
+      "email_subject": "Loan agreement declined - Loan ID: {{ loan_id }}",
+      "notice_title": "Loan agreement declined",
+      "intro": "The customer has declined the loan agreement. The loan application is moved to the archive.",
+      "detail_fields": ["loan_id", "loan_status", "customer_name"],
+      "audience": "back_office",
+      "sample_context": {
+        "loan_id": "a1b2c3d4",
+        "loan_status": "Archived",
+        "customer_name": "Jordan Lee"
+      }
+    },
+    {
+      "key": "bo_offer_declined",
+      "email_subject": "Loan offer declined - Loan ID: {{ loan_id }}",
+      "notice_title": "Loan offer declined",
+      "intro": "The customer has declined the loan offer. The loan application is moved to the archive.",
+      "detail_fields": ["loan_id", "loan_status", "customer_name"],
+      "audience": "back_office",
+      "sample_context": {
+        "loan_id": "a1b2c3d4",
+        "loan_status": "Archived",
+        "customer_name": "Jordan Lee"
+      }
+    },
+    {
+      "key": "bo_loan_past_due",
+      "email_subject": "A loan is past due. Loan ID: {{ loan_id }}",
+      "notice_title": "Loan past due",
+      "intro": "There is a loan that has just become past due.",
+      "detail_fields": ["loan_id", "customer_name", "due_date", "past_due_amount"],
+      "audience": "back_office",
+      "sample_context": {
+        "loan_id": "a1b2c3d4",
+        "customer_name": "Jordan Lee",
+        "due_date": "July 12, 2026",
+        "past_due_amount": "$182.50"
+      }
+    },
+    {
+      "key": "bo_agreement_signed",
+      "email_subject": "Loan agreement signed. Loan ID: {{ loan_id }}",
+      "notice_title": "Loan agreement signed",
+      "intro": "Please be informed that a new loan agreement has been signed.",
+      "detail_fields": ["loan_id", "loan_status", "customer_name", "contract_date"],
+      "audience": "back_office",
+      "sample_context": {
+        "loan_id": "a1b2c3d4",
+        "loan_status": "Signed",
+        "customer_name": "Jordan Lee",
+        "contract_date": "July 18, 2026"
+      }
+    },
+    {
+      "key": "bo_agreement_expired",
+      "email_subject": "Loan agreement expired. Loan ID: {{ loan_id }}",
+      "notice_title": "Loan agreement expired",
+      "intro": "Please be informed that a loan agreement has expired. The loan application is sent to the archive.",
+      "detail_fields": ["loan_id", "loan_status", "customer_name"],
+      "audience": "back_office",
+      "sample_context": {
+        "loan_id": "a1b2c3d4",
+        "loan_status": "Archived",
+        "customer_name": "Jordan Lee"
+      }
+    },
+    {
+      "key": "bo_offer_accepted",
+      "email_subject": "Loan offer accepted. Loan ID: {{ loan_id }}",
+      "notice_title": "Loan offer accepted",
+      "intro": "Please be informed that the customer has accepted the offer.",
+      "detail_fields": ["loan_id", "loan_status", "customer_name"],
+      "audience": "back_office",
+      "sample_context": {
+        "loan_id": "a1b2c3d4",
+        "loan_status": "Offer Accepted",
+        "customer_name": "Jordan Lee"
+      }
+    },
+    {
+      "key": "bo_offer_expired",
+      "email_subject": "Loan offer expired. Loan ID: {{ loan_id }}",
+      "notice_title": "Loan offer expired",
+      "intro": "Please be informed that the loan offer has expired. The loan application is sent to the archive.",
+      "detail_fields": ["loan_id", "loan_status", "customer_name"],
+      "audience": "back_office",
+      "sample_context": {
+        "loan_id": "a1b2c3d4",
+        "loan_status": "Archived",
+        "customer_name": "Jordan Lee"
+      }
+    },
+    {
+      "key": "vendor_loan_unassigned",
+      "email_subject": "Loan generated by vendor is unassigned. Loan ID: {{ loan_id }}",
+      "notice_title": "Vendor loan unassigned",
+      "intro": "Please be informed that there is a loan that needs to have a staff member assigned to it.",
+      "detail_fields": ["loan_id", "loan_status", "customer_name"],
+      "audience": "vendor",
+      "sample_context": {
+        "loan_id": "a1b2c3d4",
+        "loan_status": "Processing",
+        "customer_name": "Jordan Lee"
+      }
+    },
+    {
+      "key": "vendor_loan_assigned",
+      "email_subject": "You were assigned a loan. Loan ID: {{ loan_id }}",
+      "notice_title": "You were assigned a loan",
+      "intro": "Please be informed that you have been assigned a loan.",
+      "detail_fields": ["loan_id", "loan_status", "customer_name"],
+      "audience": "vendor",
+      "sample_context": {
+        "loan_id": "a1b2c3d4",
+        "loan_status": "Processing",
+        "customer_name": "Jordan Lee"
+      }
+    }
+  ]
+}

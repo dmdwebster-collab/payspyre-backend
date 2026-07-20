@@ -1,0 +1,31 @@
+{% extends "_base.html" %}
+
+{% block title %}Broken Promise to Pay{% endblock %}
+
+{% block header_title %}Promise to pay past due{% endblock %}
+{% block header_subtitle %}<p>We have not received your promised payment</p>{% endblock %}
+
+{% block badge %}<div class="badge badge-alert">PAYMENT PAST DUE</div>{% endblock %}
+
+{% block content %}
+    <div class="info-box">
+        <p><strong>Loan ID:</strong> {{ loan_id }}</p>
+        <p><strong>Vendor:</strong> {{ vendor_name }}</p>
+        <p><strong>Currently due:</strong> {{ past_due_amount }}</p>
+    </div>
+
+    <p>You previously made a promise to pay <strong>{{ ptp_amount }}</strong> on <strong>{{ ptp_date }}</strong>.
+        Unfortunately, we have not yet received this payment.</p>
+
+    <p>Please make your payment immediately.</p>
+
+    <a href="{{ dashboard_url }}" class="button">Make a payment</a>
+
+    <div class="note note-alert">
+        <p><strong>Reminder:</strong> payments received more than 7 days after the due date may be assessed a
+            late-payment fee.</p>
+    </div>
+
+    <p>If you have any questions or concerns, or are experiencing difficulties making your loan payments,
+        please contact us at <a href="mailto:{{ support_email }}">{{ support_email }}</a>.</p>
+{% endblock %}

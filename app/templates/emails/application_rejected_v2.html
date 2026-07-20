@@ -1,0 +1,29 @@
+{% extends "_base.html" %}
+{% block title %}Application Rejection{% endblock %}
+
+{% block header_title %}Application decision{% endblock %}
+{% block header_subtitle %}<p>An update on your loan application</p>{% endblock %}
+
+{% block badge %}<div class="badge badge-alert">NOT APPROVED</div>{% endblock %}
+
+{% block content %}
+    <div class="info-box">
+        <p><strong>Vendor:</strong> {{ vendor_name }}</p>
+        <p><strong>Application #:</strong> {{ loan_id }}</p>
+    </div>
+
+    <p>Thank you for considering {{ company_name }} for your financing needs. Unfortunately, after careful
+        review of your application, we regret to inform you that your loan application has been rejected.</p>
+
+    <div class="note">
+        <p><strong>Rejection reason:</strong> {{ rejection_reason }}</p>
+    </div>
+
+    <p>Should your situation change in the future, please don't hesitate to re-apply from your
+        <a href="{{ dashboard_url }}">dashboard</a>.</p>
+{% endblock %}
+
+{% block signature %}<div class="signature">
+    <p>Respectfully,</p>
+    <p>Customer Care Department<br>{{ company_name }}</p>
+</div>{% endblock %}

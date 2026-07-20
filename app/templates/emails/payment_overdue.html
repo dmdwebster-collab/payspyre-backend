@@ -1,46 +1,84 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Payment Overdue</title>
-    <style>
-        body { font-family: 'Work Sans', Arial, sans-serif; line-height: 1.6; color: #1a1a1a; max-width: 600px; margin: 0 auto; padding: 20px; }
-        .header { background: #d97706; color: #fff; padding: 28px; text-align: center; border-radius: 20px 20px 0 0; }
-        .header h1 { margin: 0; font-size: 24px; }
-        .content { background: #faf9f6; padding: 30px; border-radius: 0 0 20px 20px; }
-        .info-box { background: #fff; border-left: 4px solid #d97706; padding: 16px; margin: 20px 0; border-radius: 8px; }
-        .button { display: inline-block; background: #d97706; color: #fff; padding: 14px 28px; text-decoration: none; border-radius: 12px; margin: 16px 0; font-weight: 600; }
-        .footer { text-align: center; margin-top: 28px; color: #666; font-size: 12px; }
-    </style>
-</head>
-<body>
-    <div style="padding:16px 0 10px; text-align:center;">
-        <svg width="24" height="24" viewBox="99.5 71.5 48 48.2" xmlns="http://www.w3.org/2000/svg" style="vertical-align:middle;" role="img" aria-label="PaySpyre"><path fill="#84d1d1" fill-opacity="0.4" d="M128.074 72C128.074 87.082 140.66 90.852 146.953 90.852L146.953 100.277C131.852 100.277 118.637 90.852 128.074 72Z"/><path fill="#84d1d1" fill-opacity="0.4" d="M118.879 119.215C118.879 104.133 106.293 100.363 100 100.363L100 90.938C115.105 90.938 128.32 100.363 118.879 119.215Z"/><path fill="#84d1d1" d="M100 90.879C115.082 90.879 118.852 78.293 118.852 72L128.277 72C128.277 87.105 118.852 100.32 100 90.879Z"/><path fill="#84d1d1" d="M146.953 100.336C131.871 100.336 128.102 112.922 128.102 119.215L118.676 119.215C118.676 104.109 128.102 90.895 146.953 100.336Z"/></svg>
-        <span style="font-size:18px; font-weight:600; color:#1a1a1a; vertical-align:middle; margin-left:8px;">PaySpyre</span>
+{% extends "_base.html" %}
+{# Past-due dunning notice (Dave: Due Date Reminders v1.0, Past Due rows).
+   One template serves every tier (7/14/21/30/60/90 days) via {{ days_overdue }}:
+     - all tiers: Re: line, loan/amount info box, payment steps, hardship offer
+     - >= 30:     escalation paragraph (further recovery efforts / legal action)
+     - >= 90:     default framing — "Without prejudice" greeting, ACCOUNT IN
+                  DEFAULT badge, immediate-payment demand, Collections
+                  Department signature (conditional inside the block override)
+   Context (app/services/dunning.py::_context): borrower_name, loan_id,
+   payment_amount (the outstanding amount due), due_date, days_overdue,
+   payment_url, account_url. past_due_amount / outstanding_principal are NOT
+   in the dunning context — payment_amount is the amount due here. #}
+{% block title %}Loan Past Due{% endblock %}
+{% block header_title %}{% if days_overdue | int(0) >= 90 %}Payment Past Due {{ days_overdue }} Days!{% else %}Action Required{% endif %}{% endblock %}
+{% block header_subtitle %}{% if days_overdue | int(0) < 90 %}<p>Loan past due {{ days_overdue }} days</p>{% endif %}{% endblock %}
+{% block badge %}{% if days_overdue | int(0) >= 90 %}<span class="badge badge-alert">ACCOUNT IN DEFAULT</span>{% endif %}{% endblock %}
+{% block greeting %}{% if days_overdue | int(0) >= 90 %}<p>Without prejudice, {{ borrower_name }}, your account is in default.</p>{% else %}<p>Dear {{ borrower_name }},</p>{% endif %}{% endblock %}
+{% block content %}
+    <p><b>Re: Loan in Default - {{ days_overdue }} days past due</b></p>
+
+    <div class="info-box">
+        <p><strong>Loan ID:</strong> {{ loan_id }}</p>
+        <p><strong>Amount due:</strong> {{ payment_amount }}</p>
+        <p><strong>Due date:</strong> {{ due_date }}</p>
+        <p><strong>Days past due:</strong> {{ days_overdue }}</p>
     </div>
-    <div class="header">
-        <h1>Your payment is overdue</h1>
-    </div>
-    <div class="content">
-        <p>Hi {{ borrower_name }},</p>
-        <p>Our records show your loan payment is now {{ days_overdue }} day(s) past due. Please make your payment as soon as possible to keep your account in good standing.</p>
 
-        <div class="info-box">
-            <p><strong>Amount due:</strong> {{ payment_amount }}</p>
-            <p><strong>Was due:</strong> {{ due_date }}</p>
-            <p><strong>Loan:</strong> {{ loan_id }}</p>
-        </div>
+    {% if days_overdue | int(0) >= 90 %}
+    <p>This serves as notification that your account is in <b>default</b> and is
+    currently {{ days_overdue }} days past due for a total of
+    <b>{{ payment_amount }}</b>. Your account must be immediately brought up to
+    date by paying the above amount to avoid the possibility of further adverse
+    actions taken against your account.</p>
 
-        <a href="{{ payment_url }}" class="button">View your account</a>
+    <p>We have expressed on multiple occasions that if you are experiencing
+    difficulties, please contact us so that we can try to work with you to
+    resolve the situation. Unfortunately, it has not been resolved and we must
+    now consider what actions to take next to secure our balance.</p>
 
-        <p>If you've already made this payment, thank you — you can disregard this message. If you're having difficulty, please reach out so we can help.</p>
-        <p>Manage your account at <a href="{{ account_url }}">{{ account_url }}</a>.</p>
+    <p>If you have already submitted your payment, please disregard this notice.
+    Otherwise, please immediately sign in to your
+    <a href="{{ dashboard_url }}">dashboard</a> and make the payment due.</p>
+    {% else %}
+    <p>Your loan account is due as of <b>{{ due_date }}</b> for a past due
+    amount of <b>{{ payment_amount }}</b>.<br>
+    <i>Additional fees may be due and outstanding as outlined in your Loan
+    Agreement.</i></p>
 
-        <div class="footer">
-            <p>PaySpyre Financial | Kelowna, BC</p>
-            <p>This is an automated message. Please do not reply to this email.</p>
-        </div>
-    </div>
-</body>
-</html>
+    {% if days_overdue | int(0) >= 30 %}
+    <p>We encourage you to contact us so that we can work together to find a
+    suitable solution. Continued non-payment may result in further recovery
+    efforts as outlined in your Loan Agreement, including but not limited to
+    legal action.</p>
+    {% endif %}
+
+    <p>To resolve this matter, please sign in to your dashboard to make your
+    payment.</p>
+    {% endif %}
+
+    <p><b>Make the payment online:</b></p>
+    <ol class="steps">
+        <li>Sign in to your PaySpyre dashboard:
+            <a href="{{ dashboard_url }}">{{ dashboard_url }}</a></li>
+        <li>Open your loan</li>
+        <li>Choose <b>Make a payment</b></li>
+    </ol>
+
+    <a href="{{ payment_url }}" class="button">Make a payment</a>
+
+    <p>If you are experiencing financial difficulties, we encourage you to
+    contact us promptly to discuss your situation. We are committed to working
+    with you to explore potential solutions. Please reach out to us at
+    <a href="mailto:{{ support_email }}">{{ support_email }}</a>{% if company_phone %}
+    or {{ company_phone }}{% endif %} for assistance.</p>
+{% endblock %}
+{# The hardship paragraph above carries the contact line — suppress the base
+   support block so it isn't duplicated. #}
+{% block support %}{% endblock %}
+{% block signature %}<div class="signature">
+    {% if days_overdue | int(0) >= 90 %}<p>Respectfully,</p>
+    <p>Collections Department<br>PaySpyre Financial Inc.</p>
+    {% else %}<p>Sincerely,</p>
+    <p>Customer Care Department<br>PaySpyre Financial Inc.</p>{% endif %}
+</div>{% endblock %}

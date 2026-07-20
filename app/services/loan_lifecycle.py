@@ -90,6 +90,11 @@ LOAN_DISBURSEMENT_INITIATED_EVENT = "loan_disbursement_initiated"
 LOAN_DISBURSED_EVENT = "loan_disbursed"
 LOAN_DISBURSEMENT_FAILED_EVENT = "loan_disbursement_failed"
 LOAN_CHARGED_OFF_EVENT = "loan_charged_off"
+# Agreement (e-sign) lifecycle — recorded so the notification processor can
+# send the borrower-facing "signature required" / "agreement signed" emails
+# (Dave's Customer notification spec) off the same event stream.
+LOAN_AGREEMENT_SENT_EVENT = "loan_agreement_sent"
+LOAN_AGREEMENT_SIGNED_EVENT = "loan_agreement_signed"
 
 
 def _record_loan_event(db: Session, loan: PlatformLoan, event_type: str, after: dict) -> None:
@@ -348,6 +353,12 @@ def send_agreement(
 
     loan.agreement_status = "sent"
     loan.agreement_ref = result.document_id
+    _record_loan_event(
+        db,
+        loan,
+        LOAN_AGREEMENT_SENT_EVENT,
+        {"agreement_status": "sent", "agreement_ref": result.document_id},
+    )
     db.commit()
     db.refresh(loan)
     logger.info(
@@ -394,6 +405,12 @@ def on_agreement_signed(
 
     if loan.agreement_status != "signed":
         loan.agreement_status = "signed"
+        _record_loan_event(
+            db,
+            loan,
+            LOAN_AGREEMENT_SIGNED_EVENT,
+            {"agreement_status": "signed", "agreement_ref": loan.agreement_ref},
+        )
         db.commit()
         db.refresh(loan)
         logger.info("loan_agreement_signed", loan_id=str(loan.id))

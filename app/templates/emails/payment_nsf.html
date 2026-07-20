@@ -1,0 +1,44 @@
+{% extends "_base.html" %}
+
+{% block title %}Notice of NSF Payment{% endblock %}
+
+{% block header_title %}Dishonoured payment{% endblock %}
+{% block header_subtitle %}<p>A recent payment was returned by your bank — action required</p>{% endblock %}
+
+{% block badge %}<div class="badge badge-alert">ACTION REQUIRED</div>{% endblock %}
+
+{% block greeting %}{% endblock %}
+
+{% block content %}
+    <div class="info-box">
+        <p><strong>Loan ID:</strong> {{ loan_id }}</p>
+        <p><strong>Vendor:</strong> {{ vendor_name }}</p>
+        <p><strong>Outstanding principal:</strong> {{ outstanding_principal }}</p>
+    </div>
+
+    <p><strong>Re: Dishonoured payment</strong></p>
+
+    <p>Dear {{ customer_name }},</p>
+
+    <p>Our records indicate that your recent payment was returned by your financial institution.
+        Your loan account is due as of <strong>{{ due_as_of }}</strong> for a past-due amount of
+        <strong>{{ past_due_amount }}</strong>.</p>
+
+    <div class="note note-alert">
+        <p>Please be advised that a <strong>{{ nsf_fee }}</strong> dishonoured-payment fee has been applied to your
+            account, as detailed in your Loan Agreement.</p>
+        <p><em>Additional fees may be due and outstanding as outlined in your Loan Agreement.</em></p>
+    </div>
+
+    <p><strong>To resolve this matter:</strong></p>
+    <ol class="steps">
+        <li>Sign in to your <a href="{{ dashboard_url }}">PaySpyre dashboard</a></li>
+        <li>Open your loan</li>
+        <li>Choose <strong>Make a payment</strong> to pay the past-due amount — you can pay any outstanding fees the same way</li>
+    </ol>
+
+    <a href="{{ dashboard_url }}" class="button">Make a payment</a>
+
+    <p>If you are experiencing financial difficulties, we encourage you to contact us promptly to discuss your
+        situation. We are committed to working with you to explore potential solutions.</p>
+{% endblock %}
