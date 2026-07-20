@@ -307,7 +307,9 @@ def book_loan(
 
         document_engine.generate_booking_documents(db, loan)
     except Exception:
-        db.rollback()
+        # Booking is already committed above; generate_booking_documents is
+        # non-raising by contract. This guard is belt-and-suspenders only and
+        # must NOT roll back the committed booking on a document hiccup.
         logger.warning(
             "loan_booking_document_generation_failed",
             loan_id=str(loan.id),

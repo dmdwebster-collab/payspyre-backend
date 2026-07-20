@@ -639,11 +639,15 @@ def generate_booking_documents(db: Session, loan: PlatformLoan) -> list[Platform
             out.append(
                 generate_loan_document(db, loan, kind, generated_via="booking")
             )
-        except DocumentEngineError:
+        except Exception:
+            # Best-effort per kind: a missing template, render error, or any
+            # other failure logs and skips — booking must never fail on
+            # document generation (this function is documented as non-raising).
             logger.warning(
-                "booking_document_skipped_no_template",
+                "booking_document_skipped",
                 loan_id=str(loan.id),
                 kind=kind,
+                exc_info=True,
             )
     return out
 
