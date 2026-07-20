@@ -511,6 +511,17 @@ def record_payment(
             f"(expected one of {REPAYMENT_MODES})"
         )
 
+    # MONEY-PATH serialization: take a row lock on the loan (SELECT ... FOR
+    # UPDATE, same idiom as loan_lifecycle/marketplace) so two concurrent
+    # payments on the same loan serialize instead of both computing the
+    # allocation from the same pre-payment ledger/balance snapshot. Without
+    # the lock the second writer is only caught by the (loan_id, seq) unique
+    # constraint — a 5xx + retry rather than clean serialized behaviour — and
+    # the idempotency dedupe below could race its own replay. refresh() also
+    # expires loan.transactions / principal_balance_cents, so the allocation
+    # below always reads the committed post-lock state.
+    db.refresh(loan, with_for_update=True)
+
     # Idempotency: a payment rail (Zumrails collection webhook) can deliver the same
     # receipt more than once (at-least-once / retries). Dedupe on external_ref so a
     # replay returns the original receipt instead of double-applying cash to

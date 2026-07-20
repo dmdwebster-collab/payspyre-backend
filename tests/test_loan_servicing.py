@@ -140,6 +140,7 @@ class _FakeSession:
 
     def __init__(self):
         self.added = []
+        self.refresh_calls = []  # (obj, kwargs) — asserts the FOR UPDATE lock
 
     def add(self, obj):
         self.added.append(obj)
@@ -150,8 +151,8 @@ class _FakeSession:
     def commit(self):
         pass
 
-    def refresh(self, obj):
-        pass
+    def refresh(self, obj, **kwargs):
+        self.refresh_calls.append((obj, kwargs))
 
 
 class _Item:
@@ -207,6 +208,20 @@ def test_full_payment_marks_oldest_installment_paid():
     assert payments and payments[0].external_ref == "zr_txn_1"
     # And an immutable ledger row was appended with the actuals allocation.
     assert len(loan.transactions) == 1
+
+
+def test_record_payment_takes_row_lock_on_loan():
+    """Adversarial-review fix (PR166/PR171): record_payment must serialize
+    concurrent payments on the same loan via SELECT ... FOR UPDATE
+    (db.refresh(loan, with_for_update=True)) BEFORE reading balances, so two
+    concurrent requests can never allocate from the same pre-payment snapshot."""
+    loan = _build_loan()
+    db = _FakeSession()
+    record_payment(db, loan, 110, _now(), "zumrails", external_ref="zr_lock_1")
+    lock_calls = [
+        (obj, kw) for obj, kw in db.refresh_calls if kw.get("with_for_update") is True
+    ]
+    assert lock_calls and lock_calls[0][0] is loan
     txn = loan.transactions[0]
     assert txn.txn_type == "payment"
     assert txn.repayment_mode == "regular"

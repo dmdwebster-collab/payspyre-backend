@@ -20,7 +20,7 @@ from typing import Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -70,6 +70,19 @@ class DecisionBody(BaseModel):
     reason_codes: list[str] = []
     note: Optional[str] = None
     override: bool = False  # acknowledge overriding an existing automated decision
+
+    @model_validator(mode="after")
+    def _declined_requires_reason_codes(self) -> "DecisionBody":
+        # Schema-level enforcement (defense-in-depth alongside the endpoint's
+        # directory-validation 422): a decline can never even PARSE without at
+        # least one reason code — the adverse-action notice must state the
+        # principal reasons for the decision.
+        if self.outcome == "declined" and not self.reason_codes:
+            raise ValueError(
+                "a declined decision requires at least one reason_code from the "
+                "reject reason directory"
+            )
+        return self
 
 
 @router.post("/applications/{application_id}/decision")

@@ -201,6 +201,7 @@ def add_custom_transaction(
     repayment_mode: str = "regular",
     comment: str,
     actor: str,
+    today: Optional[date] = None,
 ) -> PlatformLoanCustomTransaction:
     """Add a one-off custom scheduled transaction (Turnkey "Add transaction").
 
@@ -213,6 +214,15 @@ def add_custom_transaction(
     cleaned = _require_comment(comment)
     if amount_cents <= 0:
         raise ScheduleSurgeryError("amount_cents must be positive")
+    # A custom transaction is an instruction to pull money LATER (or today) —
+    # backdating is a separate, permission-gated workstream (same rule as the
+    # ledger's effective_date). A past date would execute immediately anyway,
+    # while leaving a misleading date on the audit event.
+    if scheduled_date < (today or date.today()):
+        raise ScheduleSurgeryError(
+            f"scheduled_date {scheduled_date.isoformat()} is in the past "
+            "(custom transactions execute today or later; backdating is not supported)"
+        )
     if repayment_mode not in REPAYMENT_MODES:
         raise ScheduleSurgeryError(
             f"unknown repayment mode {repayment_mode!r} "
