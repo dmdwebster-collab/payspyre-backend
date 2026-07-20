@@ -354,6 +354,10 @@ def _require_loan(db: Session, loan_id: UUID) -> None:
 
 
 class ScheduleRow(BaseModel):
+    # Schedule-item UUID — the handle the surgery (suspend/unsuspend) and
+    # hardship-deferment endpoints key on. The ORM rows carry it; the response
+    # model previously dropped it, leaving the cockpit unable to act per-item.
+    id: UUID
     installment_number: int
     due_date: date
     principal_cents: int
