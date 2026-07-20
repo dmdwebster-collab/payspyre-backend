@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from datetime import date
 from typing import Any, Awaitable, Optional, TypeVar
 from uuid import UUID
 
@@ -47,6 +48,12 @@ T = TypeVar("T")
 # verification_matrix.bureau.manual_review_band.
 DEFAULT_MANUAL_REVIEW_BAND: dict[str, int] = {"min": 600, "max": 679}
 
+# WS-E bankruptcy discharge policy (Dave: "discharged for a minimum of two years
+# with established credit in order to be considered"). Overridable per-product via
+# verification_matrix.bureau.bankruptcy_discharge_min_years. BUSINESS DEFAULT —
+# flagged for Dave; never hardcoded elsewhere.
+DEFAULT_BANKRUPTCY_DISCHARGE_MIN_YEARS = 2
+
 DEFAULT_TIMEOUT_SECONDS = 10.0
 
 # decision -> application status (platform_application_status enum). The engine
@@ -62,6 +69,7 @@ REASON_QUEBEC = "quebec_coming_soon"
 REASON_MANUAL_REVIEW_BAND = "manual_review_band"
 REASON_BUREAU_BELOW_MINIMUM = "bureau_below_minimum"
 REASON_ACTIVE_BANKRUPTCY = "active_bankruptcy"
+REASON_BANKRUPTCY_DISCHARGE_RECENT = "bankruptcy_discharge_recent"  # WS-E discharge rule
 REASON_FRAUD_SIGNAL_REVIEW = "fraud_signal_review"
 REASON_IDENTITY_MANUAL_REVIEW = "identity_manual_review"  # P7.6 — Didit "In Review"
 
@@ -211,10 +219,70 @@ def _effective_identity_outcome(result: Optional[VerificationResult], min_confid
     return "failed"
 
 
+def resolve_bankruptcy_policy(
+    *,
+    bankruptcy: bool,
+    discharged_at: Optional[date],
+    min_years: int,
+    vendor_override: bool,
+    as_of: Optional[date] = None,
+) -> str:
+    """WS-E bankruptcy discharge rule — pure. Returns 'clear' | 'manual_review'
+    | 'declined'.
+
+    Policy (Dave, 02__WP_Underwriting.md §5 + WS-E spec):
+      * no bankruptcy reported → clear;
+      * ACTIVE/undischarged bankruptcy (no discharge date) → declined — the
+        pre-existing hard-decline protection, unchanged;
+      * discharged ≥ ``min_years`` ago → does not block (clear);
+      * discharged < ``min_years`` ago → manual_review when a vendor-override
+        flag is present (a vendor may grant an override approval, so a human
+        underwriter decides — NEVER auto-approve), else declined per current
+        policy.
+
+    ``min_years`` comes from product config
+    (verification_matrix.bureau.bankruptcy_discharge_min_years, default
+    :data:`DEFAULT_BANKRUPTCY_DISCHARGE_MIN_YEARS`). ``as_of`` is injectable for
+    deterministic tests; defaults to today. A discharge date in the future is
+    treated as not-yet-discharged (declined).
+    """
+    if not bankruptcy:
+        return "clear"
+    if discharged_at is None:
+        return "declined"
+    as_of = as_of or date.today()
+    if discharged_at > as_of:
+        return "declined"
+    # Calendar-exact: "discharged for a minimum of N years" means the N-year
+    # anniversary of the discharge has passed (inclusive) — not an approximate
+    # days/365.25 division, which undercounts exact-anniversary boundaries.
+    if _add_years(discharged_at, min_years) <= as_of:
+        return "clear"
+    return "manual_review" if vendor_override else "declined"
+
+
+def _add_years(d: date, years: int) -> date:
+    """d + N calendar years; Feb 29 maps to Feb 28 in a non-leap target year."""
+    try:
+        return d.replace(year=d.year + years)
+    except ValueError:  # Feb 29 source, non-leap target
+        return d.replace(year=d.year + years, day=28)
+
+
+def _bankruptcy_min_years(bureau_cfg: dict[str, Any]) -> int:
+    raw = bureau_cfg.get("bankruptcy_discharge_min_years")
+    try:
+        return int(raw) if raw is not None else DEFAULT_BANKRUPTCY_DISCHARGE_MIN_YEARS
+    except (TypeError, ValueError):
+        return DEFAULT_BANKRUPTCY_DISCHARGE_MIN_YEARS
+
+
 def _resolve_decision(
     outcome: _ApplicantOutcome,
     *,
-    bankruptcy: bool,
+    bankruptcy: bool = False,
+    bankruptcy_declines: bool = False,
+    bankruptcy_review: bool = False,
     fraud_review: bool,
     has_unknown: bool,
     has_failed_required: bool,
@@ -222,23 +290,39 @@ def _resolve_decision(
 ) -> str:
     """Resolve a single applicant's decision.
 
-    Precedence: a *confirmed* hard disqualifier (bankruptcy, or a confirmed
-    below-floor score) is final and declines — an unrelated timeout does not
-    rescue it to manual_review. Otherwise any indeterminate/soft-review condition
-    (unknown verification, failed required verification, fraud signal, identity
-    manual-review — P7.6 — or a score in the manual-review band) yields
-    manual_review. A clean above-band score approves."""
+    ``bankruptcy`` is the pre-WS-E kwarg (a confirmed bankruptcy declines),
+    kept for signature compatibility with existing callers/tests — it is
+    equivalent to ``bankruptcy_declines=True``. New callers pass the
+    discharge-policy outputs ``bankruptcy_declines`` / ``bankruptcy_review``
+    (see :func:`resolve_bankruptcy_policy`).
+
+    Precedence: a *confirmed* hard disqualifier (a bankruptcy the discharge
+    policy declines, or a confirmed below-floor score) is final and declines —
+    an unrelated timeout does not rescue it to manual_review. Otherwise any
+    indeterminate/soft-review condition (unknown verification, failed required
+    verification, fraud signal, identity manual-review — P7.6 —, a recently
+    discharged bankruptcy under vendor override, or a score in the
+    manual-review band) yields manual_review — NEVER an auto-decline (Dave: "If
+    anything doesn't match ... it needs human intervention. It cannot be
+    ignored. It shouldn't also be rejected."). A clean above-band score
+    approves."""
     score = outcome.effective_score
     band = outcome.band
 
-    if bankruptcy:
+    if bankruptcy or bankruptcy_declines:
         return "declined"
     if score is not None and score < band["min"]:
         if REASON_BUREAU_BELOW_MINIMUM not in outcome.reasons:
             outcome.reasons.append(REASON_BUREAU_BELOW_MINIMUM)
         return "declined"
 
-    review = has_unknown or has_failed_required or fraud_review or identity_manual_review
+    review = (
+        has_unknown
+        or has_failed_required
+        or fraud_review
+        or identity_manual_review
+        or bankruptcy_review
+    )
     if score is not None and band["min"] <= score <= band["max"]:
         if REASON_MANUAL_REVIEW_BAND not in outcome.reasons:
             outcome.reasons.append(REASON_MANUAL_REVIEW_BAND)
@@ -251,7 +335,7 @@ def _resolve_decision(
 
 async def _run_single_applicant(
     application: Any, product: Any, patient: PatientProfile, adapters: FlowAdapters,
-    timeout_seconds: float,
+    timeout_seconds: float, vendor_override: bool = False,
 ) -> _ApplicantOutcome:
     reasons: list[str] = []
     verifications: list[dict[str, Any]] = []
@@ -325,6 +409,7 @@ async def _run_single_applicant(
 
     # --- Bureau (soft pull, then conditional hard pull) -------------------
     bankruptcy = False
+    bankruptcy_discharged_at: Optional[date] = None
     fraud_review = False
     effective_score: Optional[int] = None
     if "bureau" in matrix and bureau_cfg.get("soft_pull_required", True):
@@ -342,6 +427,7 @@ async def _run_single_applicant(
                                  {"type": "bureau", "method": "soft_pull", "result": soft.result, "score": soft.score}))
             if soft.bankruptcy:
                 bankruptcy = True
+                bankruptcy_discharged_at = soft.bankruptcy_discharged_at
             if soft.fraud_signals.get("identity_high_risk"):
                 fraud_review = True
 
@@ -363,17 +449,40 @@ async def _run_single_applicant(
                                          {"type": "bureau", "method": "hard_pull", "result": hard.result, "score": hard.score}))
                     if hard.bankruptcy:
                         bankruptcy = True
+                        # A hard pull's discharge info supersedes the soft pull's.
+                        bankruptcy_discharged_at = hard.bankruptcy_discharged_at
                     if hard.fraud_signals.get("identity_high_risk"):
                         fraud_review = True
 
-    if bankruptcy and REASON_ACTIVE_BANKRUPTCY not in reasons:
-        reasons.append(REASON_ACTIVE_BANKRUPTCY)
+    # WS-E bankruptcy discharge policy (pure; thresholds from product config).
+    bankruptcy_outcome = resolve_bankruptcy_policy(
+        bankruptcy=bankruptcy,
+        discharged_at=bankruptcy_discharged_at,
+        min_years=_bankruptcy_min_years(bureau_cfg),
+        vendor_override=vendor_override,
+    )
+    if bankruptcy_outcome == "declined":
+        # Active/undischarged keeps the original stable code; a too-recent
+        # discharge gets its own so the adverse-action wording is accurate.
+        reason = (
+            REASON_ACTIVE_BANKRUPTCY
+            if bankruptcy_discharged_at is None
+            else REASON_BANKRUPTCY_DISCHARGE_RECENT
+        )
+        if reason not in reasons:
+            reasons.append(reason)
+    elif bankruptcy_outcome == "manual_review":
+        if REASON_BANKRUPTCY_DISCHARGE_RECENT not in reasons:
+            reasons.append(REASON_BANKRUPTCY_DISCHARGE_RECENT)
     if fraud_review and REASON_FRAUD_SIGNAL_REVIEW not in reasons:
         reasons.append(REASON_FRAUD_SIGNAL_REVIEW)
 
     outcome = _ApplicantOutcome("manual_review", effective_score, reasons, verifications, events, band)
     outcome.decision = _resolve_decision(
-        outcome, bankruptcy=bankruptcy, fraud_review=fraud_review,
+        outcome,
+        bankruptcy_declines=bankruptcy_outcome == "declined",
+        bankruptcy_review=bankruptcy_outcome == "manual_review",
+        fraud_review=fraud_review,
         has_unknown=has_unknown, has_failed_required=has_failed_required,
         identity_manual_review=has_identity_manual_review,
     )
@@ -465,6 +574,7 @@ async def run_flow(
     co_applicants: Optional[list[ApplicantInput]] = None,
     combination_strategy: str = "average",
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+    vendor_override: bool = False,
 ) -> FlowDecision:
     """Run the verification + decision flow for an application and return a
     :class:`FlowDecision`. Pure: no DB writes, no network calls outside adapters.
@@ -472,8 +582,17 @@ async def run_flow(
     For a single applicant, ``combination_strategy`` is ignored. When
     ``co_applicants`` are supplied, only ``"average"`` is implemented for MVP; any
     other strategy raises ``NotImplementedError`` (kickoff Pre-resolved Decision #1).
+
+    ``vendor_override`` (WS-E): the vendor has flagged willingness to stand
+    behind this application (e.g. financing a small residual). It NEVER
+    auto-approves anything; its only effect is routing the recently-discharged
+    bankruptcy case to manual_review instead of decline (see
+    :func:`resolve_bankruptcy_policy`). The orchestrator derives it from the
+    application (config/flag in, decision out — the engine stays pure).
     """
-    primary = await _run_single_applicant(application, product, patient, adapters, timeout_seconds)
+    primary = await _run_single_applicant(
+        application, product, patient, adapters, timeout_seconds, vendor_override
+    )
 
     if not co_applicants:
         return _finalize(primary, patient.patient_id, getattr(application, "id", None))
@@ -486,6 +605,8 @@ async def run_flow(
     outcomes = [primary]
     for co in co_applicants:
         outcomes.append(
-            await _run_single_applicant(co.application, co.product, co.patient, adapters, timeout_seconds)
+            await _run_single_applicant(
+                co.application, co.product, co.patient, adapters, timeout_seconds, vendor_override
+            )
         )
     return _combine_average(outcomes, patient.patient_id, getattr(application, "id", None))

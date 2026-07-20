@@ -165,12 +165,19 @@ class _Item:
 
 
 class _Loan:
-    def __init__(self, schedule, principal_balance_cents):
+    def __init__(self, schedule, principal_balance_cents, principal_cents=300):
         self.id = "loan-1"
         self.application_id = "app-1"
         self.schedule = schedule
+        self.principal_cents = principal_cents
         self.principal_balance_cents = principal_balance_cents
         self.status = "active"
+        # WS-A actuals-ledger attributes: no disbursement date -> no per-diem
+        # accrual, so these tests exercise the schedule/plan mechanics with the
+        # ledger allocating all cash to principal (interest due is 0).
+        self.annual_rate_bps = 0
+        self.disbursed_at = None
+        self.transactions = []
 
 
 def _build_loan():
@@ -191,11 +198,21 @@ def test_full_payment_marks_oldest_installment_paid():
     assert loan.schedule[0].status == "paid"
     assert loan.schedule[0].paid_cents == 110
     assert loan.schedule[1].status == "scheduled"
-    # Principal portion (100) reduced the balance; interest (10) did not.
-    assert loan.principal_balance_cents == 200
+    # WS-A actuals ledger: with no accrued interest (never disbursed), the FULL
+    # cash amount is principal — the money truth no longer follows the
+    # schedule's per-installment principal/interest split (300 - 110 = 190).
+    assert loan.principal_balance_cents == 190
     # The payment row was recorded with its external ref.
     payments = [o for o in db.added if getattr(o, "external_ref", "n/a") != "n/a"]
     assert payments and payments[0].external_ref == "zr_txn_1"
+    # And an immutable ledger row was appended with the actuals allocation.
+    assert len(loan.transactions) == 1
+    txn = loan.transactions[0]
+    assert txn.txn_type == "payment"
+    assert txn.repayment_mode == "regular"
+    assert txn.amount_cents == 110
+    assert txn.interest_cents == 0 and txn.principal_cents == 110
+    assert txn.reference == "none-loan-1-1"  # no vendor resolvable via fakes
 
 
 def _events(db):
@@ -250,7 +267,7 @@ def test_partial_payment_marks_partial():
 
     assert loan.schedule[0].status == "partial"
     assert loan.schedule[0].paid_cents == 50
-    # 50 applied, principal outstanding was 100 -> all 50 went to principal.
+    # Actuals ledger: no interest due -> all 50 cash is principal.
     assert loan.principal_balance_cents == 250
 
 
@@ -286,7 +303,10 @@ def test_sequential_partials_accumulate():
     # 40 + 70 = 110 fully covers installment 1.
     assert loan.schedule[0].status == "paid"
     assert loan.schedule[0].paid_cents == 110
-    assert loan.principal_balance_cents == 200
+    # Actuals ledger: no interest due -> all 110 cash is principal (300 - 110).
+    assert loan.principal_balance_cents == 190
+    # Ledger seq increments per payment; both rows on the same loan.
+    assert [t.seq for t in loan.transactions] == [1, 2]
 
 
 def test_non_positive_payment_raises():

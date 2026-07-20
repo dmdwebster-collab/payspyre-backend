@@ -29,25 +29,34 @@ from app.api.schemas.credit_products import (
 )
 from app.core.auth import get_current_user, require_roles
 from app.db.base import get_db
+from app.schemas.pricing_config import PricingConfigError
 from app.services import credit_products as service
 from app.services import loan_quote
 
 router = APIRouter()
 
 
-def _reject_criminal_rate_config(min_amount_cents: int, pricing_config: dict) -> None:
-    """Refuse a product whose pricing could ever produce a criminal-rate (s.347)
-    APR — caught at configuration, not just at booking. Fail-closed guardrail."""
-    worst = loan_quote.product_worst_case_apr_bps(min_amount_cents, pricing_config or {})
-    if loan_quote.exceeds_criminal_rate(worst):
+def _validate_pricing_or_422(
+    pricing_config: dict, min_amount_cents: int, max_amount_cents: int
+) -> dict:
+    """Validate pricing_config against the typed schema plus the per-frequency
+    APR compliance gates (Criminal Code s.347 at every enabled frequency /
+    boundary amount / boundary term / rate-band top, and the province-cap
+    hook). Fail-closed at configuration, not just at booking.
+
+    Returns the NORMALIZED typed shape to persist, so the DB converges on the
+    schema (legacy-shape submissions are upgraded on write; existing rows are
+    still readable through the tolerant loader)."""
+    try:
+        cfg = loan_quote.validate_pricing_config(
+            pricing_config, min_amount_cents, max_amount_cents
+        )
+    except PricingConfigError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=(
-                f"This pricing can produce an APR of {worst / 100:.2f}%, at/above the "
-                f"Criminal Code s.347 cap ({loan_quote.CRIMINAL_RATE_CAP_BPS / 100:.0f}%). "
-                "Lower the interest rate or fees."
-            ),
-        )
+            detail=f"pricing_config invalid: {exc}",
+        ) from exc
+    return cfg.model_dump(mode="json", exclude_none=True)
 
 
 @router.post(
@@ -65,7 +74,9 @@ async def create_credit_product(
     data: CreditProductCreate,
     db: Session = Depends(get_db),
 ):
-    _reject_criminal_rate_config(data.min_amount_cents, data.pricing_config)
+    data.pricing_config = _validate_pricing_or_422(
+        data.pricing_config, data.min_amount_cents, data.max_amount_cents
+    )
     try:
         product = service.create_credit_product(db, data)
     except JsonSchemaValidationError as exc:
@@ -142,14 +153,23 @@ async def update_credit_product(
     data: CreditProductUpdate,
     db: Session = Depends(get_db),
 ):
-    # Re-check the s.347 cap against the EFFECTIVE (merged) pricing when a patch
-    # touches the rate/fees or the amount floor.
-    if data.pricing_config is not None or data.min_amount_cents is not None:
+    # Re-validate the EFFECTIVE (merged) pricing when a patch touches the
+    # pricing config or either amount bound (schema + s.347 per frequency).
+    if (
+        data.pricing_config is not None
+        or data.min_amount_cents is not None
+        or data.max_amount_cents is not None
+    ):
         existing = service.get_credit_product(db, product_id)
         if existing is not None:
             eff_min = data.min_amount_cents if data.min_amount_cents is not None else existing.min_amount_cents
+            eff_max = data.max_amount_cents if data.max_amount_cents is not None else existing.max_amount_cents
             eff_pricing = data.pricing_config if data.pricing_config is not None else existing.pricing_config
-            _reject_criminal_rate_config(eff_min, eff_pricing)
+            normalized = _validate_pricing_or_422(eff_pricing, eff_min, eff_max)
+            if data.pricing_config is not None:
+                # Persist the normalized typed shape (only when the patch itself
+                # carries pricing — unrelated patches never rewrite stored config).
+                data.pricing_config = normalized
     try:
         product = service.update_credit_product(db, product_id, data)
     except JsonSchemaValidationError as exc:

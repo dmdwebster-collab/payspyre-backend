@@ -182,11 +182,14 @@ def widget_prequalification(body: WidgetPreQualBody, db: Session = Depends(get_d
     application.flow_state = flow_state
     db.commit()
 
-    # OUR regulated quote for the selected terms.
+    # OUR regulated quote for the selected terms (selection-aware fees from the
+    # typed pricing schema — see loan_quote.product_fees_cents).
     params = loan_quote.product_terms(product.pricing_config)
     q = loan_quote.quote_loan(
         fin.amount_cents, params["annual_rate_bps"], fin.term_months, fin.frequency,
-        fees_cents=params["fees_cents"],
+        fees_cents=loan_quote.product_fees_cents(
+            product.pricing_config, fin.amount_cents, fin.term_months, fin.frequency,
+        ),
     )
 
     return WidgetPreQualResponse(

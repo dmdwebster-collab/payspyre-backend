@@ -75,18 +75,28 @@ _REASON_TEXT: dict[str, str] = {
     "manual_review_band": "Your application requires further review before it can be approved.",
     "bureau_below_minimum": "Your credit score did not meet our minimum requirement.",
     "active_bankruptcy": "Our records indicate an active or recent bankruptcy.",
+    "bankruptcy_discharge_recent": (
+        "Our records indicate a bankruptcy that was discharged too recently to "
+        "meet our lending criteria."
+    ),
     "fraud_signal_review": "We were unable to verify the information provided.",
     "identity_manual_review": "We were unable to fully verify your identity.",
 }
 
 
-def _humanize_reason(code: str) -> str:
+def _humanize_reason(code: str, overrides: dict[str, str] | None = None) -> str:
     """Translate one ``decision_reasons`` code into an applicant-facing sentence.
 
-    Handles the parameterized ``verification_failed:<type>`` /
-    ``verification_unknown:<type>`` codes emitted by the engine, then falls back
-    to the static map, then to a safe generic line for any unknown code.
+    Precedence: the reason-directory override (``platform_decision_reasons``
+    borrower_facing_text, WS-E — the admin-vetted wording), then the
+    parameterized ``verification_failed:<type>`` / ``verification_unknown:<type>``
+    codes emitted by the engine, then the static map, then a safe generic line
+    for any unknown code.
     """
+    if overrides:
+        text_ = overrides.get(code)
+        if text_:
+            return text_
     if code.startswith("verification_failed:"):
         vtype = code.split(":", 1)[1]
         return f"We could not complete the required {_VERIFICATION_LABEL.get(vtype, vtype)} verification."
@@ -106,11 +116,16 @@ _VERIFICATION_LABEL: dict[str, str] = {
 }
 
 
-def humanize_reasons(reasons: list[str] | None) -> list[str]:
-    """Public: turn raw decision_reason codes into deduped applicant-facing lines."""
+def humanize_reasons(
+    reasons: list[str] | None, overrides: dict[str, str] | None = None
+) -> list[str]:
+    """Public: turn raw decision_reason codes into deduped applicant-facing lines.
+
+    ``overrides`` maps code → borrower_facing_text from the reason directory
+    (WS-E); codes without an override fall back to the built-in wording."""
     out: list[str] = []
     for code in reasons or []:
-        line = _humanize_reason(code)
+        line = _humanize_reason(code, overrides)
         if line not in out:
             out.append(line)
     if not out:
@@ -201,14 +216,16 @@ def build_notice_content(
     applicant_name: str,
     application_id: UUID | str,
     reasons: list[str] | None,
+    reason_texts: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Pure builder: assemble the structured notice content (no I/O).
 
     Exposed separately so tests can assert content without sending. Returns the
     fields the template renders + the structured pieces used for both HTML and a
-    plaintext fallback.
+    plaintext fallback. ``reason_texts`` carries the reason-directory overrides
+    (code → borrower_facing_text, WS-E).
     """
-    principal_reasons = humanize_reasons(reasons)
+    principal_reasons = humanize_reasons(reasons, reason_texts)
     bureau = _bureau_disclosure()
     return {
         "applicant_name": applicant_name or "Applicant",
@@ -540,10 +557,15 @@ def send_adverse_action_notice(
             ) if p
         ).strip()
 
+        # WS-E: the reason directory's vetted borrower_facing_text overrides the
+        # static fallback wording. Defensive lookup — returns {} on any failure.
+        from app.services.decision_reasons import reject_reason_texts
+
         content = build_notice_content(
             applicant_name=applicant_name,
             application_id=application_id,
             reasons=reasons,
+            reason_texts=reject_reason_texts(db, reasons or []),
         )
         html = render_notice_html(content)
         text_body = render_notice_text(content)

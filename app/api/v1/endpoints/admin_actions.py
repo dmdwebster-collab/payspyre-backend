@@ -29,8 +29,14 @@ from app.db.base import get_db
 from app.models.platform.credit_application import PlatformCreditApplication
 from app.models.platform.event import PlatformEvent
 from app.models.platform.loan import PlatformLoan, PlatformLoanPayment
-from app.services import loan_lifecycle, loan_servicing
+from app.models.user import User
+from app.services import decision_reasons, loan_lifecycle, loan_servicing
 from app.services.adverse_action import send_adverse_action_notice
+from app.services.flow_orchestrator import (
+    _TERMINAL_STATUSES,
+    InvalidStateTransition,
+    mark_cancelled,
+)
 
 router = APIRouter()
 
@@ -57,6 +63,10 @@ def _audit(db: Session, *, event_type: str, actor: str, payload: dict,
 
 class DecisionBody(BaseModel):
     outcome: Literal["approved", "declined", "refer"]
+    # For outcome="declined" these are REQUIRED and must be active REJECT codes
+    # from the platform_decision_reasons directory (WS-E): staff declines carry
+    # only vetted, defensible reasons, and the directory's borrower_facing_text
+    # flows into the adverse-action notice.
     reason_codes: list[str] = []
     note: Optional[str] = None
     override: bool = False  # acknowledge overriding an existing automated decision
@@ -102,6 +112,25 @@ def decide(
                 ),
             )
 
+    # WS-E: a staff DECLINE is a credit decision that must carry at least one
+    # vetted principal reason from the reject directory (the adverse-action
+    # notice states "the principal reasons for the decision" — a decline with no
+    # defensible coded reason is not permitted).
+    if body.outcome == "declined":
+        if not body.reason_codes:
+            raise HTTPException(
+                status_code=422,
+                detail="A decline requires at least one reason_code from the "
+                       "reject reason directory (GET /admin/decision-reasons?kind=reject).",
+            )
+        unknown = decision_reasons.invalid_reject_codes(db, body.reason_codes)
+        if unknown:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Unknown or inactive reject reason code(s): {unknown}. "
+                       f"Use active codes from GET /admin/decision-reasons?kind=reject.",
+            )
+
     actor = _actor_id(user)
     new_status = "under_review" if body.outcome == "refer" else body.outcome
     app.decision = {
@@ -140,6 +169,171 @@ def decide(
     return {"application_id": str(app.id), "status": app.status, "loan_id": loan_id}
 
 
+# --- WS-E: cancel (non-credit closure) ---------------------------------------
+
+
+class CancelBody(BaseModel):
+    reason_code: str
+    note: Optional[str] = None
+
+
+@router.post("/applications/{application_id}/cancel")
+def cancel_application(
+    application_id: UUID,
+    body: CancelBody,
+    db: Session = Depends(get_db),
+    user=Depends(require_roles("admin")),
+):
+    """Cancel an application — a NON-CREDIT administrative closure (WS-E).
+
+    Distinct from a decline: no adverse-action notice is sent (cancellation is
+    not a credit decision — Turnkey parity, 02__WP_Underwriting.md §4). Requires
+    an active CANCEL reason code from the directory; moves the application to the
+    existing ``withdrawn`` terminal state; audited via platform_events; the
+    ``application_cancelled`` event also drives the applicant notification
+    through the notification outbox processor.
+    """
+    app = (
+        db.query(PlatformCreditApplication)
+        .filter(PlatformCreditApplication.id == application_id)
+        .first()
+    )
+    if app is None:
+        raise HTTPException(status_code=404, detail="Application not found")
+    if app.status in _TERMINAL_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Application is already terminal ({app.status}); cannot cancel.",
+        )
+
+    reason = decision_reasons.get_active_reason(db, "cancel", body.reason_code)
+    if reason is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown or inactive cancel reason code {body.reason_code!r}. "
+                   f"Use active codes from GET /admin/decision-reasons?kind=cancel.",
+        )
+
+    actor = _actor_id(user)
+    before_status = app.status
+    try:
+        mark_cancelled(app)  # status transition owned by flow_orchestrator
+    except InvalidStateTransition as exc:  # belt — terminal check above
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+
+    # One event: the WORM audit row AND the notification trigger (the outbox
+    # processor plans an applicant email from it). borrower_facing_text is
+    # snapshotted so the notice wording is exactly what the directory said at
+    # cancel time, even if the directory is edited later. No PII in the payload.
+    ev = PlatformEvent(
+        event_type="application_cancelled",
+        actor=actor,
+        patient_id=app.patient_id,
+        application_id=app.id,
+        payload={
+            "v": 1,
+            "actor": {"type": "admin", "id": actor},
+            "application_id": str(app.id),
+            "patient_id": str(app.patient_id),
+            "before": {"status": before_status},
+            "after": {"status": app.status, "reason_code": body.reason_code},
+            "reason_code": body.reason_code,
+            "borrower_facing_text": reason.borrower_facing_text,
+            "note": body.note,
+        },
+    )
+    db.add(ev)
+    db.commit()
+    return {
+        "application_id": str(app.id),
+        "status": app.status,
+        "reason_code": body.reason_code,
+    }
+
+
+# --- WS-E: assignment (underwriting queue) -----------------------------------
+
+
+class AssignBody(BaseModel):
+    user_id: Optional[UUID] = None  # omit to self-assign
+
+
+@router.post("/applications/{application_id}/assign")
+def assign_application(
+    application_id: UUID,
+    body: AssignBody,
+    db: Session = Depends(get_db),
+    user=Depends(require_roles("admin", "staff")),
+):
+    """Assign an application to a staff user (default: self-assign). Audited."""
+    app = (
+        db.query(PlatformCreditApplication)
+        .filter(PlatformCreditApplication.id == application_id)
+        .first()
+    )
+    if app is None:
+        raise HTTPException(status_code=404, detail="Application not found")
+
+    actor = _actor_id(user)
+    if body.user_id is not None:
+        target_id = body.user_id
+    else:
+        try:
+            target_id = UUID(actor)
+        except ValueError:
+            raise HTTPException(
+                status_code=422,
+                detail="Cannot self-assign without a resolvable user id; pass user_id.",
+            )
+    target = (
+        db.query(User)
+        .filter(User.id == target_id, User.is_active.is_(True))
+        .first()
+    )
+    if target is None:
+        raise HTTPException(status_code=422, detail="Assignee user not found or inactive.")
+
+    previous = str(app.assigned_to_user_id) if app.assigned_to_user_id else None
+    app.assigned_to_user_id = target_id
+    app.assigned_at = datetime.now(timezone.utc)
+    _audit(
+        db, event_type="admin_application_assigned", actor=actor, application_id=app.id,
+        payload={"assigned_to": str(target_id), "previously_assigned_to": previous},
+    )
+    db.commit()
+    return {
+        "application_id": str(app.id),
+        "assigned_to_user_id": str(target_id),
+        "assigned_at": app.assigned_at.isoformat(),
+    }
+
+
+@router.post("/applications/{application_id}/unassign")
+def unassign_application(
+    application_id: UUID,
+    db: Session = Depends(get_db),
+    user=Depends(require_roles("admin", "staff")),
+):
+    """Clear an application's assignment (audited)."""
+    app = (
+        db.query(PlatformCreditApplication)
+        .filter(PlatformCreditApplication.id == application_id)
+        .first()
+    )
+    if app is None:
+        raise HTTPException(status_code=404, detail="Application not found")
+
+    previous = str(app.assigned_to_user_id) if app.assigned_to_user_id else None
+    app.assigned_to_user_id = None
+    app.assigned_at = None
+    _audit(
+        db, event_type="admin_application_unassigned", actor=_actor_id(user),
+        application_id=app.id, payload={"previously_assigned_to": previous},
+    )
+    db.commit()
+    return {"application_id": str(app.id), "assigned_to_user_id": None}
+
+
 # --- M3: servicing writes ---------------------------------------------------
 
 
@@ -149,6 +343,14 @@ class PaymentBody(BaseModel):
     received_at: Optional[datetime] = None
     external_ref: Optional[str] = None
     note: Optional[str] = None
+    # WS-F repayment modes (Turnkey "Submit repayment" — Dave's spec):
+    #   regular — accrued interest → principal → fees (default)
+    #   add_on  — pays the non-accruing add-on bucket only (≤ add-on balance)
+    #   special — 100% principal (permission-gated: admin role only)
+    #   payoff  — must equal the server-computed payoff for the effective date
+    #             (GET /loans/{id}/payoff-quote first; server computes, client
+    #             confirms) and closes the loan
+    repayment_mode: Literal["regular", "add_on", "special", "payoff"] = "regular"
 
 
 def _get_loan(db: Session, loan_id: UUID) -> PlatformLoan:
@@ -165,10 +367,22 @@ def record_payment(
     db: Session = Depends(get_db),
     user=Depends(require_roles("admin")),
 ):
-    """Manually post a payment/adjustment to a loan (audited)."""
+    """Manually post a payment/adjustment to a loan (audited). WS-F: the
+    ``repayment_mode`` selects the Turnkey allocation semantics; mode-rule
+    violations (amount caps, payoff exact-match) return 422 with the reason."""
     loan = _get_loan(db, loan_id)
     if body.amount_cents <= 0:
         raise HTTPException(status_code=422, detail="amount_cents must be positive")
+    # SPECIAL is permission-gated beyond the router's admin gate (Dave: 100%
+    # principal, bypassing interest — a write-down lever). Explicit role check
+    # so the gate survives if this endpoint is ever widened to staff.
+    if body.repayment_mode == "special":
+        user_roles = {role.role.name for role in getattr(user, "roles", [])}
+        if "admin" not in user_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="special payments require the admin role",
+            )
     # Idempotency: when the caller supplies an external_ref, a retry / double-submit
     # must NOT post the payment (and reduce the balance) twice. Return the existing
     # receipt instead. Without an external_ref we can't dedupe, so the caller owns it.
@@ -185,16 +399,26 @@ def record_payment(
             return {"payment_id": str(prior.id), "loan_status": loan.status,
                     "principal_balance_cents": loan.principal_balance_cents,
                     "idempotent_replay": True}
-    payment = loan_servicing.record_payment(
-        db, loan, body.amount_cents, body.received_at or datetime.now(timezone.utc),
-        body.method, body.external_ref,
-    )
+    try:
+        payment = loan_servicing.record_payment(
+            db, loan, body.amount_cents, body.received_at or datetime.now(timezone.utc),
+            body.method, body.external_ref,
+            created_by=_actor_id(user), comment=body.note,
+            repayment_mode=body.repayment_mode,
+        )
+    except ValueError as exc:
+        # Mode-rule violation (add-on/special amount caps, payoff exact-match).
+        # Nothing was committed; the message carries the expected figure so the
+        # client can re-confirm (e.g. a stale payoff quote).
+        raise HTTPException(status_code=422, detail=str(exc))
     _audit(db, event_type="admin_loan_payment", actor=_actor_id(user),
            payload={"loan_id": str(loan_id), "amount_cents": body.amount_cents,
-                    "method": body.method, "note": body.note})
+                    "method": body.method, "repayment_mode": body.repayment_mode,
+                    "note": body.note})
     db.commit()
     return {"payment_id": str(payment.id), "loan_status": loan.status,
-            "principal_balance_cents": loan.principal_balance_cents}
+            "principal_balance_cents": loan.principal_balance_cents,
+            "repayment_mode": body.repayment_mode}
 
 
 @router.get("/loans/{loan_id}/payoff-quote")
@@ -204,13 +428,17 @@ def payoff_quote(
     db: Session = Depends(get_db),
     _user=Depends(require_roles("admin", "staff")),
 ):
-    """Payoff quote (remaining principal + accrued interest) as of a date."""
+    """Payoff quote from the ACTUALS engine (WS-A): 100% outstanding principal
+    + daily simple interest accrued to date + fees due + add-on balance, and 0%
+    future interest. The four buckets sum exactly to ``payoff_cents``."""
     loan = _get_loan(db, loan_id)
     quote = loan_servicing.compute_payoff(db, loan, as_of or date.today())
     return {
         "as_of": quote.as_of.isoformat(),
         "principal_cents": quote.principal_cents,
         "accrued_interest_cents": quote.accrued_interest_cents,
+        "fees_due_cents": quote.fees_due_cents,
+        "add_on_balance_cents": quote.add_on_balance_cents,
         "payoff_cents": quote.payoff_cents,
     }
 

@@ -1,17 +1,19 @@
-"""Admin loan book + servicing detail (read-only, Phase 1). M3.
+"""Admin loan book + servicing detail. M3 + WS-F.
 
-Whole-book loan list (no vendor scoping) with status/DPD, and a detail view
-reusing the existing loan-servicing status builder. Servicing WRITE actions
-(payments, reschedule, payoff) are Phase 2.
+Whole-book loan list (no vendor scoping) with status/DPD, a detail view
+reusing the existing loan-servicing status builder, the immutable ledger view
+(WS-A), and scheduled-transaction SURGERY (WS-F): suspend/unsuspend an
+individual installment, add/cancel a custom scheduled transaction — every
+action comment-mandatory and audited to ``platform_events``.
 """
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status as http_status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.auth import get_current_user, require_roles
@@ -20,11 +22,14 @@ from app.models.loan import Vendor
 from app.models.platform.credit_application import PlatformCreditApplication
 from app.models.platform.loan import (
     PlatformLoan,
+    PlatformLoanCustomTransaction,
     PlatformLoanPayment,
     PlatformLoanScheduleItem,
     PlatformLoanStatement,
 )
 from app.models.platform.patient import PlatformPatient
+from app.services import loan_ledger as ledger_service
+from app.services import schedule_surgery
 from app.services.loan_servicing import get_loan_status
 
 router = APIRouter(dependencies=[Depends(require_roles("admin", "staff"))])
@@ -146,7 +151,10 @@ class StatementRow(BaseModel):
 
 @router.get("/{loan_id}/schedule", response_model=list[ScheduleRow])
 def loan_schedule(loan_id: UUID, db: Session = Depends(get_db), _user=Depends(get_current_user)):
-    """The full amortization schedule — the calculation engine made visible."""
+    """The full amortization schedule — the calculation engine made visible.
+    Reflects surgery: a staff-suspended installment shows status ``suspended``.
+    Custom transactions live at ``/schedule/custom``; the change history at
+    ``/schedule/changes``."""
     _require_loan(db, loan_id)
     return (
         db.query(PlatformLoanScheduleItem)
@@ -168,6 +176,23 @@ def loan_payments(loan_id: UUID, db: Session = Depends(get_db), _user=Depends(ge
     )
 
 
+@router.get("/{loan_id}/ledger")
+def loan_ledger_view(
+    loan_id: UUID,
+    as_of: Optional[date] = None,
+    db: Session = Depends(get_db),
+    _user=Depends(get_current_user),
+):
+    """The immutable money ledger (WS-A): every transaction with its allocation
+    split, dual dates (effective vs processing), reference number, and running
+    category balances — plus the actuals-engine balance view at ``as_of``
+    (outstanding principal + interest due + fees due + add-on == payoff)."""
+    loan = db.query(PlatformLoan).filter(PlatformLoan.id == loan_id).first()
+    if loan is None:
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="Loan not found")
+    return ledger_service.ledger_view(loan, as_of or date.today())
+
+
 @router.get("/{loan_id}/statements", response_model=list[StatementRow])
 def loan_statements(loan_id: UUID, db: Session = Depends(get_db), _user=Depends(get_current_user)):
     """Billing statements (opening/closing balance + principal/interest split)."""
@@ -178,3 +203,183 @@ def loan_statements(loan_id: UUID, db: Session = Depends(get_db), _user=Depends(
         .order_by(PlatformLoanStatement.period_start.desc())
         .all()
     )
+
+
+# ---------------------------------------------------------------------------
+# Scheduled-transaction surgery (WS-F) — Dave: "a very, very important section".
+#
+# Staff can suspend/unsuspend an individual installment and add/cancel custom
+# scheduled transactions. Comment is MANDATORY on every action; every change
+# emits a platform_event (the change history below). The amortization plan is
+# never altered — surgery layers on top of it. Router-level gate:
+# require_roles("admin", "staff").
+# ---------------------------------------------------------------------------
+
+
+def _get_loan_for_surgery(db: Session, loan_id: UUID) -> PlatformLoan:
+    loan = db.query(PlatformLoan).filter(PlatformLoan.id == loan_id).first()
+    if loan is None:
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="Loan not found")
+    return loan
+
+
+def _actor_id(user) -> str:
+    return str(getattr(user, "id", "") or "unknown")
+
+
+class SurgeryCommentBody(BaseModel):
+    """Every surgery action carries a mandatory comment (Dave)."""
+
+    comment: str = Field(..., min_length=1, max_length=2000)
+
+
+class CustomTransactionBody(SurgeryCommentBody):
+    scheduled_date: date
+    amount_cents: int = Field(..., gt=0)
+    repayment_mode: Literal["regular", "add_on", "special", "payoff"] = "regular"
+
+
+class CustomTransactionRow(BaseModel):
+    id: UUID
+    scheduled_date: date
+    amount_cents: int
+    repayment_mode: str
+    status: str
+    comment: str
+    created_by: str
+    created_at: datetime
+    cancelled_by: Optional[str] = None
+    cancelled_at: Optional[datetime] = None
+
+
+def _item_response(item: PlatformLoanScheduleItem) -> dict:
+    return {
+        "schedule_item_id": str(item.id),
+        "installment_number": item.installment_number,
+        "due_date": item.due_date.isoformat(),
+        "status": item.status,
+        "paid_cents": item.paid_cents,
+        "total_cents": item.total_cents,
+    }
+
+
+@router.post("/{loan_id}/schedule/{item_id}/suspend")
+def suspend_schedule_item(
+    loan_id: UUID,
+    item_id: UUID,
+    body: SurgeryCommentBody,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Suspend ONE scheduled installment: delinquency-aging and dunning skip it
+    (the point of suspending); the money is still owed. Audited."""
+    loan = _get_loan_for_surgery(db, loan_id)
+    try:
+        item = schedule_surgery.suspend_installment(
+            db, loan, item_id, comment=body.comment, actor=_actor_id(user)
+        )
+    except schedule_surgery.ScheduleSurgeryError as exc:
+        raise HTTPException(status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+    db.commit()
+    return _item_response(item)
+
+
+@router.post("/{loan_id}/schedule/{item_id}/unsuspend")
+def unsuspend_schedule_item(
+    loan_id: UUID,
+    item_id: UUID,
+    body: SurgeryCommentBody,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Lift a suspension (restores ``partial``/``scheduled``; the nightly aging
+    pass re-derives ``late`` if overdue). Audited."""
+    loan = _get_loan_for_surgery(db, loan_id)
+    try:
+        item = schedule_surgery.unsuspend_installment(
+            db, loan, item_id, comment=body.comment, actor=_actor_id(user)
+        )
+    except schedule_surgery.ScheduleSurgeryError as exc:
+        raise HTTPException(status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+    db.commit()
+    return _item_response(item)
+
+
+@router.post("/{loan_id}/schedule/custom", response_model=CustomTransactionRow)
+def add_custom_transaction(
+    loan_id: UUID,
+    body: CustomTransactionBody,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Add a one-off custom scheduled transaction (date / amount / repayment
+    mode) layered on top of the plan — the amortization schedule is untouched.
+    Audited."""
+    loan = _get_loan_for_surgery(db, loan_id)
+    try:
+        row = schedule_surgery.add_custom_transaction(
+            db,
+            loan,
+            scheduled_date=body.scheduled_date,
+            amount_cents=body.amount_cents,
+            repayment_mode=body.repayment_mode,
+            comment=body.comment,
+            actor=_actor_id(user),
+        )
+    except schedule_surgery.ScheduleSurgeryError as exc:
+        raise HTTPException(status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@router.post("/{loan_id}/schedule/custom/{custom_id}/cancel", response_model=CustomTransactionRow)
+def cancel_custom_transaction(
+    loan_id: UUID,
+    custom_id: UUID,
+    body: SurgeryCommentBody,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Cancel a still-scheduled custom transaction (status flip — never a hard
+    delete; history stays auditable). Audited."""
+    loan = _get_loan_for_surgery(db, loan_id)
+    try:
+        row = schedule_surgery.cancel_custom_transaction(
+            db, loan, custom_id, comment=body.comment, actor=_actor_id(user)
+        )
+    except schedule_surgery.ScheduleSurgeryError as exc:
+        raise HTTPException(status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@router.get("/{loan_id}/schedule/custom", response_model=list[CustomTransactionRow])
+def list_custom_transactions(
+    loan_id: UUID,
+    db: Session = Depends(get_db),
+    _user=Depends(get_current_user),
+):
+    """The loan's custom scheduled transactions (all statuses, newest date first)."""
+    _require_loan(db, loan_id)
+    return (
+        db.query(PlatformLoanCustomTransaction)
+        .filter(PlatformLoanCustomTransaction.loan_id == loan_id)
+        .order_by(PlatformLoanCustomTransaction.scheduled_date.desc())
+        .all()
+    )
+
+
+@router.get("/{loan_id}/schedule/changes")
+def schedule_change_history(
+    loan_id: UUID,
+    db: Session = Depends(get_db),
+    _user=Depends(get_current_user),
+):
+    """Full schedule-surgery change history (suspend / unsuspend / custom add /
+    cancel), newest first — read straight off the platform_events audit log.
+    Together with GET /schedule (whose rows now surface ``suspended``) and
+    GET /schedule/custom, this is the Scheduled-transactions tab's data."""
+    loan = _get_loan_for_surgery(db, loan_id)
+    return {"loan_id": str(loan_id), "changes": schedule_surgery.schedule_changes(db, loan)}

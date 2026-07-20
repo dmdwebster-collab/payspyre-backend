@@ -6,7 +6,12 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.models.platform.loan import PlatformLoan, PlatformLoanPayment, PlatformLoanScheduleItem
+from app.models.platform.loan import (
+    PlatformLoan,
+    PlatformLoanPayment,
+    PlatformLoanScheduleItem,
+    PlatformLoanTransaction,
+)
 from app.models.platform.patient import PlatformPatient
 from app.services import loan_payments
 from app.services.payments.zumrails_adapter import TransactionResult, TransactionStatus
@@ -126,11 +131,39 @@ class TestSettlement:
         pays = _payments(db_session, loan)
         assert len(pays) == 1 and pays[0].external_ref == "ZTX1"
         db_session.refresh(loan)
-        assert loan.principal_balance_cents == 100000  # 100k principal applied
+        # WS-A actuals engine: the payment is allocated accrued-interest-first,
+        # then principal. This loan was never disbursed (disbursed_at is None),
+        # so ZERO per-diem interest has accrued and the ENTIRE 101_000 cash is
+        # principal: 200_000 - 101_000 = 99_000. (The schedule's per-installment
+        # 100k/1k split no longer drives the money — the ledger does.)
+        assert loan.principal_balance_cents == 200_000 - 101_000
+
+        # The immutable ledger row carries the allocation, and its buckets tie
+        # out exactly to the cash received (money-conservation invariant).
+        txn = (
+            db_session.query(PlatformLoanTransaction)
+            .filter(PlatformLoanTransaction.loan_id == loan.id)
+            .one()
+        )
+        assert txn.txn_type == "payment" and txn.repayment_mode == "regular"
+        assert (
+            txn.principal_cents + txn.interest_cents
+            + txn.fees_cents + txn.add_on_cents
+        ) == txn.amount_cents == 101_000
+        assert txn.interest_cents == 0  # no disbursement -> no accrual
+        assert txn.principal_cents == 101_000
 
         # Replay the webhook → no double-apply (record_payment dedups on external_ref).
         assert loan_payments.on_collection_complete(db_session, "ZTX1") is True
         assert len(_payments(db_session, loan)) == 1
+        db_session.refresh(loan)
+        assert loan.principal_balance_cents == 99_000  # unchanged by the replay
+        # And no second ledger row was appended.
+        assert (
+            db_session.query(PlatformLoanTransaction)
+            .filter(PlatformLoanTransaction.loan_id == loan.id)
+            .count()
+        ) == 1
 
     def test_complete_unknown_txn_returns_false(self, db_session: Session):
         assert loan_payments.on_collection_complete(db_session, "NOPE") is False

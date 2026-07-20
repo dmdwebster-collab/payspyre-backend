@@ -34,7 +34,11 @@ from app.models.platform.loan import (
     PlatformLoanPayment,
     PlatformLoanScheduleItem,
     PlatformLoanStatement,
+    PlatformLoanTransaction,
 )
+from app.schemas.pricing_config import parse_pricing_config, quote_fees_cents
+from app.services import loan_ledger
+from app.services.interest_engine import REPAYMENT_MODES, allocate_payment
 from app.services.loan_quote import (
     CRIMINAL_RATE_CAP_BPS,
     compute_apr_bps,
@@ -297,13 +301,14 @@ def _resolve_pricing(application: PlatformCreditApplication) -> tuple[int, int, 
       * PRINCIPAL = the application's ``requested_amount_cents`` (the approved
         amount). If the decision carries an explicit ``amount_cents`` it wins
         (the decision can approve a different amount than requested).
-      * RATE  — first the decision's ``apr_bps``; else the product's
-        ``pricing_config`` (``apr_bps`` if present, else first value of
-        ``apr_range`` interpreted as a percentage -> bps); else
+      * RATE  — first the decision's ``apr_bps``; else the product's typed
+        pricing config (``interest.annual_rate_bps``; the tolerant loader maps
+        legacy ``apr_bps``/``apr_range``-floor onto it); else
         ``_DEFAULT_ANNUAL_RATE_BPS``.
-      * TERM  — first the decision's ``term_months``; else the product's
-        ``pricing_config`` (``term_months`` if present, else first of
-        ``term_options``); else ``_DEFAULT_TERM_MONTHS``.
+      * TERM  — first the decision's ``term_months``; else the product's typed
+        pricing config (``default_term_months``, which the loader maps from
+        legacy ``term_months``; else first of ``term_options``; else
+        ``term_min_months``); else ``_DEFAULT_TERM_MONTHS``.
     """
     decision = application.decision or {}
 
@@ -315,26 +320,26 @@ def _resolve_pricing(application: PlatformCreditApplication) -> tuple[int, int, 
         raise ValueError("Cannot book a loan with non-positive principal")
 
     product = getattr(application, "credit_product", None)
-    pricing_config = (getattr(product, "pricing_config", None) or {}) if product else {}
+    raw_pricing = (getattr(product, "pricing_config", None) or {}) if product else {}
+    cfg = parse_pricing_config(raw_pricing, context="loan booking")
 
     # Rate (bps)
     annual_rate_bps = decision.get("apr_bps")
     if annual_rate_bps is None:
-        if "apr_bps" in pricing_config:
-            annual_rate_bps = pricing_config["apr_bps"]
-        elif pricing_config.get("apr_range"):
-            # apr_range is in PERCENT (e.g. [7.99, 28.99]); use the floor.
-            annual_rate_bps = int(round(float(pricing_config["apr_range"][0]) * 100))
+        if cfg.interest is not None:
+            annual_rate_bps = cfg.interest.annual_rate_bps
         else:
             annual_rate_bps = _DEFAULT_ANNUAL_RATE_BPS
 
     # Term (months)
     term_months = decision.get("term_months")
     if term_months is None:
-        if "term_months" in pricing_config:
-            term_months = pricing_config["term_months"]
-        elif pricing_config.get("term_options"):
-            term_months = pricing_config["term_options"][0]
+        if cfg.default_term_months is not None:
+            term_months = cfg.default_term_months
+        elif cfg.term_options:
+            term_months = cfg.term_options[0]
+        elif cfg.term_min_months is not None:
+            term_months = cfg.term_min_months
         else:
             term_months = _DEFAULT_TERM_MONTHS
 
@@ -375,8 +380,12 @@ def create_loan_from_application(
     # criminal-rate loan. APR is the Canadian regulatory figure incl. product fees.
     fees_cents = 0
     if product is not None:
-        cfg = getattr(product, "pricing_config", None) or {}
-        fees_cents = int(cfg.get("fees_cents") or 0)
+        cfg = parse_pricing_config(
+            getattr(product, "pricing_config", None), context="loan booking APR guard"
+        )
+        # Selection-aware cost-of-borrowing fees for the booked terms (typed fee
+        # schedule; contingent on_event fees excluded per SOR/2001-104).
+        fees_cents = quote_fees_cents(cfg, principal_cents, term_months, "monthly")
     apr_bps = compute_apr_bps(principal_cents, annual_rate_bps, term_months, "monthly", fees_cents)
     if exceeds_criminal_rate(apr_bps):
         raise ValueError(
@@ -428,27 +437,79 @@ def record_payment(
     received_at: datetime,
     method: str,
     external_ref: Optional[str] = None,
+    *,
+    created_by: str = "system",
+    comment: Optional[str] = None,
+    repayment_mode: str = "regular",
 ) -> PlatformLoanPayment:
-    """Apply a received payment to a loan.
+    """Apply a received payment to a loan. MONEY-PATH (WS-A actuals engine +
+    WS-F repayment modes).
 
-    APPLICATION ORDER: oldest unpaid/partial installment first (by
-    installment_number). The payment is consumed across installments until the
-    funds are exhausted; each installment is filled up to its ``total_cents``.
+    ``repayment_mode`` selects the Turnkey allocation semantics
+    (03__WP_Servicing, Dave's spec — validated by the pure allocators in
+    ``interest_engine``):
+
+      * ``regular`` — accrued interest → principal → fees. The default; the
+        only mode that also advances the as-agreed PLAN (installment filling).
+      * ``add_on``  — pays the non-accruing add-on bucket ONLY (e.g. NSF
+        fees); amount must not exceed the current add-on balance. The plan is
+        untouched.
+      * ``special`` — 100% principal, bypassing interest/fees (staff-only;
+        permission-gated at the endpoint). Amount must not exceed outstanding
+        principal. The plan is untouched — Dave's borrower-protection rule:
+        extra payments never alter the as-agreed installments.
+      * ``payoff``  — the fixed, server-computed closing amount (principal +
+        accrued interest + fees + add-on as of the effective date). The
+        amount MUST equal ``compute_payoff`` for the effective date exactly
+        (non-editable — server computes, client confirms); the loan closes.
+
+    TWO parallel books are updated, with distinct jobs:
+
+    1. THE SCHEDULE (the as-agreed PLAN) — for ``regular`` payments only: the
+       payment fills the oldest unpaid/partial installment first (by
+       installment_number), flipping installment statuses (``paid`` /
+       ``partial``), curing delinquency, and flipping the loan to ``paid_off``
+       when every installment is covered. This drives DPD/status only.
+       ``suspended`` installments (schedule surgery, WS-F) still absorb cash —
+       suspension stops the automated jobs, not the debt.
+
+    2. THE LEDGER (the MONEY TRUTH) — an immutable
+       ``platform_loan_transactions`` row is appended for every applied
+       payment, allocated by the actuals-based daily-simple-interest engine in
+       the selected repayment mode. ``loan.principal_balance_cents`` is
+       decremented by the ledger's PRINCIPAL allocation (a late payment
+       therefore repays slightly less principal — the extra per-diem days ate
+       more interest — and an early payment slightly more).
+
+    CLOSURE (Dave): any payment — whatever the mode — that brings total debt
+    (principal + interest due + fees due + add-on) to zero closes the loan:
+    status → ``paid_off`` and every remaining open installment is ``waived``
+    (no longer owed under the plan; the debt was settled in full).
 
     Side effects:
       * Inserts a PlatformLoanPayment row (the cash receipt / audit trail).
-      * Increments ``paid_cents`` on the installments it covers and flips their
-        status: ``paid`` when fully covered, ``partial`` otherwise.
-      * Reduces ``loan.principal_balance_cents`` by the PRINCIPAL portion of the
-        installments covered (interest does not reduce principal balance).
-      * Flips the loan to ``paid_off`` once every installment is fully paid.
+      * Appends the immutable ledger row (dual dates: effective = processing =
+        the received date; backdating is a later, permission-gated workstream).
+      * Updates installment ``paid_cents``/status per the plan (see 1).
+      * Decrements ``loan.principal_balance_cents`` by the actuals-allocated
+        principal (see 2).
+      * Flips the loan to ``paid_off`` once every installment is fully paid,
+        or once the ledger's total debt hits zero (see CLOSURE).
 
-    Overpayment beyond the final installment is recorded on the payment row but
-    not auto-refunded (out of scope for the spine) — it simply leaves the loan
-    paid off with the receipt on file.
+    Raises ``ValueError`` on a mode-rule violation (unknown mode, add-on /
+    special amount caps, payoff exact-match) — callers map it to a 4xx.
+
+    Overpayment beyond everything owed is recorded on the payment/ledger rows
+    but not auto-refunded (flagged for Dave; refund policy is a later
+    workstream).
     """
     if amount_cents <= 0:
         raise ValueError("amount_cents must be positive")
+    if repayment_mode not in REPAYMENT_MODES:
+        raise ValueError(
+            f"unknown repayment mode {repayment_mode!r} "
+            f"(expected one of {REPAYMENT_MODES})"
+        )
 
     # Idempotency: a payment rail (Zumrails collection webhook) can deliver the same
     # receipt more than once (at-least-once / retries). Dedupe on external_ref so a
@@ -467,6 +528,17 @@ def record_payment(
         if existing is not None:
             return existing
 
+    # ---- LEDGER (money truth): actuals-based allocation --------------------
+    # Balances as of the payment's EFFECTIVE date (per-diem interest accrued
+    # from the previous ledger event on actual calendar days), then the
+    # selected repayment-mode allocation (regular waterfall / add-on-only /
+    # principal-only / full-bucket payoff). The allocator VALIDATES the mode's
+    # amount rules (raises ValueError) BEFORE any state is touched — nothing is
+    # added to the session until the allocation is known-good.
+    effective_date = received_at.date()
+    balances_before = loan_ledger.loan_balances(loan, as_of=effective_date)
+    allocation = allocate_payment(repayment_mode, amount_cents, balances_before)
+
     payment = PlatformLoanPayment(
         loan_id=loan.id,
         amount_cents=amount_cents,
@@ -476,58 +548,118 @@ def record_payment(
     )
     db.add(payment)
 
-    # Schedule rows in due order. Use the relationship if loaded; otherwise query.
+    vendor_id = None
+    if getattr(loan, "application_id", None) is not None:
+        app_row = (
+            db.query(PlatformCreditApplication)
+            .filter(PlatformCreditApplication.id == loan.application_id)
+            .first()
+        )
+        vendor_id = getattr(app_row, "vendor_id", None)
+
+    seq = loan_ledger.next_seq(loan)
+    txn = PlatformLoanTransaction(
+        loan_id=loan.id,
+        seq=seq,
+        reference=loan_ledger.build_reference(vendor_id, loan.id, seq),
+        txn_type="payment",
+        payment_type=loan_ledger.payment_type_for_method(method),
+        repayment_mode=repayment_mode,
+        amount_cents=amount_cents,
+        principal_cents=allocation.principal_cents,
+        interest_cents=allocation.interest_cents,
+        fees_cents=allocation.fees_cents,
+        add_on_cents=allocation.add_on_cents,
+        effective_date=effective_date,
+        processing_date=effective_date,
+        created_by=created_by,
+        comment=comment,
+    )
+    loan.transactions.append(txn)  # keeps the in-session ledger view consistent
+    db.add(txn)
+
+    # Outstanding principal moves by the LEDGER allocation (decrement, clamped
+    # at zero). Decrement — rather than overwrite with the ledger-derived
+    # figure — so a loan whose stored balance was established outside the
+    # ledger (e.g. a migrated book before its cutover reconciliation row)
+    # can never have its balance silently "healed" upward by a payment; for
+    # ledger-consistent loans the two are identical (migration 049 reconciles
+    # every pre-existing loan at cutover).
+    loan.principal_balance_cents = max(
+        0, loan.principal_balance_cents - allocation.principal_cents
+    )
+
+    # ---- SCHEDULE (as-agreed plan): installment status flipping ------------
+    # REGULAR mode only: fill oldest unpaid installment first. This no longer
+    # moves money — it only tracks plan progress for DPD / statuses. The other
+    # modes deliberately leave the plan untouched (Dave's borrower-protection
+    # rule: extra payments never alter the as-agreed installments; add-on fees
+    # were never part of the plan; payoff closes the whole loan below).
     schedule = sorted(
         loan.schedule,
         key=lambda s: s.installment_number,
     )
 
-    remaining = amount_cents
-    for item in schedule:
-        if remaining <= 0:
-            break
-        if item.status in ("paid", "waived"):
-            continue
+    if repayment_mode == "regular":
+        remaining = amount_cents
+        for item in schedule:
+            if remaining <= 0:
+                break
+            if item.status in ("paid", "waived"):
+                continue
 
-        outstanding = item.total_cents - item.paid_cents
-        if outstanding <= 0:
-            item.status = "paid"
-            continue
+            outstanding = item.total_cents - item.paid_cents
+            if outstanding <= 0:
+                item.status = "paid"
+                continue
 
-        applied = min(remaining, outstanding)
+            applied = min(remaining, outstanding)
 
-        # Principal portion of THIS applied amount: principal is filled before
-        # interest within the installment's own (principal, interest) split.
-        principal_outstanding = max(
-            0, item.principal_cents - max(0, item.paid_cents)
-        )
-        principal_applied = min(applied, principal_outstanding)
+            item.paid_cents += applied
+            remaining -= applied
 
-        item.paid_cents += applied
-        remaining -= applied
+            if item.paid_cents >= item.total_cents:
+                item.status = "paid"
+            else:
+                item.status = "partial"
 
-        if item.paid_cents >= item.total_cents:
-            item.status = "paid"
-        else:
-            item.status = "partial"
-
-        loan.principal_balance_cents = max(
-            0, loan.principal_balance_cents - principal_applied
-        )
+    # ---- CLOSURE: the ledger's total debt at zero closes the loan ----------
+    # Dave: ANY payment that brings total debt (principal + interest due +
+    # fees due + add-on) to zero closes the loan — payoff mode by construction
+    # (it pays exactly all four buckets), but a regular payment can land there
+    # too. The appended txn is already in loan.transactions, so this reads the
+    # POST-payment actuals state.
+    balances_after = loan_ledger.loan_balances(loan, as_of=effective_date)
+    debt_cleared = balances_after.payoff_cents == 0
 
     # Loan-level status transitions.
-    if all(s.status in ("paid", "waived") for s in schedule) and schedule:
+    if debt_cleared:
+        # Settled in full: remaining open installments are no longer owed
+        # under the plan — waive them (keeps DPD/aging/dunning quiet without
+        # pretending they were paid per-installment) and close the loan.
+        for item in schedule:
+            if item.status not in ("paid", "waived"):
+                item.status = "waived"
         loan.status = "paid_off"
-        loan.principal_balance_cents = 0
+    elif all(s.status in ("paid", "waived") for s in schedule) and schedule:
+        # The plan is complete → paid_off (existing behaviour). NOTE: the
+        # actuals ledger may carry a small residue (per-diem interest vs the
+        # schedule's period interest); closure/true-up is the Payoff repayment
+        # mode. Flagged for Dave.
+        loan.status = "paid_off"
     elif loan.status == "delinquent":
         # Delinquency cure: a delinquent loan returns to ``active`` once it has no
         # overdue, unpaid installment left — the exact inverse of the condition
         # run_delinquency_aging uses to mark it delinquent. Without this, a borrower
         # who catches up stays flagged delinquent forever (and is then excluded from
         # future aging passes, which only re-evaluate ``active`` loans).
+        # ``suspended`` installments (schedule surgery, WS-F) are excluded, mirroring
+        # the aging job: staff deliberately parked them, so they don't hold the loan
+        # in delinquency.
         today = datetime.now(timezone.utc).date()
         has_overdue_unpaid = any(
-            s.due_date < today and s.status not in ("paid", "waived") for s in schedule
+            s.due_date < today and s.status not in ("paid", "waived", "suspended")
+            for s in schedule
         )
         if not has_overdue_unpaid:
             loan.status = "active"
@@ -552,8 +684,18 @@ def record_payment(
                     "amount_cents": amount_cents,
                     "external_ref": external_ref,
                     "method": method,
+                    "repayment_mode": repayment_mode,
                     "loan_status": loan.status,
                     "principal_balance_cents": loan.principal_balance_cents,
+                    # WS-A ledger row (actuals allocation): ids + cents only.
+                    "ledger_reference": txn.reference,
+                    "allocation": {
+                        "interest_cents": allocation.interest_cents,
+                        "principal_cents": allocation.principal_cents,
+                        "fees_cents": allocation.fees_cents,
+                        "add_on_cents": allocation.add_on_cents,
+                        "overpayment_cents": allocation.overpayment_cents,
+                    },
                 },
             },
         )
@@ -623,14 +765,23 @@ class AgingResult:
     loans_marked_delinquent: list[str]
 
 
+# Installment statuses the aging job may flip to ``late``. ``suspended`` is
+# DELIBERATELY excluded (schedule surgery, WS-F): a staff-suspended installment
+# must be skipped by the delinquency/dunning automation — that is the entire
+# point of suspending it. Pinned by tests/test_schedule_surgery.py.
+_AGEABLE_ITEM_STATUSES = ("scheduled", "partial")
+
+
 def run_delinquency_aging(db: Session, as_of: date) -> AgingResult:
     """Flip overdue, not-fully-paid installments to ``late`` and their loans to
     ``delinquent``.
 
-    A schedule item is overdue when ``due_date < as_of`` and it is not already
-    ``paid``/``waived`` (i.e. status in {scheduled, partial, late}) — any
-    unpaid balance past its due date is delinquent. Already-``late`` items stay
-    late (idempotent).
+    A schedule item is overdue when ``due_date < as_of`` and its status is in
+    ``_AGEABLE_ITEM_STATUSES`` (scheduled/partial) — any unpaid balance past
+    its due date is delinquent. Already-``late`` items stay late (idempotent).
+    ``suspended`` items (schedule surgery, WS-F) are NEVER flipped — staff
+    parked them on purpose, and a suspended item likewise never drags its loan
+    into ``delinquent``.
 
     A loan is marked ``delinquent`` when it has at least one overdue, unpaid
     installment AND it is currently ``active`` (we never override a terminal
@@ -646,7 +797,7 @@ def run_delinquency_aging(db: Session, as_of: date) -> AgingResult:
         db.query(PlatformLoanScheduleItem)
         .filter(
             PlatformLoanScheduleItem.due_date < as_of,
-            PlatformLoanScheduleItem.status.in_(("scheduled", "partial")),
+            PlatformLoanScheduleItem.status.in_(_AGEABLE_ITEM_STATUSES),
         )
         .all()
     )
@@ -830,46 +981,34 @@ class PayoffQuote:
     principal_cents: int
     accrued_interest_cents: int
     payoff_cents: int
+    fees_due_cents: int = 0
+    add_on_balance_cents: int = 0
 
 
 def compute_payoff(db: Session, loan: PlatformLoan, as_of: date) -> PayoffQuote:
     """Compute the amount required to fully pay off ``loan`` as of ``as_of``.
 
-    payoff = remaining principal + accrued interest.
+    ACTUALS ENGINE (WS-A — Turnkey parity, Dave's spec):
 
-    * REMAINING PRINCIPAL is ``loan.principal_balance_cents`` (the spine reduces
-      it by the principal portion of each payment).
-    * ACCRUED INTEREST is the unpaid interest on every installment whose
-      ``due_date <= as_of`` — interest that has already accrued (the borrower
-      has reached that period) but has not yet been covered by payments. For
-      each such installment, the unpaid interest is the installment's interest
-      minus the interest portion already paid into it; partial payments fill
-      principal before interest (mirrors ``record_payment``), so a partially
-      paid installment may still owe some or all of its interest.
+        payoff = 100% outstanding principal
+               + daily simple interest accrued to ``as_of`` (per-diem on the
+                 ACTUAL payment history in the ledger — NOT the schedule)
+               + fees due
+               + add-on balance
+        …and 0% future interest, by construction (interest is accrued only up
+        to ``as_of``).
 
-    Future installments (due after ``as_of``) contribute no accrued interest —
-    the borrower pays off early and is not charged unearned future interest.
+    The header-math invariant (04__WP_Collections) holds exactly:
+    principal + interest due + fees due + add-on balance == payoff.
 
     Pure read: no writes, no commit.
     """
-    schedule = sorted(loan.schedule, key=lambda s: s.installment_number)
-
-    accrued_interest = 0
-    for item in schedule:
-        if item.due_date > as_of:
-            continue
-        if item.status == "waived":
-            continue
-        # Of what's been paid into this installment, principal is satisfied
-        # first; the remainder (if any) covers interest.
-        interest_paid = max(0, item.paid_cents - item.principal_cents)
-        unpaid_interest = max(0, item.interest_cents - interest_paid)
-        accrued_interest += unpaid_interest
-
-    principal = max(0, loan.principal_balance_cents)
+    balances = loan_ledger.loan_balances(loan, as_of=as_of)
     return PayoffQuote(
         as_of=as_of,
-        principal_cents=principal,
-        accrued_interest_cents=accrued_interest,
-        payoff_cents=principal + accrued_interest,
+        principal_cents=balances.outstanding_principal_cents,
+        accrued_interest_cents=balances.interest_due_cents,
+        payoff_cents=balances.payoff_cents,
+        fees_due_cents=balances.fees_due_cents,
+        add_on_balance_cents=balances.add_on_balance_cents,
     )

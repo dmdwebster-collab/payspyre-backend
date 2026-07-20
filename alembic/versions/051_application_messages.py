@@ -1,7 +1,7 @@
 """Application message threads (vendor ⇄ PaySpyre back-and-forth)
 
-Revision ID: 044_application_messages
-Revises: 043_canonical_credit_application
+Revision ID: 051_application_messages
+Revises: 050_repayment_modes
 Create Date: 2026-07-19
 
 Creates the in-app messaging surface that replaces the ad-hoc Slack channel
@@ -25,8 +25,8 @@ import sqlalchemy as sa
 from alembic import op
 
 
-revision: str = "044_application_messages"
-down_revision: Union[str, None] = "043_canonical_credit_application"
+revision: str = "051_application_messages"
+down_revision: Union[str, None] = "050_repayment_modes"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

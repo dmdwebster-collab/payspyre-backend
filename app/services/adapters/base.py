@@ -63,6 +63,11 @@ class BureauResult:
     score: int
     result: VerificationOutcome
     bankruptcy: bool = False
+    # Discharge date when the reported bankruptcy is DISCHARGED (WS-E bankruptcy
+    # policy). None = active/undischarged OR the bureau did not report a discharge
+    # — both are treated as the (unchanged) hard-decline case by the engine, so
+    # adapters that never populate this keep today's behavior exactly.
+    bankruptcy_discharged_at: Optional[date] = None
     # SafeScan-style synthetic fraud signals (Hard Rule #10), e.g.
     # {"safescan_score": 120, "identity_high_risk": False, "velocity_alert": False}.
     fraud_signals: dict[str, object] = field(default_factory=dict)

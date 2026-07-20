@@ -36,8 +36,13 @@ class _Loan:
     def __init__(self, schedule, principal_balance_cents, status="active"):
         self.id = "loan-1"
         self.schedule = schedule
+        self.principal_cents = principal_balance_cents
         self.principal_balance_cents = principal_balance_cents
         self.status = status
+        # WS-A actuals-ledger attributes (no disbursement -> no accrual).
+        self.annual_rate_bps = 0
+        self.disbursed_at = None
+        self.transactions = []
 
 
 class _FakeSession:
