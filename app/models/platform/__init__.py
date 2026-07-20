@@ -40,6 +40,17 @@ from app.models.platform.message import (
     PlatformApplicationMessage,
     PlatformApplicationMessageRead,
 )
+from app.models.platform.crm import (
+    PlatformClinicRole,
+    PlatformCustomerBlock,
+    PlatformCustomerBlockReason,
+    PlatformIndustryCategory,
+    PlatformVendorBankAccount,
+    PlatformVendorContact,
+    PlatformVendorDocument,
+    PlatformVendorDocumentExpiryAlert,
+    PlatformVendorOnboarding,
+)
 
 __all__ = [
     "PlatformPatient",
@@ -74,4 +85,13 @@ __all__ = [
     "PlatformHardshipRequest",
     "PlatformApplicationMessage",
     "PlatformApplicationMessageRead",
+    "PlatformClinicRole",
+    "PlatformCustomerBlock",
+    "PlatformCustomerBlockReason",
+    "PlatformIndustryCategory",
+    "PlatformVendorBankAccount",
+    "PlatformVendorContact",
+    "PlatformVendorDocument",
+    "PlatformVendorDocumentExpiryAlert",
+    "PlatformVendorOnboarding",
 ]

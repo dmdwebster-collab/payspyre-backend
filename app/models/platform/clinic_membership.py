@@ -11,7 +11,7 @@ The migration for ``platform_clinic_memberships`` is written separately
 from uuid import uuid4
 
 from sqlalchemy import Column, DateTime, ForeignKey, Index, String, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
 
 from app.db.base import Base
@@ -34,6 +34,10 @@ class PlatformClinicMembership(Base):
         nullable=False,
     )
     role = Column(String(50), nullable=False, default="staff")
+    # WS-G 9-role permission matrix (migration 061): a JSON list of
+    # ``platform_clinic_roles`` keys. NULL = legacy membership with full
+    # clinic access (pre-matrix behaviour preserved).
+    roles = Column(JSONB, nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(

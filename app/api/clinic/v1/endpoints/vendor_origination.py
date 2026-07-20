@@ -390,6 +390,16 @@ def create_vendor_application(
 
     patient = _find_or_create_patient(db, body)
 
+    # WS-G customer lock/block: a blocked customer gets NO new originations
+    # (servicing of existing loans is unaffected). Enforced at every
+    # origination entry point.
+    from app.services.customer_blocks import CustomerBlockedError, ensure_not_blocked
+
+    try:
+        ensure_not_blocked(db, patient.id)
+    except CustomerBlockedError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
+
     try:
         application = orchestrator.create_application(
             patient_id=patient.id,

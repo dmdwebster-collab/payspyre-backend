@@ -9,6 +9,8 @@ from app.api.v1.endpoints import (
     admin_audit,
     admin_collections,
     admin_config,
+    admin_crm_customers,
+    admin_crm_vendors,
     admin_dashboard,
     admin_decision_reasons,
     admin_hardship,
@@ -65,6 +67,13 @@ api_router.include_router(
 )
 # System mode (Simulation vs Live) — read-only, admin/staff, for the cockpit banner.
 api_router.include_router(admin_system.router, prefix="/admin/system", tags=["admin-system"])
+# WS-G — Vendor + Customer CRM. Vendor CRM: industry categories, contacts, bank
+# accounts (masked), MSA docs w/ expiry alerts, onboarding, 9-role matrix,
+# chain + portfolio. Customer CRM: cross-loan view, lock/block, changelog.
+api_router.include_router(admin_crm_vendors.router, prefix="/admin/crm", tags=["admin-crm-vendors"])
+api_router.include_router(
+    admin_crm_customers.router, prefix="/admin/crm/customers", tags=["admin-crm-customers"]
+)
 # Embedded pre-qual widget intake (server-to-server, X-Widget-Key gated; inert until
 # WIDGET_API_KEY is set). Turns the widget's pre-qual into a real application.
 from app.api.v1.endpoints import widget_intake  # noqa: E402
