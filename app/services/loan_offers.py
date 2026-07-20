@@ -34,6 +34,7 @@ from app.models.platform.event import PlatformEvent
 from app.models.platform.loan import PlatformLoan
 from app.models.platform.loan_offer import PlatformLoanOffer
 from app.schemas.pricing_config import parse_pricing_config, quote_fees_cents
+from app.services.flow_orchestrator import mark_approved, mark_offers_expired
 from app.services.loan_quote import (
     CRIMINAL_RATE_CAP_BPS,
     compute_apr_bps,
@@ -292,7 +293,7 @@ def create_offers(
     db.flush()
 
     before_status = application.status
-    application.status = "approved"
+    mark_approved(application)
     application.status_updated_at = now
     application.decision = {
         "outcome": "approved",
@@ -427,7 +428,7 @@ def accept_offer(
     )
     application.decision = decision
     if application.status != "approved":
-        application.status = "approved"
+        mark_approved(application)
         application.status_updated_at = now
 
     _event(
@@ -516,7 +517,7 @@ def _maybe_expire_application(
     if has_loan:
         return False
     before = application.status
-    application.status = "expired"
+    mark_offers_expired(application)
     application.status_updated_at = now
     _event(
         db,

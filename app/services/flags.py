@@ -14,6 +14,7 @@ Deliberately NOT consulted by:
 """
 from __future__ import annotations
 
+import uuid
 from typing import Optional
 
 from sqlalchemy import text
@@ -40,6 +41,22 @@ _SUPPRESSED_SQL = text(
 )
 
 
+def _as_uuid_str(value: Optional[object]) -> Optional[str]:
+    """Coerce an id to its canonical UUID string, or None if it isn't a UUID.
+
+    Flag subjects (``patient_id`` / ``loan_id``) are UUID columns, but callers
+    like the dunning passthrough may carry a display/business identifier (e.g.
+    ``"L-1"``). A non-UUID value can never match a UUID column, so it normalizes
+    to None rather than reaching the ``CAST(... AS uuid)`` and raising DataError.
+    """
+    if value is None:
+        return None
+    try:
+        return str(uuid.UUID(str(value)))
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
 def notification_suppressed(
     db: Session,
     *,
@@ -48,13 +65,12 @@ def notification_suppressed(
 ) -> bool:
     """True when an active suppress-notifications flag covers this customer
     OR this loan. Either subject may be None; both None → False."""
-    if patient_id is None and loan_id is None:
+    patient_uuid = _as_uuid_str(patient_id)
+    loan_uuid = _as_uuid_str(loan_id)
+    if patient_uuid is None and loan_uuid is None:
         return False
     row = db.execute(
         _SUPPRESSED_SQL,
-        {
-            "patient_id": str(patient_id) if patient_id is not None else None,
-            "loan_id": str(loan_id) if loan_id is not None else None,
-        },
+        {"patient_id": patient_uuid, "loan_id": loan_uuid},
     ).first()
     return row is not None

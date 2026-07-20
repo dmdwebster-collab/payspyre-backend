@@ -353,18 +353,36 @@ class TestNotificationSuppressed:
         assert flags_service.notification_suppressed(db) is False
         assert db.calls == []  # never touches the session
 
+    # Flag subjects are UUID columns; ids are normalized to canonical UUID
+    # strings before binding (non-UUID display ids can't match, so they
+    # short-circuit — see test_non_uuid_ids_short_circuit).
+    _PID = "11111111-1111-1111-1111-111111111111"
+    _LID = "22222222-2222-2222-2222-222222222222"
+
     def test_suppressed_when_row_found(self):
         db = _StubSession(row=(1,))
-        assert flags_service.notification_suppressed(db, patient_id="p-1") is True
-        assert db.calls[0] == {"patient_id": "p-1", "loan_id": None}
+        assert flags_service.notification_suppressed(db, patient_id=self._PID) is True
+        assert db.calls[0] == {"patient_id": self._PID, "loan_id": None}
 
     def test_not_suppressed_when_no_row(self):
         db = _StubSession(row=None)
         assert (
-            flags_service.notification_suppressed(db, patient_id="p-1", loan_id="l-1")
+            flags_service.notification_suppressed(
+                db, patient_id=self._PID, loan_id=self._LID
+            )
             is False
         )
-        assert db.calls[0] == {"patient_id": "p-1", "loan_id": "l-1"}
+        assert db.calls[0] == {"patient_id": self._PID, "loan_id": self._LID}
+
+    def test_non_uuid_ids_short_circuit(self):
+        # A dunning-style display id ("L-1") can never match a UUID column:
+        # normalize to None and never reach CAST(... AS uuid) (which would raise).
+        db = _StubSession(row=(1,))
+        assert (
+            flags_service.notification_suppressed(db, patient_id="p-1", loan_id="L-1")
+            is False
+        )
+        assert db.calls == []
 
 
 class TestProcessorSuppressionMemo:

@@ -272,6 +272,30 @@ def mark_cancelled(application: PlatformCreditApplication) -> None:
     application.status_updated_at = datetime.now(timezone.utc)
 
 
+def mark_approved(application: PlatformCreditApplication) -> None:
+    """Approve the application — the multi-offer approval path (WS-D).
+
+    Status transitions are owned by this module (see the note above); the
+    multi-offer create/accept flow calls this instead of assigning
+    ``application.status`` itself. Intentionally unconditional (the caller guards
+    the source state), matching the single-decision approve path: it may
+    re-affirm an already-``approved`` file when an offer is accepted.
+    """
+    application.status = "approved"
+    application.status_updated_at = datetime.now(timezone.utc)
+
+
+def mark_offers_expired(application: PlatformCreditApplication) -> None:
+    """Expire the application after all its outstanding offers lapsed (WS-D).
+
+    The offer-expiry sweep owns the surrounding guard (no booked loan, all
+    offers past their 30-day window); this only performs the status write so it
+    stays within the orchestrator's ownership of ``application.status``.
+    """
+    application.status = "expired"
+    application.status_updated_at = datetime.now(timezone.utc)
+
+
 class FlowOrchestrator:
     def __init__(
         self,

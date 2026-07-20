@@ -539,3 +539,15 @@ class TestDashboardSilentEscalation:
         assert _outcome_bucket("declined", "human-id") == "declined"
         assert _outcome_bucket("declined", None) == "declined"
         assert _outcome_bucket("approved", "auto") == "approved"
+
+
+@pytest.fixture(autouse=True)
+def _customer_not_blocked(monkeypatch):
+    """WS-G added a customer lock/block gate to the origination entry points.
+    These endpoint unit tests use blanket mock sessions where every query
+    returns the same stubbed row, which the new block check would misread as
+    "blocked". The customer under test is not blocked; the block gate itself is
+    covered in tests/test_crm_parity_g.py."""
+    monkeypatch.setattr(
+        "app.services.customer_blocks.is_blocked", lambda *a, **k: False
+    )

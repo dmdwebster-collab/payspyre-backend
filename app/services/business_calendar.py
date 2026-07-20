@@ -328,8 +328,8 @@ def queue_payment_delay_notices(
             "due_date": _fmt_date(row["due_date"]),
             "holiday_name": holiday_name,
             "processing_date": _fmt_date(processing_date),
-            "payment_url": f"{base}/account",
             "account_url": f"{base}/account",
+            "dashboard_url": f"{base}/dashboard",
         }
         payload = {
             "v": 1,

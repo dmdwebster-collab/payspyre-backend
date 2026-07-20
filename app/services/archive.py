@@ -9,10 +9,10 @@ decision snapshots on the application row).
 
 Close-reason vocabulary (the archive "S" column):
 
-    rejected                   ← application.status = declined
-    cancelled                  ← application.status = withdrawn  OR loan.status = cancelled
-    expired                    ← application.status = expired    (offer expired)
-    bank_verification_expired  ← application.status = expired AND
+    rejected                   ← application status → declined
+    cancelled                  ← application status → withdrawn  OR loan status → cancelled
+    expired                    ← application status → expired    (offer expired)
+    bank_verification_expired  ← application status → expired AND
                                  flow_state.expiry_reason = 'bank_verification'
                                  (populated by the verification-expiry job; an
                                  expired row without the marker files under

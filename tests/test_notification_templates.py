@@ -96,6 +96,26 @@ def test_internal_notice_renders(n):
     assert html.count("<strong>") >= len(INTERNAL_NOTICES[key].detail_fields)
 
 
+def test_payment_delay_notice_renders():
+    """WS-F business-calendar notice: due date on a statutory holiday. Strict
+    render proves every subject/template/SMS merge field is supplied."""
+    ctx = {
+        "borrower_name": "Jordan Lee",
+        "loan_id": "L-1",
+        "due_date": "July 1, 2026",
+        "payment_amount": "$262.84",
+        "holiday_name": "Canada Day",
+        "processing_date": "July 2, 2026",
+        "account_url": "https://app.payspyre.com/account",
+        "dashboard_url": "https://app.payspyre.com/dashboard",
+    }
+    subject, html = nr.render_email("payment_delay_notice", ctx)
+    assert "July 1, 2026" in subject and "{{" not in html
+    assert "Canada Day" in html
+    sms = nr.render_sms("payment_delay_notice", ctx)
+    assert "$262.84" in sms and "{{" not in sms
+
+
 def test_every_registry_type_is_exercised():
     """The registry and the fixture manifests can't drift apart silently."""
     covered = set()
@@ -117,6 +137,9 @@ def test_every_registry_type_is_exercised():
         "pad_pre_notification",
         # WS-J hardship amendment notice — rendered in tests/test_hardship.py.
         "hardship_agreement_sent",
+        # WS-F business-calendar payment-delay notice — rendered by
+        # test_payment_delay_notice_renders above.
+        "payment_delay_notice",
     }
     missing = set(nr.NOTIFICATION_TYPES) - covered
     assert not missing, f"registry types without render coverage: {sorted(missing)}"
