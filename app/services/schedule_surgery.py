@@ -38,6 +38,7 @@ from app.models.platform.loan import (
     PlatformLoanCustomTransaction,
     PlatformLoanScheduleItem,
 )
+from app.services import loan_ledger
 from app.services.interest_engine import REPAYMENT_MODES
 
 # Event types — the audit trail / change history (queried by schedule_changes).
@@ -202,6 +203,7 @@ def add_custom_transaction(
     comment: str,
     actor: str,
     today: Optional[date] = None,
+    allow_backdate: bool = False,
 ) -> PlatformLoanCustomTransaction:
     """Add a one-off custom scheduled transaction (Turnkey "Add transaction").
 
@@ -210,19 +212,32 @@ def add_custom_transaction(
     auto-collection (WS-G) or a staff manual payment; until then it is a
     ``scheduled`` row in ``platform_loan_custom_transactions``.
     Emits ``loan_custom_transaction_added``.
+
+    BACKDATING (WS-I — permission-bounded, was a hard block in PR #179): a
+    past ``scheduled_date`` is allowed ONLY when the caller passes
+    ``allow_backdate=True`` (the endpoint grants it iff the user holds the
+    ``ledger.backdate`` permission or is admin), and even then bounded to
+    ``loan_ledger.BACKDATE_WINDOW_DAYS`` days back. The comment (already
+    mandatory) plus the audit event's ``backdated`` flag keep the why and the
+    who on the record.
     """
     cleaned = _require_comment(comment)
     if amount_cents <= 0:
         raise ScheduleSurgeryError("amount_cents must be positive")
-    # A custom transaction is an instruction to pull money LATER (or today) —
-    # backdating is a separate, permission-gated workstream (same rule as the
-    # ledger's effective_date). A past date would execute immediately anyway,
-    # while leaving a misleading date on the audit event.
-    if scheduled_date < (today or date.today()):
-        raise ScheduleSurgeryError(
-            f"scheduled_date {scheduled_date.isoformat()} is in the past "
-            "(custom transactions execute today or later; backdating is not supported)"
-        )
+    # A custom transaction is normally an instruction to pull money LATER (or
+    # today). A past date is a permission-bounded backdate (see docstring).
+    effective_today = today or date.today()
+    backdated = scheduled_date < effective_today
+    if backdated:
+        if not allow_backdate:
+            raise ScheduleSurgeryError(
+                f"scheduled_date {scheduled_date.isoformat()} is in the past "
+                "(backdating requires the ledger.backdate permission)"
+            )
+        try:
+            loan_ledger.validate_backdate(scheduled_date, effective_today, comment=cleaned)
+        except ValueError as exc:
+            raise ScheduleSurgeryError(str(exc))
     if repayment_mode not in REPAYMENT_MODES:
         raise ScheduleSurgeryError(
             f"unknown repayment mode {repayment_mode!r} "
@@ -250,6 +265,8 @@ def add_custom_transaction(
             "amount_cents": amount_cents,
             "repayment_mode": repayment_mode,
             "comment": cleaned,
+            # WS-I: a backdated instruction is flagged in the audit trail.
+            "backdated": backdated,
         },
     )
     return row

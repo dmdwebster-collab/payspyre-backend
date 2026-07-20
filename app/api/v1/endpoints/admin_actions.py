@@ -25,14 +25,19 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.api.v1.endpoints.admin_originations import require_assignment_or_override
-from app.core.auth import require_roles, user_has_permission, user_is_admin
+from app.core.auth import (
+    require_roles,
+    user_has_permission,
+    user_has_permission_or_admin,
+    user_is_admin,
+)
 from app.core.config import settings as app_settings
 from app.db.base import get_db
 from app.models.platform.credit_application import PlatformCreditApplication
 from app.models.platform.event import PlatformEvent
 from app.models.platform.loan import PlatformLoan, PlatformLoanPayment
 from app.models.user import User
-from app.services import decision_reasons, loan_lifecycle, loan_servicing
+from app.services import decision_reasons, loan_ledger, loan_lifecycle, loan_servicing
 from app.services.adverse_action import send_adverse_action_notice
 from app.services.flow_orchestrator import (
     _TERMINAL_STATUSES,
@@ -466,6 +471,16 @@ class PaymentBody(BaseModel):
     received_at: Optional[datetime] = None
     external_ref: Optional[str] = None
     note: Optional[str] = None
+    # WS-I reconciliation dimension: cash / check / eft / credit_card /
+    # adjustment. Optional — when omitted it is derived from ``method``.
+    payment_type: Optional[Literal["cash", "check", "eft", "credit_card", "adjustment"]] = None
+    # WS-I permission-bounded BACKDATING: an ``effective_date`` earlier than
+    # the received date requires the ``ledger.backdate`` permission (admin
+    # implicitly allowed), is bounded to loan_ledger.BACKDATE_WINDOW_DAYS days
+    # back, and makes ``note`` MANDATORY. The processing date stays the
+    # received date, so the backdate is permanently visible in the dual-date
+    # ledger row and the audit event.
+    effective_date: Optional[date] = None
     # WS-F repayment modes (Turnkey "Submit repayment" — Dave's spec):
     #   regular — accrued interest → principal → fees (default)
     #   add_on  — pays the non-accruing add-on bucket only (≤ add-on balance)
@@ -519,6 +534,23 @@ def record_payment(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="special payments require the admin role",
             )
+    # WS-I permissioned BACKDATING: an effective_date earlier than the received
+    # date needs the ledger.backdate permission (admin implicitly allowed).
+    # The bounded window (BACKDATE_WINDOW_DAYS) + mandatory comment are
+    # enforced again inside record_payment (defense-in-depth); forward-dating
+    # is always rejected there. Same-day effective_date is not a backdate.
+    received_at = body.received_at or datetime.now(timezone.utc)
+    if body.effective_date is not None and body.effective_date != received_at.date():
+        if not user_has_permission_or_admin(user, "ledger", "backdate"):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="backdating a transaction requires the ledger.backdate permission",
+            )
+        if not (body.note or "").strip():
+            raise HTTPException(
+                status_code=422,
+                detail="a note (comment) is required for every backdated transaction",
+            )
     # Idempotency: when the caller supplies an external_ref, a retry / double-submit
     # must NOT post the payment (and reduce the balance) twice. Return the existing
     # receipt instead. Without an external_ref we can't dedupe, so the caller owns it.
@@ -537,24 +569,40 @@ def record_payment(
                     "idempotent_replay": True}
     try:
         payment = loan_servicing.record_payment(
-            db, loan, body.amount_cents, body.received_at or datetime.now(timezone.utc),
+            db, loan, body.amount_cents, received_at,
             body.method, body.external_ref,
             created_by=_actor_id(user), comment=body.note,
             repayment_mode=body.repayment_mode,
+            effective_date=body.effective_date,
+            payment_type=body.payment_type,
         )
     except ValueError as exc:
-        # Mode-rule violation (add-on/special amount caps, payoff exact-match).
-        # Nothing was committed; the message carries the expected figure so the
-        # client can re-confirm (e.g. a stale payoff quote).
+        # Mode-rule violation (add-on/special amount caps, payoff exact-match)
+        # or a backdate-window violation. Nothing was committed; the message
+        # carries the expected figure so the client can re-confirm (e.g. a
+        # stale payoff quote).
         raise HTTPException(status_code=422, detail=str(exc))
     _audit(db, event_type="admin_loan_payment", actor=_actor_id(user),
            payload={"loan_id": str(loan_id), "amount_cents": body.amount_cents,
                     "method": body.method, "repayment_mode": body.repayment_mode,
+                    "payment_type": body.payment_type,
+                    "effective_date": (
+                        body.effective_date.isoformat() if body.effective_date else None
+                    ),
+                    "backdated": bool(
+                        body.effective_date
+                        and body.effective_date != received_at.date()
+                    ),
                     "note": body.note})
     db.commit()
     return {"payment_id": str(payment.id), "loan_status": loan.status,
             "principal_balance_cents": loan.principal_balance_cents,
             "repayment_mode": body.repayment_mode}
+
+
+# Staff payout calculator (WS-I): a quote may be FORWARD-DATED at most this
+# many days (Turnkey parity — payoff quote for any date up to 30 days out).
+PAYOFF_QUOTE_MAX_FORWARD_DAYS = 30
 
 
 @router.get("/loans/{loan_id}/payoff-quote")
@@ -564,18 +612,71 @@ def payoff_quote(
     db: Session = Depends(get_db),
     _user=Depends(require_roles("admin", "staff")),
 ):
-    """Payoff quote from the ACTUALS engine (WS-A): 100% outstanding principal
-    + daily simple interest accrued to date + fees due + add-on balance, and 0%
-    future interest. The four buckets sum exactly to ``payoff_cents``."""
+    """Staff payout calculator — payoff quote from the ACTUALS engine (WS-A):
+    100% outstanding principal + daily simple interest accrued to ``as_of`` +
+    fees due + add-on balance, and 0% future interest. The four buckets sum
+    exactly to ``payoff_cents``.
+
+    FORWARD-DATED (WS-I): ``as_of`` may be any date up to
+    ``PAYOFF_QUOTE_MAX_FORWARD_DAYS`` (30) days in the future — the per-diem
+    projection simply accrues interest to that date (422 beyond the window).
+    Past dates remain allowed as a historical read.
+
+    THE RULE (Turnkey parity, documented + pinned by tests): requesting a
+    payoff quote is a PURE READ — it does NOT suspend, park, or alter any
+    scheduled payment. Auto-collection and the amortization plan run
+    unchanged unless/until the payoff payment is actually recorded
+    (``repayment_mode='payoff'``). The response carries
+    ``scheduled_payments_suspended: false`` to make that contract explicit.
+    """
+    today = date.today()
+    as_of = as_of or today
+    if (as_of - today).days > PAYOFF_QUOTE_MAX_FORWARD_DAYS:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"as_of may be at most {PAYOFF_QUOTE_MAX_FORWARD_DAYS} days in "
+                f"the future (got {as_of.isoformat()})"
+            ),
+        )
     loan = _get_loan(db, loan_id)
-    quote = loan_servicing.compute_payoff(db, loan, as_of or date.today())
+    quote = loan_servicing.compute_payoff(db, loan, as_of)
+
+    # Itemized fee detail: the immutable fee-charge rows (NSF fees etc.), with
+    # the aggregate fees-due/add-on balances they roll into. Fee PAYMENTS
+    # reduce the aggregate buckets, so per-row "remaining" is not a ledger
+    # concept — the charge rows + the two aggregates are the honest itemization.
+    fee_rows = [
+        {
+            "reference": t.reference,
+            "effective_date": t.effective_date.isoformat(),
+            "fees_cents": t.fees_cents or 0,
+            "add_on_cents": t.add_on_cents or 0,
+            "comment": t.comment,
+        }
+        for t in loan_ledger.sorted_transactions(loan)
+        if t.txn_type == "fee"
+    ]
+
+    # Per-diem transparency: the daily simple-interest accrual the projection
+    # uses (annual rate on the CURRENT outstanding principal, actual/365).
+    per_diem_cents = round(
+        quote.principal_cents * (loan.annual_rate_bps / 10_000.0) / 365.0
+    )
+
     return {
         "as_of": quote.as_of.isoformat(),
+        "quote_date": today.isoformat(),
+        "days_forward": max(0, (as_of - today).days),
         "principal_cents": quote.principal_cents,
         "accrued_interest_cents": quote.accrued_interest_cents,
         "fees_due_cents": quote.fees_due_cents,
         "add_on_balance_cents": quote.add_on_balance_cents,
         "payoff_cents": quote.payoff_cents,
+        "per_diem_interest_cents": per_diem_cents,
+        "fee_detail": fee_rows,
+        # The contract: a payoff INQUIRY never suspends scheduled payments.
+        "scheduled_payments_suspended": False,
     }
 
 

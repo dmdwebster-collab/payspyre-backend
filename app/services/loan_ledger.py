@@ -46,6 +46,51 @@ def payment_type_for_method(method: Optional[str]) -> str:
     return "eft"
 
 
+# The reconciliation dimension's full value set (mirrors the DB enum
+# ``platform_loan_payment_type``, migration 049 — cash/check/EFT/card/adjustment).
+PAYMENT_TYPES = ("cash", "check", "eft", "credit_card", "adjustment")
+
+# Permission-bounded backdating window (WS-I): a backdated ledger effective
+# date (or custom-transaction scheduled date) may reach at most this many days
+# into the past. The ``ledger.backdate`` permission gates WHO may backdate
+# (endpoint layer); this bounds HOW FAR (service layer, defense-in-depth).
+BACKDATE_WINDOW_DAYS = 30
+
+
+def validate_backdate(
+    effective_date: date,
+    processing_date: date,
+    *,
+    comment: Optional[str],
+    window_days: int = BACKDATE_WINDOW_DAYS,
+) -> None:
+    """Enforce the backdating rules (WS-I — turns PR #179's hard no-backdate
+    block into a permission-bounded path). Raises ``ValueError`` on violation:
+
+    * never FORWARD-dated — future money is a scheduled/custom transaction,
+      not a ledger row;
+    * at most ``window_days`` into the past;
+    * a comment is MANDATORY (why is this money being treated as applied on an
+      earlier date — audited verbatim).
+
+    The ``ledger.backdate`` permission check lives at the endpoint (services
+    don't see the user); this validator is the amount/shape bound.
+    """
+    if effective_date > processing_date:
+        raise ValueError(
+            f"effective_date {effective_date.isoformat()} is after the processing "
+            f"date {processing_date.isoformat()} — ledger rows cannot be forward-dated"
+        )
+    days_back = (processing_date - effective_date).days
+    if days_back > window_days:
+        raise ValueError(
+            f"effective_date {effective_date.isoformat()} is {days_back} days before "
+            f"the processing date — backdating is bounded to {window_days} days"
+        )
+    if not (comment or "").strip():
+        raise ValueError("a comment is required for every backdated transaction")
+
+
 def sorted_transactions(loan: PlatformLoan) -> list[PlatformLoanTransaction]:
     """The loan's ledger rows in replay order: effective date, then seq."""
     return sorted(

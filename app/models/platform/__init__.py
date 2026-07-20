@@ -75,6 +75,8 @@ from app.models.platform.report_schedule import (
     PlatformReportSchedule,
     PlatformReportScheduleRun,
 )
+from app.models.platform.blacklist import PlatformBlacklistEntry
+from app.models.platform.bureau_batch import PlatformBureauBatch
 
 __all__ = [
     "PlatformPatient",
@@ -137,4 +139,6 @@ __all__ = [
     "PlatformReportDefinition",
     "PlatformReportSchedule",
     "PlatformReportScheduleRun",
+    "PlatformBlacklistEntry",
+    "PlatformBureauBatch",
 ]
