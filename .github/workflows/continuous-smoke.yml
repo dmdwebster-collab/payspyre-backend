@@ -30,7 +30,7 @@ jobs:
       PAYSPYRE_API_BASE: ${{ github.event.inputs.api_base || 'https://payspyre-api-staging-5cflx.ondigitalocean.app/api' }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
       - run: pip install requests
