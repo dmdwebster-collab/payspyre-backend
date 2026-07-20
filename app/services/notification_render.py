@@ -96,6 +96,19 @@ NOTIFICATION_TYPES: dict[str, NotificationSpec] = {
             "overdue. Please make your payment: {{ payment_url }}"
         ),
     ),
+    # WS-G: PAD pre-notification — advance notice of a scheduled automatic
+    # debit (Payments Canada Rule H1 mechanism). COPY IS PLACEHOLDER: counsel
+    # must supply the exact regulatory notice wording (and confirm the reduced
+    # notice period / weekly-frequency waiver clauses in the PAD agreement)
+    # before AUTO_COLLECTION_ENABLED is flipped on.
+    "pad_pre_notification": NotificationSpec(
+        email_template="pad_pre_notification.html",
+        email_subject="Upcoming automatic payment — {{ payment_amount }} on {{ charge_date }}",
+        sms_template=(
+            "PaySpyre: your scheduled payment of {{ payment_amount }} will be "
+            "automatically debited on {{ charge_date }}. Details: {{ account_url }}"
+        ),
+    ),
 }
 
 
