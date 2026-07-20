@@ -48,7 +48,7 @@ class _Loan:
 class _FakeSession:
     def add(self, obj): pass
     def commit(self): pass
-    def refresh(self, obj): pass
+    def refresh(self, obj, **kwargs): pass
 
 
 # --- statement split across periods ----------------------------------------

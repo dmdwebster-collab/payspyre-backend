@@ -109,7 +109,10 @@ class TestDecision:
     def test_already_decided_409_without_override(self, app_client, db_session):
         app, client = app_client
         application = _seed_application(db_session, status="approved")
-        r = client.post(f"{_BASE}/applications/{application.id}/decision", json={"outcome": "declined"})
+        # reason_codes supplied so the request clears schema validation and the
+        # already-decided guard (409) is what fires.
+        r = client.post(f"{_BASE}/applications/{application.id}/decision",
+                        json={"outcome": "declined", "reason_codes": ["insufficient_income"]})
         assert r.status_code == 409
         # override succeeds (WS-E: declines must carry a vetted directory reason code)
         r2 = client.post(f"{_BASE}/applications/{application.id}/decision",
@@ -239,7 +242,8 @@ class TestAuditFixes:
         app, client = app_client
         loan = _seed_loan(db_session, status="pending_disbursement", balance=1_800_000)
         r = client.post(f"{_BASE}/applications/{loan.application_id}/decision",
-                        json={"outcome": "declined", "override": True})
+                        json={"outcome": "declined", "override": True,
+                              "reason_codes": ["insufficient_income"]})
         assert r.status_code == 409, r.text
         assert "booked loan" in r.json()["detail"].lower()
 

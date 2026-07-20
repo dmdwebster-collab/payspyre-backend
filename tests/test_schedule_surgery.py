@@ -221,6 +221,7 @@ def test_add_custom_transaction_creates_row_and_audits():
         repayment_mode="regular",
         comment="Borrower request, authorization obtained",
         actor="staff-7",
+        today=D(2026, 7, 1),
     )
     assert row.loan_id == loan.id
     assert row.scheduled_date == D(2026, 7, 15)
@@ -241,19 +242,40 @@ def test_add_custom_transaction_validates_mode_amount_and_comment():
     with pytest.raises(schedule_surgery.ScheduleSurgeryError, match="unknown repayment mode"):
         schedule_surgery.add_custom_transaction(
             db, loan, scheduled_date=D(2026, 7, 15), amount_cents=1,
-            repayment_mode="bogus", comment="c", actor="a",
+            repayment_mode="bogus", comment="c", actor="a", today=D(2026, 7, 1),
         )
     with pytest.raises(schedule_surgery.ScheduleSurgeryError, match="must be positive"):
         schedule_surgery.add_custom_transaction(
             db, loan, scheduled_date=D(2026, 7, 15), amount_cents=0,
-            repayment_mode="regular", comment="c", actor="a",
+            repayment_mode="regular", comment="c", actor="a", today=D(2026, 7, 1),
         )
     with pytest.raises(schedule_surgery.ScheduleSurgeryError, match="comment is required"):
         schedule_surgery.add_custom_transaction(
             db, loan, scheduled_date=D(2026, 7, 15), amount_cents=1,
-            repayment_mode="regular", comment="", actor="a",
+            repayment_mode="regular", comment="", actor="a", today=D(2026, 7, 1),
         )
     assert db.custom_rows == []
+
+
+def test_add_custom_transaction_rejects_past_scheduled_date():
+    """Adversarial-review fix: custom transactions execute today or later —
+    backdating is a separate, permission-gated workstream (ledger rule)."""
+    loan = _Loan()
+    db = _FakeSession(loan)
+    with pytest.raises(schedule_surgery.ScheduleSurgeryError, match="in the past"):
+        schedule_surgery.add_custom_transaction(
+            db, loan, scheduled_date=D(2026, 6, 30), amount_cents=1_000,
+            repayment_mode="regular", comment="late add", actor="staff-7",
+            today=D(2026, 7, 1),
+        )
+    assert db.custom_rows == []
+    # Same-day is allowed ("pull it today").
+    row = schedule_surgery.add_custom_transaction(
+        db, loan, scheduled_date=D(2026, 7, 1), amount_cents=1_000,
+        repayment_mode="regular", comment="today pull", actor="staff-7",
+        today=D(2026, 7, 1),
+    )
+    assert row.status == "scheduled"
 
 
 def test_cancel_custom_transaction_is_a_status_flip_never_a_delete():
@@ -262,6 +284,7 @@ def test_cancel_custom_transaction_is_a_status_flip_never_a_delete():
     row = schedule_surgery.add_custom_transaction(
         db, loan, scheduled_date=D(2026, 7, 15), amount_cents=1_000,
         repayment_mode="regular", comment="add", actor="staff-7",
+        today=D(2026, 7, 1),
     )
     row.id = uuid4()  # the DB would assign this on flush
     out = schedule_surgery.cancel_custom_transaction(

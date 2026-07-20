@@ -74,7 +74,7 @@ class _FakeSession:
     def commit(self):
         pass
 
-    def refresh(self, obj):
+    def refresh(self, obj, **kwargs):
         pass
 
 
