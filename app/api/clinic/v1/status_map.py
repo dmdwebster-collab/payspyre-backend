@@ -41,3 +41,23 @@ def to_clinic_status(platform_status: str) -> str:
     addition never 500s the dashboard.
     """
     return _CLINIC_STATUS.get(platform_status, "started")
+
+
+def to_vendor_visible_status(platform_status: str, decision_by: str | None = None) -> str:
+    """The status a VENDOR is allowed to see (WS-I, Dave's silent-escalation rule).
+
+    10__Vendor_Access.md: "if an automated response is an automated rejection
+    then instead of being hard rejected it would get submitted to a human
+    underwriter for review" — the vendor must NOT be told an AUTO decline is
+    final while that human escalation is pending. An application that is
+    ``declined`` with ``decision_by == 'auto'`` therefore surfaces as
+    ``manual_review`` ("in review"). Once a human confirms or overturns the
+    decline (the admin decision path stamps ``decision_by`` with the human
+    actor), the real bucket shows.
+
+    Every clinic/vendor response that carries an application status MUST go
+    through this function, never ``to_clinic_status`` directly.
+    """
+    if platform_status == "declined" and decision_by == "auto":
+        return "manual_review"
+    return to_clinic_status(platform_status)

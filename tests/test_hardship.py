@@ -642,7 +642,7 @@ def test_migration_chain():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     assert mod.revision == "054_hardship"
-    assert mod.down_revision == "050_repayment_modes"
+    assert mod.down_revision == "053_delinquency_buckets"
 
 
 def test_app_imports_with_hardship_wired():

@@ -555,7 +555,7 @@ def test_borrower_add_on_requires_a_balance_and_respects_the_cap():
 def test_borrower_payoff_is_server_quoted_and_non_editable():
     loan = _Loan()
     session = _PayNowSession(loan)
-    quote = loan_ledger.loan_balances(loan, as_of=date.today()).payoff_cents
+    quote = loan_ledger.loan_balances(loan, as_of=datetime.now(timezone.utc).date()).payoff_cents
 
     # A client-supplied amount that doesn't match the quote is rejected…
     with pytest.raises(loan_payments.PaymentValidationError, match="server-computed"):
@@ -635,7 +635,7 @@ class _SettleSession(_PayNowSession):
 
 def test_settlement_applies_payoff_mode_when_the_quote_still_matches():
     loan = _Loan()
-    quote = loan_ledger.loan_balances(loan, as_of=date.today()).payoff_cents
+    quote = loan_ledger.loan_balances(loan, as_of=datetime.now(timezone.utc).date()).payoff_cents
     session = _SettleSession(loan, {
         "loan_id": str(loan.id), "amount_cents": quote,
         "repayment_mode": "payoff", "transaction_id": "zum-txn-9",
@@ -647,7 +647,7 @@ def test_settlement_applies_payoff_mode_when_the_quote_still_matches():
 
 def test_settlement_falls_back_to_regular_when_the_payoff_drifted():
     loan = _Loan()
-    quote = loan_ledger.loan_balances(loan, as_of=date.today()).payoff_cents
+    quote = loan_ledger.loan_balances(loan, as_of=datetime.now(timezone.utc).date()).payoff_cents
     stale = quote - 300  # e.g. quoted 3 per-diem days ago
     session = _SettleSession(loan, {
         "loan_id": str(loan.id), "amount_cents": stale,
@@ -665,7 +665,7 @@ def test_settlement_falls_back_to_regular_when_the_payoff_drifted():
     # The residue (drift) survives on the ledger for staff true-up — the
     # regular fallback never pretends the debt was cleared. (Loan status here
     # follows the pre-existing plan-complete rule; the LEDGER is money truth.)
-    assert loan_ledger.loan_balances(loan, as_of=date.today()).payoff_cents == 300
+    assert loan_ledger.loan_balances(loan, as_of=datetime.now(timezone.utc).date()).payoff_cents == 300
 
 
 def test_settlement_without_a_mode_defaults_to_regular():

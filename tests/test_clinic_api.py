@@ -130,14 +130,14 @@ class TestShaping:
         assert out.currency == "CAD"
 
     def test_summary_from_status_counts_buckets(self):
-        # (platform_status, count) pairs as a GROUP BY would return them.
-        pairs = [
-            ("approved", 2),
-            ("declined", 1),
-            ("under_review", 1),
-            ("verifying", 1),
+        # (platform_status, decision_by, count) triples as the GROUP BY returns them.
+        triples = [
+            ("approved", "auto", 2),
+            ("declined", "some-human-id", 1),
+            ("under_review", None, 1),
+            ("verifying", None, 1),
         ]
-        summary = apps_endpoint._summary_from_status_counts(pairs)
+        summary = apps_endpoint._summary_from_status_counts(triples)
         assert summary.approved == 2
         assert summary.declined == 1
         assert summary.manual_review == 1
@@ -148,12 +148,22 @@ class TestShaping:
         # The whole point of the GROUP BY: counts reflect ALL rows, not a capped
         # fetch. A clinic with 5,000 approvals must report 5,000.
         summary = apps_endpoint._summary_from_status_counts(
-            [("approved", 5000), ("started", 1200), ("withdrawn", 7)]
+            [("approved", "auto", 5000), ("started", None, 1200), ("withdrawn", None, 7)]
         )
         assert summary.approved == 5000
         assert summary.started == 1200
         assert summary.declined == 7  # withdrawn -> declined bucket
         assert summary.total == 6207
+
+    def test_summary_auto_decline_is_silently_escalated(self):
+        # WS-I (Dave): an AUTO decline pending human review must count as
+        # manual_review on the vendor surface, never as a final decline.
+        summary = apps_endpoint._summary_from_status_counts(
+            [("declined", "auto", 3), ("declined", "user-uuid", 2)]
+        )
+        assert summary.manual_review == 3
+        assert summary.declined == 2
+        assert summary.total == 5
 
 
 class TestFinancingLinkHelpers:
@@ -228,16 +238,16 @@ class TestApplicationsEndpoint:
         assert statuses == {"approved", "manual_review"}
 
     def test_dashboard_summary(self, app_under_test):
-        # The summary now counts via SQL GROUP BY, so the DB yields
-        # (platform_status, count) pairs rather than full rows.
+        # The summary counts via SQL GROUP BY (status, decision_by), so the DB
+        # yields (platform_status, decision_by, count) triples rather than rows.
         db = MagicMock()
         (
             db.query.return_value.filter.return_value.group_by.return_value.all
         ).return_value = [
-            ("approved", 1),
-            ("declined", 1),
-            ("under_review", 1),
-            ("started", 1),
+            ("approved", "auto", 1),
+            ("declined", "human-actor", 1),
+            ("under_review", None, 1),
+            ("started", None, 1),
         ]
         app_under_test.dependency_overrides[get_db] = lambda: db
         client = TestClient(app_under_test)

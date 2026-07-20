@@ -59,7 +59,8 @@ DASHBOARD_CHANNEL = "dashboard"
 # Event types the processor reacts to. decision_made and application_cancelled
 # (WS-E staff Cancel — a non-credit closure, so NOT an adverse-action notice)
 # are transactional; the two payment_* types are the synthetic events WS3's
-# dunning job emits.
+# dunning job emits; pad_pre_notification is the synthetic event the WS-G
+# auto-collection job emits N business days before each scheduled PAD pull.
 TRIGGER_EVENT_TYPES = (
     "decision_made",
     "application_cancelled",
@@ -68,6 +69,7 @@ TRIGGER_EVENT_TYPES = (
     # WS-J: hardship amendment sent for e-signature — borrower must be told
     # (email; the payload carries channels+context, passthrough shape).
     "hardship_agreement_sent",
+    "pad_pre_notification",
 )
 
 
@@ -234,7 +236,12 @@ class NotificationProcessor:
             return self._plan_decision(ev)
         if etype == "application_cancelled":
             return self._plan_cancelled(ev)
-        if etype in ("payment_due_reminder", "payment_overdue", "hardship_agreement_sent"):
+        if etype in (
+            "payment_due_reminder",
+            "payment_overdue",
+            "hardship_agreement_sent",
+            "pad_pre_notification",
+        ):
             return self._plan_passthrough(ev)
         return []
 

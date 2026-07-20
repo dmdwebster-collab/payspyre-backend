@@ -20,14 +20,18 @@ from app.core.auth import get_current_user, require_roles
 from app.db.base import get_db
 from app.models.loan import Vendor
 from app.models.platform.credit_application import PlatformCreditApplication
+from app.models.platform.event import PlatformEvent
 from app.models.platform.loan import (
     PlatformLoan,
     PlatformLoanCustomTransaction,
+    PlatformLoanDelinquencySnapshot,
     PlatformLoanPayment,
     PlatformLoanScheduleItem,
     PlatformLoanStatement,
 )
 from app.models.platform.patient import PlatformPatient
+from app.services import auto_collection
+from app.services import delinquency_buckets
 from app.services import loan_ledger as ledger_service
 from app.services import schedule_surgery
 from app.services.loan_servicing import get_loan_status
@@ -45,6 +49,9 @@ class AdminLoanRow(BaseModel):
     status: str
     disbursed_at: Optional[datetime] = None
     days_past_due: int
+    # WS-H: last month-end snapshot bucket + insolvency classification.
+    current_bucket: str = "current"
+    insolvency_status: Optional[str] = None
 
 
 def _patient_name(p) -> str:
@@ -99,9 +106,47 @@ def list_loans(
             status=loan.status,
             disbursed_at=loan.disbursed_at,
             days_past_due=_days_past_due(db, loan.id),
+            current_bucket=loan.current_bucket or "current",
+            insolvency_status=loan.insolvency_status,
         )
         for loan, patient, vendor_name in rows
     ]
+
+
+def _delinquency_block(loan: PlatformLoan, today: date) -> dict:
+    """WS-H: live delinquency view for one loan (no extra queries — walks the
+    loaded schedule).
+
+    * ``current_bucket`` — the last MONTH-END snapshot assignment (buckets
+      move only at month-end).
+    * ``effective_bucket`` — what collections should treat the loan as right
+      now: insolvency/written_off override immediately, and a FULL catch-up
+      (no past-due unpaid installment) cures to ``current`` immediately.
+    * ``days_past_due`` / ``amount_past_due_cents`` — LIVE values (shown
+      separately from the month-end bucket by design).
+    """
+    items = sorted(loan.schedule or [], key=lambda s: s.installment_number)
+    not_owed = delinquency_buckets.NOT_OWED_STATUSES
+    past_due = [
+        s
+        for s in items
+        if s.status not in not_owed and s.paid_cents < s.total_cents and s.due_date < today
+    ]
+    dpd = max(((today - s.due_date).days for s in past_due), default=0)
+    amount_past_due = sum(s.total_cents - s.paid_cents for s in past_due)
+    return {
+        "current_bucket": loan.current_bucket,
+        "effective_bucket": delinquency_buckets.effective_bucket(
+            loan.status, loan.insolvency_status, loan.current_bucket, bool(past_due)
+        ),
+        "days_past_due": dpd,
+        "amount_past_due_cents": amount_past_due,
+        "insolvency_status": loan.insolvency_status,
+        "insolvency_marked_at": (
+            loan.insolvency_marked_at.isoformat() if loan.insolvency_marked_at else None
+        ),
+        "insolvency_marked_by": loan.insolvency_marked_by,
+    }
 
 
 @router.get("/{loan_id}")
@@ -111,11 +156,196 @@ def get_loan(
     _user=Depends(get_current_user),
 ):
     """Full servicing detail — reuses loan_servicing.get_loan_status (schedule,
-    payments, balances). 404 if the loan doesn't exist."""
+    payments, balances) plus the WS-H delinquency-bucket block (month-end
+    bucket, live DPD, insolvency, snapshot history) and the auto-charge switch
+    state (WS-G). 404 if the loan doesn't exist."""
     detail = get_loan_status(db, loan_id)
     if detail is None:
         raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="Loan not found")
+
+    loan = db.query(PlatformLoan).filter(PlatformLoan.id == loan_id).first()
+    block = _delinquency_block(loan, date.today())
+    snapshots = (
+        db.query(PlatformLoanDelinquencySnapshot)
+        .filter(PlatformLoanDelinquencySnapshot.loan_id == loan_id)
+        .order_by(PlatformLoanDelinquencySnapshot.snapshot_month.desc())
+        .limit(12)
+        .all()
+    )
+    block["snapshots"] = [
+        {
+            "snapshot_month": s.snapshot_month.isoformat(),
+            "bucket": s.bucket,
+            "days_past_due": s.days_past_due,
+            "amount_past_due_cents": s.amount_past_due_cents,
+            "outstanding_principal_cents": s.outstanding_principal_cents,
+            "bureau_reportable": s.bureau_reportable,
+            "snapshotted_at": s.snapshotted_at.isoformat() if s.snapshotted_at else None,
+        }
+        for s in snapshots
+    ]
+    detail["delinquency"] = block
+    detail["auto_charge"] = {
+        # Raw per-loan switch: True / False / None (None = inherit platform default).
+        "enabled": loan.auto_charge_enabled,
+        # What the engine actually does for this loan (per-loan switch resolved
+        # against the platform default; the AUTO_COLLECTION_ENABLED feature
+        # flag still gates the engine globally).
+        "effective_enabled": auto_collection.effective_auto_charge(loan),
+        "disabled_reason": loan.auto_charge_disabled_reason,
+    }
     return detail
+
+
+class InsolvencyBody(BaseModel):
+    """Mark (or clear) a loan's segregated insolvency classification.
+
+    ``status='none'`` clears — admin-only. A comment is MANDATORY either way
+    (the determination is a human judgement; the why must be on the record)."""
+
+    status: Literal["consumer_proposal", "bankruptcy", "credit_counseling", "none"]
+    comment: str = Field(min_length=3, max_length=2000)
+
+
+@router.post("/{loan_id}/insolvency")
+def set_loan_insolvency(
+    loan_id: UUID,
+    body: InsolvencyBody,
+    db: Session = Depends(get_db),
+    user=Depends(require_roles("admin", "staff")),
+):
+    """Manually mark a loan insolvent (consumer proposal / bankruptcy / credit
+    counseling) or clear the marking (WS-H).
+
+    Insolvency OVERRIDES bucket derivation (the segregated insolvency
+    portfolio, per Dave) — marking flips ``current_bucket`` immediately;
+    clearing re-derives from the live schedule. Staff may mark; CLEARING
+    requires admin (undoing a legal-status determination is the more dangerous
+    direction). Fully audited via ``platform_events``.
+    """
+    loan = db.query(PlatformLoan).filter(PlatformLoan.id == loan_id).first()
+    if loan is None:
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="Loan not found")
+
+    if body.status == "none":
+        roles = {r.role.name for r in user.roles}
+        if "admin" not in roles:
+            raise HTTPException(
+                status_code=http_status.HTTP_403_FORBIDDEN,
+                detail="Clearing an insolvency marking requires the admin role.",
+            )
+
+    try:
+        delinquency_buckets.set_insolvency(
+            db, loan, body.status, body.comment, str(getattr(user, "id", "") or "unknown")
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+
+    db.commit()
+    return {
+        "loan_id": str(loan.id),
+        "insolvency_status": loan.insolvency_status,
+        "current_bucket": loan.current_bucket,
+    }
+
+
+
+# --- WS-G: Disable / re-enable auto-charges (Turnkey Servicing parity) -------
+
+
+class AutoChargeDisableBody(BaseModel):
+    # Mandatory: why auto-charges are being stopped (dead account, blanket
+    # stop-payment, borrower request, …) — audited verbatim.
+    reason: str
+
+
+@router.post("/{loan_id}/auto-charge/disable")
+def disable_auto_charge(
+    loan_id: UUID,
+    body: AutoChargeDisableBody,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Disable scheduled auto-charges for a loan (the "Disable Auto-Charges"
+    kill switch). Reason is REQUIRED and the change is audited via
+    platform_events. Idempotent — disabling an already-disabled loan just
+    refreshes the reason."""
+    loan = db.query(PlatformLoan).filter(PlatformLoan.id == loan_id).first()
+    if loan is None:
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="Loan not found")
+    reason = (body.reason or "").strip()
+    if not reason:
+        raise HTTPException(
+            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="A reason is required to disable auto-charges",
+        )
+    before = loan.auto_charge_enabled
+    loan.auto_charge_enabled = False
+    loan.auto_charge_disabled_reason = reason[:500]
+    actor = str(getattr(user, "id", "") or "unknown")
+    db.add(
+        PlatformEvent(
+            event_type=auto_collection.AUTO_CHARGE_DISABLED_EVENT,
+            actor=actor,
+            application_id=loan.application_id,
+            payload={
+                "v": 1,
+                "actor": {"type": "staff", "id": actor},
+                "loan_id": str(loan.id),
+                "application_id": str(loan.application_id) if loan.application_id else None,
+                "before": {"auto_charge_enabled": before},
+                "after": {"auto_charge_enabled": False},
+                "reason": reason[:500],
+                "disabled_by": f"staff:{actor}",
+            },
+        )
+    )
+    db.commit()
+    return {
+        "loan_id": str(loan.id),
+        "auto_charge_enabled": False,
+        "disabled_reason": loan.auto_charge_disabled_reason,
+    }
+
+
+@router.post("/{loan_id}/auto-charge/enable")
+def enable_auto_charge(
+    loan_id: UUID,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Re-enable scheduled auto-charges (e.g. after a new default bank account
+    is on file). Clears the disabled reason; audited. Idempotent."""
+    loan = db.query(PlatformLoan).filter(PlatformLoan.id == loan_id).first()
+    if loan is None:
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="Loan not found")
+    before = loan.auto_charge_enabled
+    previous_reason = loan.auto_charge_disabled_reason
+    loan.auto_charge_enabled = True
+    loan.auto_charge_disabled_reason = None
+    actor = str(getattr(user, "id", "") or "unknown")
+    db.add(
+        PlatformEvent(
+            event_type=auto_collection.AUTO_CHARGE_ENABLED_EVENT,
+            actor=actor,
+            application_id=loan.application_id,
+            payload={
+                "v": 1,
+                "actor": {"type": "staff", "id": actor},
+                "loan_id": str(loan.id),
+                "application_id": str(loan.application_id) if loan.application_id else None,
+                "before": {
+                    "auto_charge_enabled": before,
+                    "disabled_reason": previous_reason,
+                },
+                "after": {"auto_charge_enabled": True},
+                "enabled_by": f"staff:{actor}",
+            },
+        )
+    )
+    db.commit()
+    return {"loan_id": str(loan.id), "auto_charge_enabled": True, "disabled_reason": None}
 
 
 def _require_loan(db: Session, loan_id: UUID) -> None:

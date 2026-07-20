@@ -34,7 +34,7 @@ from sqlalchemy.dialects import postgresql
 
 
 revision: str = "054_hardship"
-down_revision: Union[str, None] = "050_repayment_modes"
+down_revision: Union[str, None] = "053_delinquency_buckets"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

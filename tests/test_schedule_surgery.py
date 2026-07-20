@@ -359,12 +359,28 @@ def test_migration_chain():
     assert mod.down_revision == "049_loan_ledger"
 
 
+def _route_paths(routes):
+    """Collect route paths version-robustly. Newer starlette/fastapi versions
+    put router objects (e.g. ``_IncludedRouter``) in ``app.routes`` that carry
+    no ``.path`` but may nest sub-routes — never assume ``.path`` exists on
+    every entry, and descend into anything exposing ``.routes``."""
+    for r in routes:
+        p = getattr(r, "path", None)
+        if p:
+            yield p
+        sub = getattr(r, "routes", None)
+        if sub:
+            yield from _route_paths(sub)
+
+
 def test_app_imports_with_surgery_wired():
     """Smoke: the app (with the new model, service and endpoints) imports and
     exposes the WS-F routes."""
     from app.main import app
 
-    paths = {r.path for r in app.routes}
+    # Union of direct route introspection and the OpenAPI schema (the stable
+    # public contract) so the assertion holds across starlette/fastapi versions.
+    paths = set(_route_paths(app.routes)) | set(app.openapi().get("paths", {}))
     assert "/api/v1/admin/loans/{loan_id}/schedule/{item_id}/suspend" in paths
     assert "/api/v1/admin/loans/{loan_id}/schedule/{item_id}/unsuspend" in paths
     assert "/api/v1/admin/loans/{loan_id}/schedule/custom" in paths

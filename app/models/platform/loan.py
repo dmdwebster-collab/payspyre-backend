@@ -2,6 +2,7 @@ from uuid import uuid4
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     Column,
     Date,
@@ -138,6 +139,54 @@ class PlatformLoan(Base):
 
     currency = Column(String, nullable=False, default="CAD")
 
+    # ---- Delinquency bucket state machine (WS-H, migration 053) -----------
+    # Dave's month-end snapshot model: buckets are ASSIGNED only by the
+    # month-end snapshot job (app.jobs.bucket_snapshot); this column carries
+    # the last assigned bucket between snapshots. Insolvency marking and
+    # charge-off flip it immediately (event-driven overrides); live DPD is
+    # reported separately. History lives in platform_loan_delinquency_snapshots.
+    current_bucket = Column(
+        ENUM(
+            "current",
+            "current_month_late",
+            "pot_30",
+            "pot_60",
+            "pot_90",
+            "default",
+            "insolvency",
+            "written_off",
+            name="platform_delinquency_bucket",
+            create_type=False,
+        ),
+        nullable=False,
+        default="current",
+        server_default="current",
+    )
+    # Segregated insolvency classification (consumer proposal / bankruptcy /
+    # credit counseling) — a MANUAL, audited staff determination that overrides
+    # bucket derivation. NULL (or 'none') = not insolvent.
+    insolvency_status = Column(
+        ENUM(
+            "none",
+            "consumer_proposal",
+            "bankruptcy",
+            "credit_counseling",
+            name="platform_insolvency_status",
+            create_type=False,
+        ),
+        nullable=True,
+    )
+    insolvency_marked_at = Column(DateTime(timezone=True), nullable=True)
+    insolvency_marked_by = Column(String, nullable=True)
+
+    # ---- Auto-collection (WS-G, migration 051) ----------------------------
+    # Per-loan "Disable Auto-Charges" switch (Turnkey Servicing parity).
+    # NULL = inherit the platform default (enabled — but the engine itself is
+    # inert until the AUTO_COLLECTION_ENABLED feature flag is on).
+    # Explicit False = staff or dead-account auto-disable; reason is mandatory.
+    auto_charge_enabled = Column(Boolean, nullable=True)
+    auto_charge_disabled_reason = Column(String, nullable=True)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
@@ -169,6 +218,12 @@ class PlatformLoan(Base):
         back_populates="loan",
         cascade="all, delete-orphan",
         order_by="PlatformLoanTransaction.effective_date, PlatformLoanTransaction.seq",
+    )
+    delinquency_snapshots = relationship(
+        "PlatformLoanDelinquencySnapshot",
+        back_populates="loan",
+        cascade="all, delete-orphan",
+        order_by="PlatformLoanDelinquencySnapshot.snapshot_month",
     )
     # Staff-added custom scheduled transactions (WS-F schedule surgery) —
     # one-off future payment instructions layered on top of the plan.
@@ -381,6 +436,91 @@ class PlatformLoanTransaction(Base):
         )
 
 
+class PlatformCollectionAttempt(Base):
+    """One auto-collection attempt against one schedule installment (WS-G).
+
+    The idempotency spine of the auto-collection engine: UNIQUE
+    ``(schedule_item_id, attempt_number)`` means a duplicate cron run or a
+    crash-restart can never initiate the same attempt twice — the row is
+    claimed (committed) BEFORE the Zumrails call, and the deterministic
+    ``client_transaction_id = autocol-{schedule_item_id}-{attempt_number}``
+    gives the payment rail a stable per-attempt dedupe handle.
+
+    Lifecycle: ``pending`` (claimed / in flight) → ``completed`` | ``failed``
+    | ``cancelled`` via the Zumrails webhook (or a synchronous terminal ack).
+    A ``pending`` attempt with no terminal outcome BLOCKS further auto
+    attempts on its installment (conservative: never risk a double-pull while
+    one may still settle).
+    """
+
+    __tablename__ = "platform_collection_attempts"
+    __table_args__ = (
+        UniqueConstraint(
+            "schedule_item_id",
+            "attempt_number",
+            name="uq_platform_collection_attempt_item_n",
+        ),
+        CheckConstraint(
+            "amount_cents > 0", name="ck_platform_collection_attempt_amount_pos"
+        ),
+        CheckConstraint(
+            "outcome IN ('pending', 'completed', 'failed', 'cancelled')",
+            name="ck_platform_collection_attempt_outcome",
+        ),
+        Index("ix_platform_collection_attempts_loan", "loan_id"),
+        Index("ix_platform_collection_attempts_ref", "external_ref"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    loan_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("platform_loans.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    schedule_item_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("platform_loan_schedule.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    attempt_number = Column(Integer, nullable=False)
+    amount_cents = Column(BigInteger, nullable=False)
+
+    # Deterministic idempotency ref sent to Zumrails as ClientTransactionId.
+    client_transaction_id = Column(String, nullable=False)
+    # Zumrails transaction id — NULL until the create-collection call returns.
+    external_ref = Column(String, nullable=True)
+
+    outcome = Column(String, nullable=False, default="pending", server_default="pending")
+    # Vendor return / failure code on a failed pull (drives NSF + dead-account).
+    return_code = Column(String, nullable=True)
+    # Adapter-level error detail when the create call itself blew up.
+    error = Column(String, nullable=True)
+
+    # The NSF fee ledger row charged for THIS failed attempt (idempotency
+    # marker: at most one NSF fee per failed attempt).
+    nsf_fee_transaction_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("platform_loan_transactions.id"),
+        nullable=True,
+    )
+
+    initiated_at = Column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    created_by = Column(
+        String, nullable=False, default="auto_collection", server_default="auto_collection"
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<PlatformCollectionAttempt(item={self.schedule_item_id}, "
+            f"n={self.attempt_number}, amount_cents={self.amount_cents}, "
+            f"outcome={self.outcome})>"
+        )
+
+
 class PlatformLoanCustomTransaction(Base):
     """A staff-added CUSTOM scheduled transaction (WS-F schedule surgery,
     migration 050) — Turnkey's "Add transaction" on the Scheduled-transactions
@@ -513,4 +653,66 @@ class PlatformLoanStatement(Base):
             f"<PlatformLoanStatement(loan_id={self.loan_id}, "
             f"period={self.period_start}..{self.period_end}, "
             f"closing_balance_cents={self.closing_balance_cents})>"
+        )
+
+
+class PlatformLoanDelinquencySnapshot(Base):
+    """One loan's month-end delinquency classification (WS-H, migration 053).
+
+    Dave's collections/reporting model: "report the status of all accounts at
+    the end of a given month". One row per (loan, month) — the snapshot job is
+    idempotent per month and UPDATES the existing row on re-run.
+
+    * ``snapshot_month`` — the first day of the reported month (the evaluation
+      date is that month's LAST day).
+    * ``bucket`` — current / current_month_late / pot_30 / pot_60 / pot_90 /
+      default / insolvency / written_off.
+    * ``bureau_reportable`` — FLAG only (pot_60 and deeper per Dave); actual
+      Equifax reporting is a later workstream.
+    * Money is integer cents; ``outstanding_principal_cents`` comes from the
+      actuals-ledger balance view AT the month-end date (deterministic re-runs).
+    """
+
+    __tablename__ = "platform_loan_delinquency_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "loan_id", "snapshot_month", name="uq_platform_loan_delinq_snap_month"
+        ),
+        Index(
+            "ix_platform_loan_delinq_snap_month_bucket", "snapshot_month", "bucket"
+        ),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    loan_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("platform_loans.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    # First day of the reported month.
+    snapshot_month = Column(Date, nullable=False)
+
+    bucket = Column(
+        ENUM(name="platform_delinquency_bucket", create_type=False),
+        nullable=False,
+    )
+    days_past_due = Column(Integer, nullable=False, default=0)
+    amount_past_due_cents = Column(BigInteger, nullable=False, default=0)
+    outstanding_principal_cents = Column(BigInteger, nullable=False, default=0)
+    # POT-60+ credit-bureau flag (marking only — reporting is a later WS).
+    bureau_reportable = Column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+
+    # When this bucket was (last) assigned by the snapshot job.
+    snapshotted_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    loan = relationship("PlatformLoan", back_populates="delinquency_snapshots")
+
+    def __repr__(self) -> str:
+        return (
+            f"<PlatformLoanDelinquencySnapshot(loan_id={self.loan_id}, "
+            f"month={self.snapshot_month}, bucket={self.bucket}, "
+            f"dpd={self.days_past_due})>"
         )
