@@ -29,6 +29,7 @@ from app.api.clinic.v1.endpoints import (
     marketplace,
     messages,
     products,
+    report_exports,
     vendor_origination,
 )
 from app.core.config import settings
@@ -49,6 +50,8 @@ clinic_router.include_router(dashboard_applications.router)
 clinic_router.include_router(dashboard_loanbook.router)
 clinic_router.include_router(dashboard_marketplace.router)
 clinic_router.include_router(account.router)
+# Turnkey-parity XLSX report downloads, hard-scoped to the caller's vendor.
+clinic_router.include_router(report_exports.router)
 
 # UNAUTHENTICATED dev helper: seed a clinic (vendor + staff user + membership + JWT).
 # Auto-on in development/test; elsewhere requires an EXPLICIT ENABLE_DEV_TOOLS (e.g.
