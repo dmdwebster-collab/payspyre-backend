@@ -3,6 +3,12 @@
 Aging across the WHOLE book by DPD bucket. Charge-off, payment-plan, and
 promise-to-pay are Phase 2 write actions. Bucketing mirrors the locked
 delinquency tiers (current / late / 30-60-90-120) used elsewhere.
+
+WS-H layers Dave's MONTH-END bucket state machine on top: the legacy rolling
+DPD buckets below are kept intact (the nightly aging job still owns them);
+``/aging`` additionally returns month-end bucket aggregates + the debt-roll
+comparison from ``platform_loan_delinquency_snapshots``, and the queue rows
+carry the month-end bucket + insolvency classification.
 """
 from __future__ import annotations
 
@@ -12,13 +18,19 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.auth import get_current_user, require_roles
 from app.db.base import get_db
 from app.models.platform.credit_application import PlatformCreditApplication
-from app.models.platform.loan import PlatformLoan, PlatformLoanScheduleItem
+from app.models.platform.loan import (
+    PlatformLoan,
+    PlatformLoanDelinquencySnapshot,
+    PlatformLoanScheduleItem,
+)
 from app.models.platform.patient import PlatformPatient
+from app.services.delinquency_buckets import compute_roll_rates, effective_bucket
 
 router = APIRouter(dependencies=[Depends(require_roles("admin", "staff"))])
 
@@ -32,11 +44,47 @@ class AgingBucket(BaseModel):
     outstanding_cents: int
 
 
+class MonthEndBucketAggregate(BaseModel):
+    """One month-end bucket's roll-up (WS-H snapshots)."""
+
+    bucket: str
+    count: int
+    outstanding_principal_cents: int
+    amount_past_due_cents: int
+
+
+class RollRate(BaseModel):
+    """Debt-roll between two snapshot months for one ladder pair (Dave: "the
+    percentage of current month late that roll into a new month and become
+    POT 30s"). ``roll_rate_bps`` is integer basis points (10_000 = 100%)."""
+
+    from_bucket: str
+    to_bucket: str
+    base_count: int
+    rolled_count: int
+    roll_rate_bps: int
+
+
+class MonthEndBucketReport(BaseModel):
+    """Month-end snapshot aggregates: latest snapshot month vs the prior one,
+    plus per-ladder-pair debt-roll rates. ``None`` until the first snapshot
+    job run."""
+
+    snapshot_month: date
+    buckets: list[MonthEndBucketAggregate]
+    prior_snapshot_month: Optional[date] = None
+    prior_buckets: list[MonthEndBucketAggregate] = []
+    roll_rates: list[RollRate] = []
+
+
 class AgingSummary(BaseModel):
     as_of: date
     buckets: list[AgingBucket]
     total_delinquent_count: int
     total_outstanding_cents: int
+    # WS-H: month-end bucket state machine aggregates (None before the first
+    # snapshot run — the legacy rolling-DPD buckets above are unaffected).
+    month_end_buckets: Optional[MonthEndBucketReport] = None
 
 
 def _earliest_unpaid_due(db: Session, loan_id: UUID):
@@ -59,9 +107,79 @@ def _bucket_for(dpd: int) -> str:
     return "120+"
 
 
+def _bucket_aggregates_for_month(db: Session, month: date) -> list[MonthEndBucketAggregate]:
+    rows = (
+        db.query(
+            PlatformLoanDelinquencySnapshot.bucket,
+            func.count(PlatformLoanDelinquencySnapshot.id),
+            func.coalesce(
+                func.sum(PlatformLoanDelinquencySnapshot.outstanding_principal_cents), 0
+            ),
+            func.coalesce(
+                func.sum(PlatformLoanDelinquencySnapshot.amount_past_due_cents), 0
+            ),
+        )
+        .filter(PlatformLoanDelinquencySnapshot.snapshot_month == month)
+        .group_by(PlatformLoanDelinquencySnapshot.bucket)
+        .all()
+    )
+    return [
+        MonthEndBucketAggregate(
+            bucket=bucket,
+            count=count,
+            outstanding_principal_cents=outstanding,
+            amount_past_due_cents=past_due,
+        )
+        for bucket, count, outstanding, past_due in rows
+    ]
+
+
+def _loan_buckets_for_month(db: Session, month: date) -> dict:
+    return dict(
+        db.query(
+            PlatformLoanDelinquencySnapshot.loan_id,
+            PlatformLoanDelinquencySnapshot.bucket,
+        )
+        .filter(PlatformLoanDelinquencySnapshot.snapshot_month == month)
+        .all()
+    )
+
+
+def _month_end_bucket_report(db: Session) -> Optional[MonthEndBucketReport]:
+    """WS-H aggregates: latest snapshot month vs prior month + debt-roll %."""
+    months = [
+        m
+        for (m,) in db.query(PlatformLoanDelinquencySnapshot.snapshot_month)
+        .distinct()
+        .order_by(PlatformLoanDelinquencySnapshot.snapshot_month.desc())
+        .limit(2)
+        .all()
+    ]
+    if not months:
+        return None
+    latest = months[0]
+    prior = months[1] if len(months) > 1 else None
+    report = MonthEndBucketReport(
+        snapshot_month=latest,
+        buckets=_bucket_aggregates_for_month(db, latest),
+        prior_snapshot_month=prior,
+    )
+    if prior is not None:
+        report.prior_buckets = _bucket_aggregates_for_month(db, prior)
+        report.roll_rates = [
+            RollRate(**r)
+            for r in compute_roll_rates(
+                _loan_buckets_for_month(db, prior), _loan_buckets_for_month(db, latest)
+            )
+        ]
+    return report
+
+
 @router.get("/aging", response_model=AgingSummary)
 def aging(db: Session = Depends(get_db), _user=Depends(get_current_user)):
-    """DPD aging across all non-terminal loans, by bucket."""
+    """DPD aging across all non-terminal loans, by bucket — plus the WS-H
+    month-end bucket aggregates and debt-roll comparison (once snapshots
+    exist)."""
     today = date.today()
     loans = (
         db.query(PlatformLoan)
@@ -88,6 +206,7 @@ def aging(db: Session = Depends(get_db), _user=Depends(get_current_user)):
         ],
         total_delinquent_count=delinquent_count,
         total_outstanding_cents=total_out,
+        month_end_buckets=_month_end_bucket_report(db),
     )
 
 
@@ -97,16 +216,24 @@ class CollectionsQueueRow(BaseModel):
     principal_balance_cents: int
     days_past_due: int
     bucket: str
+    # WS-H month-end state machine: the loan's effective month-end bucket
+    # (last snapshot, with the immediate insolvency/written-off/full-cure
+    # overrides applied) + its insolvency classification, if any.
+    month_end_bucket: str = "current"
+    insolvency_status: Optional[str] = None
 
 
 @router.get("/queue", response_model=list[CollectionsQueueRow])
 def queue(
     bucket: Optional[str] = Query(None),
+    month_end_bucket: Optional[str] = Query(None),
     limit: int = Query(100, ge=1, le=500),
     db: Session = Depends(get_db),
     _user=Depends(get_current_user),
 ):
-    """Delinquent worklist, worst-first (highest DPD). Optional bucket filter.
+    """Delinquent worklist, worst-first (highest DPD). Optional filters on the
+    legacy rolling-DPD ``bucket`` or the WS-H ``month_end_bucket`` (e.g.
+    ``insolvency`` gives Dave's segregated insolvency queue).
 
     Phase 1 sorts by DPD; a risk/balance-weighted SCORED priority is Phase 4."""
     today = date.today()
@@ -124,10 +251,17 @@ def queue(
     for loan, patient in loans:
         due = _earliest_unpaid_due(db, loan.id)
         dpd = max(0, (today - due).days) if due else 0
-        if dpd <= 0:
+        me_bucket = effective_bucket(
+            loan.status, loan.insolvency_status, loan.current_bucket, dpd > 0
+        )
+        # Insolvent accounts stay in the worklist even at 0 DPD — Dave's
+        # segregated insolvency portfolio is maintained, not dropped.
+        if dpd <= 0 and me_bucket != "insolvency":
             continue
         b = _bucket_for(dpd)
         if bucket and b != bucket:
+            continue
+        if month_end_bucket and me_bucket != month_end_bucket:
             continue
         name = (
             " ".join(x for x in [patient.legal_first_name, patient.legal_last_name] if x).strip()
@@ -141,6 +275,8 @@ def queue(
                 principal_balance_cents=loan.principal_balance_cents,
                 days_past_due=dpd,
                 bucket=b,
+                month_end_bucket=me_bucket,
+                insolvency_status=loan.insolvency_status,
             )
         )
     rows.sort(key=lambda r: r.days_past_due, reverse=True)

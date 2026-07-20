@@ -15,6 +15,7 @@ from app.models.platform.integration_settings import PlatformIntegrationSettings
 from app.models.platform.loan import (
     PlatformLoan,
     PlatformLoanCustomTransaction,
+    PlatformLoanDelinquencySnapshot,
     PlatformLoanScheduleItem,
     PlatformLoanPayment,
     PlatformLoanStatement,
@@ -54,6 +55,7 @@ __all__ = [
     "PlatformIntegrationSettings",
     "PlatformLoan",
     "PlatformLoanCustomTransaction",
+    "PlatformLoanDelinquencySnapshot",
     "PlatformLoanScheduleItem",
     "PlatformLoanPayment",
     "PlatformLoanStatement",

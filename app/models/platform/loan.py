@@ -139,6 +139,46 @@ class PlatformLoan(Base):
 
     currency = Column(String, nullable=False, default="CAD")
 
+    # ---- Delinquency bucket state machine (WS-H, migration 053) -----------
+    # Dave's month-end snapshot model: buckets are ASSIGNED only by the
+    # month-end snapshot job (app.jobs.bucket_snapshot); this column carries
+    # the last assigned bucket between snapshots. Insolvency marking and
+    # charge-off flip it immediately (event-driven overrides); live DPD is
+    # reported separately. History lives in platform_loan_delinquency_snapshots.
+    current_bucket = Column(
+        ENUM(
+            "current",
+            "current_month_late",
+            "pot_30",
+            "pot_60",
+            "pot_90",
+            "default",
+            "insolvency",
+            "written_off",
+            name="platform_delinquency_bucket",
+            create_type=False,
+        ),
+        nullable=False,
+        default="current",
+        server_default="current",
+    )
+    # Segregated insolvency classification (consumer proposal / bankruptcy /
+    # credit counseling) — a MANUAL, audited staff determination that overrides
+    # bucket derivation. NULL (or 'none') = not insolvent.
+    insolvency_status = Column(
+        ENUM(
+            "none",
+            "consumer_proposal",
+            "bankruptcy",
+            "credit_counseling",
+            name="platform_insolvency_status",
+            create_type=False,
+        ),
+        nullable=True,
+    )
+    insolvency_marked_at = Column(DateTime(timezone=True), nullable=True)
+    insolvency_marked_by = Column(String, nullable=True)
+
     # ---- Auto-collection (WS-G, migration 051) ----------------------------
     # Per-loan "Disable Auto-Charges" switch (Turnkey Servicing parity).
     # NULL = inherit the platform default (enabled — but the engine itself is
@@ -178,6 +218,12 @@ class PlatformLoan(Base):
         back_populates="loan",
         cascade="all, delete-orphan",
         order_by="PlatformLoanTransaction.effective_date, PlatformLoanTransaction.seq",
+    )
+    delinquency_snapshots = relationship(
+        "PlatformLoanDelinquencySnapshot",
+        back_populates="loan",
+        cascade="all, delete-orphan",
+        order_by="PlatformLoanDelinquencySnapshot.snapshot_month",
     )
     # Staff-added custom scheduled transactions (WS-F schedule surgery) —
     # one-off future payment instructions layered on top of the plan.
@@ -607,4 +653,66 @@ class PlatformLoanStatement(Base):
             f"<PlatformLoanStatement(loan_id={self.loan_id}, "
             f"period={self.period_start}..{self.period_end}, "
             f"closing_balance_cents={self.closing_balance_cents})>"
+        )
+
+
+class PlatformLoanDelinquencySnapshot(Base):
+    """One loan's month-end delinquency classification (WS-H, migration 053).
+
+    Dave's collections/reporting model: "report the status of all accounts at
+    the end of a given month". One row per (loan, month) — the snapshot job is
+    idempotent per month and UPDATES the existing row on re-run.
+
+    * ``snapshot_month`` — the first day of the reported month (the evaluation
+      date is that month's LAST day).
+    * ``bucket`` — current / current_month_late / pot_30 / pot_60 / pot_90 /
+      default / insolvency / written_off.
+    * ``bureau_reportable`` — FLAG only (pot_60 and deeper per Dave); actual
+      Equifax reporting is a later workstream.
+    * Money is integer cents; ``outstanding_principal_cents`` comes from the
+      actuals-ledger balance view AT the month-end date (deterministic re-runs).
+    """
+
+    __tablename__ = "platform_loan_delinquency_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "loan_id", "snapshot_month", name="uq_platform_loan_delinq_snap_month"
+        ),
+        Index(
+            "ix_platform_loan_delinq_snap_month_bucket", "snapshot_month", "bucket"
+        ),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    loan_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("platform_loans.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    # First day of the reported month.
+    snapshot_month = Column(Date, nullable=False)
+
+    bucket = Column(
+        ENUM(name="platform_delinquency_bucket", create_type=False),
+        nullable=False,
+    )
+    days_past_due = Column(Integer, nullable=False, default=0)
+    amount_past_due_cents = Column(BigInteger, nullable=False, default=0)
+    outstanding_principal_cents = Column(BigInteger, nullable=False, default=0)
+    # POT-60+ credit-bureau flag (marking only — reporting is a later WS).
+    bureau_reportable = Column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+
+    # When this bucket was (last) assigned by the snapshot job.
+    snapshotted_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    loan = relationship("PlatformLoan", back_populates="delinquency_snapshots")
+
+    def __repr__(self) -> str:
+        return (
+            f"<PlatformLoanDelinquencySnapshot(loan_id={self.loan_id}, "
+            f"month={self.snapshot_month}, bucket={self.bucket}, "
+            f"dpd={self.days_past_due})>"
         )
