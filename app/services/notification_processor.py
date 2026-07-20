@@ -70,7 +70,24 @@ TRIGGER_EVENT_TYPES = (
     # (email; the payload carries channels+context, passthrough shape).
     "hardship_agreement_sent",
     "pad_pre_notification",
+    # Loan lifecycle (Dave's Customer notification spec, 2026-07). Each maps to
+    # a registry notification_type in _plan_loan_lifecycle below.
+    "loan_disbursed",
+    "loan_charged_off",
+    "loan_payment_recorded",
+    "loan_agreement_sent",
+    "loan_agreement_signed",
 )
+
+# event_type → customer-facing notification_type for simple 1:1 lifecycle
+# notifications. loan_payment_recorded is handled specially (may fan out to
+# payment_received AND loan_repaid when the payment closes the loan).
+_LIFECYCLE_NOTIFICATION_MAP = {
+    "loan_disbursed": "loan_activated",
+    "loan_charged_off": "loan_written_off",
+    "loan_agreement_sent": "offer_accepted_signing",
+    "loan_agreement_signed": "agreement_signed",
+}
 
 
 @dataclass(frozen=True)
@@ -96,6 +113,13 @@ class ProcessResult:
 def _fmt_cents(cents: Optional[int]) -> str:
     """Integer cents → ``$1,234.56`` (best-effort; 0 if missing)."""
     return "${:,.2f}".format((cents or 0) / 100)
+
+
+def _fmt_date(d) -> str:
+    """date/datetime → ``July 20, 2026`` (mirrors dunning's display format)."""
+    if d is None:
+        return "—"
+    return d.strftime("%B %d, %Y")
 
 
 class NotificationProcessor:
@@ -153,7 +177,7 @@ class NotificationProcessor:
             result.scanned += 1
             max_scanned = ev["id"]
             for plan in self._plan(ev):
-                if self._already_handled(ev["id"], plan.contact_method):
+                if self._already_handled(ev["id"], plan.contact_method, plan.notification_type):
                     continue
 
                 # Dashboard (in-app) channel: never a vendor call — record the
@@ -243,6 +267,8 @@ class NotificationProcessor:
             "pad_pre_notification",
         ):
             return self._plan_passthrough(ev)
+        if etype in _LIFECYCLE_NOTIFICATION_MAP or etype == "loan_payment_recorded":
+            return self._plan_loan_lifecycle(ev)
         return []
 
     def _plan_decision(self, ev) -> list[NotificationPlan]:
@@ -317,6 +343,127 @@ class NotificationProcessor:
             plans.append(NotificationPlan(ntype, ch, context, loan_id))
         return plans
 
+    def _plan_loan_lifecycle(self, ev) -> list[NotificationPlan]:
+        """Customer notifications for loan lifecycle events (Dave Customer v1.0).
+
+        1:1 for disbursed/charged-off/agreement events; loan_payment_recorded
+        fans out to payment_received plus loan_repaid when that payment closed
+        the loan. Channels honor the live notification rule (email by default;
+        SMS only when the spec ships an SMS body or an override supplies one)."""
+        from app.services.notification_config import get_rule
+        from app.services.notification_render import NOTIFICATION_TYPES
+
+        payload = ev["payload"] or {}
+        loan_id = payload.get("loan_id")
+        if not loan_id:
+            return []
+        ctx = self._loan_context(ev, loan_id)
+        if ctx is None:
+            return []
+
+        etype = ev["event_type"]
+        if etype == "loan_payment_recorded":
+            after = payload.get("after") or {}
+            amount = after.get("amount_cents")
+            pctx = {
+                **ctx,
+                "payment_amount": _fmt_cents(amount),
+                "payment_date": _fmt_date(datetime.now(timezone.utc).date()),
+                "next_payment_amount": ctx.get("next_payment_amount", "—"),
+                "due_date": ctx.get("due_date", "—"),
+            }
+            ntypes = [("payment_received", pctx)]
+            if after.get("loan_status") == "paid_off":
+                ntypes.append(("loan_repaid", ctx))
+        else:
+            ntypes = [(_LIFECYCLE_NOTIFICATION_MAP[etype], ctx)]
+
+        plans: list[NotificationPlan] = []
+        for ntype, context in ntypes:
+            rule = get_rule(self.db, ntype)
+            if not rule.enabled:
+                continue
+            spec = NOTIFICATION_TYPES.get(ntype)
+            for ch in rule.enabled_channels:
+                if ch == "sms" and not (spec and spec.sms_template) and not rule.override_for("sms"):
+                    continue
+                plans.append(NotificationPlan(ntype, ch, context, loan_id))
+        return plans
+
+    def _loan_context(self, ev, loan_id) -> Optional[dict]:
+        """Shared context for loan lifecycle notifications: borrower name,
+        short loan id, vendor name, plus next-installment fields when the
+        schedule has an upcoming row. Returns None if the loan is gone."""
+        from app.models.loan import Vendor
+        from app.models.platform.credit_application import PlatformCreditApplication
+        from app.models.platform.loan import PlatformLoan, PlatformLoanScheduleItem
+        from app.models.platform.patient import PlatformPatient
+
+        loan = self.db.get(PlatformLoan, loan_id)
+        if loan is None:
+            logger.info("lifecycle_notification_no_loan", loan_id=str(loan_id))
+            return None
+
+        application = (
+            self.db.get(PlatformCreditApplication, loan.application_id)
+            if loan.application_id else None
+        )
+        patient = None
+        if application is not None and getattr(application, "patient_id", None):
+            patient = self.db.get(PlatformPatient, application.patient_id)
+        elif ev["patient_id"]:
+            patient = self.db.get(PlatformPatient, ev["patient_id"])
+        name = " ".join(
+            p for p in (
+                getattr(patient, "legal_first_name", None),
+                getattr(patient, "legal_last_name", None),
+            ) if p
+        ).strip() or "there"
+
+        vendor_name = "your provider"
+        if application is not None and getattr(application, "vendor_id", None):
+            vendor = self.db.get(Vendor, application.vendor_id)
+            if vendor is not None:
+                vendor_name = vendor.dba_name or vendor.business_name
+
+        ctx = {
+            "full_name": name,
+            "borrower_name": name,
+            "loan_id": str(loan.id)[:8],
+            "vendor_name": vendor_name,
+            # loan_written_off extras (harmless for other types; explicit keys
+            # beat StrictUndefined surprises for rule content-overrides).
+            "outstanding_balance": _fmt_cents(getattr(loan, "principal_balance_cents", None)),
+            "written_off_amount": _fmt_cents(getattr(loan, "principal_balance_cents", None)),
+            "days_overdue": 0,
+            "current_date": _fmt_date(datetime.now(timezone.utc).date()),
+        }
+        nxt = (
+            self.db.query(PlatformLoanScheduleItem)
+            .filter(
+                PlatformLoanScheduleItem.loan_id == loan.id,
+                PlatformLoanScheduleItem.status.in_(("scheduled", "partial", "late")),
+            )
+            .order_by(PlatformLoanScheduleItem.installment_number.asc())
+            .first()
+        )
+        first = (
+            self.db.query(PlatformLoanScheduleItem)
+            .filter(PlatformLoanScheduleItem.loan_id == loan.id)
+            .order_by(PlatformLoanScheduleItem.installment_number.asc())
+            .first()
+        )
+        if first is not None:
+            ctx["first_payment_amount"] = _fmt_cents(first.total_cents)
+            ctx["first_payment_date"] = _fmt_date(first.due_date)
+        else:
+            ctx["first_payment_amount"] = "—"
+            ctx["first_payment_date"] = "—"
+        if nxt is not None:
+            ctx["next_payment_amount"] = _fmt_cents(nxt.total_cents)
+            ctx["due_date"] = _fmt_date(nxt.due_date)
+        return ctx
+
     def _approval_context(self, ev) -> Optional[dict]:
         """Build the approval-email context from the booked loan + patient."""
         from app.models.platform.loan import PlatformLoan, PlatformLoanScheduleItem
@@ -350,10 +497,26 @@ class NotificationProcessor:
                 getattr(patient, "legal_last_name", None),
             ) if p
         ).strip() or "there"
+        vendor_name = "your provider"
+        application = None
+        if app_id:
+            from app.models.platform.credit_application import PlatformCreditApplication
+
+            application = self.db.get(PlatformCreditApplication, app_id)
+        if application is not None and getattr(application, "vendor_id", None):
+            from app.models.loan import Vendor
+
+            vendor = self.db.get(Vendor, application.vendor_id)
+            if vendor is not None:
+                vendor_name = vendor.dba_name or vendor.business_name
+
         base = settings.BORROWER_PORTAL_BASE_URL.rstrip("/")
         return {
             "borrower_name": name,
+            "full_name": name,
             "application_id": str(app_id),
+            "loan_id": str(loan.id)[:8],
+            "vendor_name": vendor_name,
             "amount": _fmt_cents(loan.principal_cents),
             "interest_rate": "{:.2f}%".format((loan.annual_rate_bps or 0) / 100),
             "term": f"{loan.term_months} months",
@@ -364,10 +527,15 @@ class NotificationProcessor:
 
     # -- dedup + skip audit -------------------------------------------------
 
-    def _already_handled(self, source_event_id: int, channel: str) -> bool:
+    def _already_handled(
+        self, source_event_id: int, channel: str, notification_type: str
+    ) -> bool:
         """True if a notification was already sent, skipped, OR recorded as an
-        in-app dashboard notification for this (source event, channel) — the
-        double-send / double-record guard. A deferred send writes NO marker
+        in-app dashboard notification for this (source event, channel,
+        notification type) — the double-send / double-record guard. The type is
+        part of the key because one source event may legitimately fan out to
+        several notifications (e.g. the final loan_payment_recorded →
+        payment_received AND loan_repaid). A deferred send writes NO marker
         (that is what makes it retry next run)."""
         row = self.db.execute(
             text(
@@ -376,6 +544,7 @@ class NotificationProcessor:
                 WHERE event_type IN ('notification_sent', :skipped, :dashboard)
                   AND payload->>'source_event_id' = :sid
                   AND payload->>'channel' = :ch
+                  AND payload->>'notification_type' = :nt
                 LIMIT 1
                 """
             ),
@@ -384,6 +553,7 @@ class NotificationProcessor:
                 "dashboard": DASHBOARD_EVENT_TYPE,
                 "sid": str(source_event_id),
                 "ch": channel,
+                "nt": notification_type,
             },
         ).first()
         return row is not None

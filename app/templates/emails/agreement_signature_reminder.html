@@ -1,0 +1,24 @@
+{% extends "_base.html" %}
+
+{% block title %}Loan Agreement Signature Reminder{% endblock %}
+
+{% block header_title %}Signature reminder{% endblock %}
+{% block header_subtitle %}<p>Your loan agreement is still awaiting your signature</p>{% endblock %}
+
+{% block badge %}<div class="badge">SIGNATURE PENDING</div>{% endblock %}
+
+{% block content %}
+    <div class="info-box">
+        <p><strong>Loan ID:</strong> {{ loan_id }}</p>
+        <p><strong>Vendor:</strong> {{ vendor_name }}</p>
+    </div>
+
+    <p>To finalize loan <strong>{{ loan_id }}</strong>, you must review and sign your loan agreement.</p>
+
+    <p>The signature request was emailed to you on <strong>{{ signature_sent_date }}</strong>. Please look for
+        that email to find the link to review and sign your loan agreement. If you are unable to locate it,
+        please check your spam or junk folder.</p>
+
+    <p>If you have decided to cancel your request, you can do so by signing in to your
+        <a href="{{ dashboard_url }}">dashboard</a>.</p>
+{% endblock %}

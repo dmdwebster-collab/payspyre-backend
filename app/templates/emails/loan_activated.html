@@ -1,0 +1,29 @@
+{% extends "_base.html" %}
+{% block title %}Application Approved &amp; Activated{% endblock %}
+
+{% block header_title %}Your loan is active{% endblock %}
+{% block header_subtitle %}<p>Approved and activated by your vendor</p>{% endblock %}
+
+{% block badge %}<div class="badge">ACTIVE</div>{% endblock %}
+
+{% block content %}
+    <p>We are pleased to inform you that your loan request has been approved and activated by
+        <strong>{{ vendor_name }}</strong>.</p>
+
+    <div class="info-box">
+        <p><strong>Vendor:</strong> {{ vendor_name }}</p>
+        <p><strong>Loan ID #:</strong> {{ loan_id }}</p>
+        <p><strong>First payment:</strong> {{ first_payment_amount }}</p>
+        <p><strong>Due on:</strong> {{ first_payment_date }}</p>
+    </div>
+
+    <div class="note">
+        <strong>Please note:</strong> payments made in advance of your scheduled payment are considered
+        <strong>extra payments</strong> and will <strong><u>not</u></strong> affect future scheduled payments,
+        until such time as the loan is paid in full.
+    </div>
+
+    <p>You can view your repayment schedule on your <a href="{{ dashboard_url }}">dashboard</a>.</p>
+
+    <a href="{{ dashboard_url }}" class="button">View my repayment schedule</a>
+{% endblock %}

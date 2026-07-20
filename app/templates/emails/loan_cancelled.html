@@ -1,0 +1,19 @@
+{% extends "_base.html" %}
+{% block title %}Loan Application Cancelled{% endblock %}
+
+{% block header_title %}Application cancelled{% endblock %}
+{% block header_subtitle %}<p>Your loan request has been cancelled</p>{% endblock %}
+
+{% block badge %}<div class="badge badge-alert">CANCELLED</div>{% endblock %}
+
+{% block content %}
+    <p>This is to inform you that your loan request <strong>{{ loan_id }}</strong> with
+        <strong>{{ vendor_name }}</strong> has been cancelled.</p>
+
+    <div class="info-box">
+        <p><strong>Cancellation reason:</strong> {{ cancel_reason }}</p>
+    </div>
+
+    <p>If this cancellation was in error, you can re-submit your application through your
+        <a href="{{ dashboard_url }}">dashboard</a>.</p>
+{% endblock %}

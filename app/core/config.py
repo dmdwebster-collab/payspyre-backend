@@ -240,6 +240,11 @@ class Settings(BaseSettings):
     CSRF_ENABLED: bool = False
 
     # Notifications
+    # Company-facing contact fields rendered into notification templates
+    # (Dave's CompanyName/SupportEmail/CompanyPhone merge fields).
+    SUPPORT_EMAIL: str = "support@payspyre.com"
+    COMPANY_PHONE: str = ""  # rendered only when set
+
     RESEND_API_KEY: str = ""
     RESEND_FROM_EMAIL: str = "noreply@payspyre.com"
 

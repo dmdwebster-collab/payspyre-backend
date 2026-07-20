@@ -1,0 +1,21 @@
+{% extends "_base.html" %}
+{% block title %}Your PaySpyre Sign-In Link{% endblock %}
+
+{% block header_title %}Your sign-in link{% endblock %}
+{% block header_subtitle %}<p>Secure, single-use access to your dashboard</p>{% endblock %}
+
+{% block badge %}<div class="badge">SIGN-IN LINK</div>{% endblock %}
+
+{% block content %}
+    <p>We've received your request to sign in to your {{ company_name }} account. Use the secure link below to
+        access your dashboard:</p>
+
+    <a href="{{ login_url }}" class="button">Sign in to my dashboard</a>
+
+    <div class="note">
+        <p>This link is valid for <strong>24 hours</strong> and can only be used <strong>once</strong>.
+            If the link does not work, please request a new one from the sign-in page.</p>
+        <p>If you did not request this sign-in link, you may safely ignore this email — no one can access your
+            account without it.</p>
+    </div>
+{% endblock %}

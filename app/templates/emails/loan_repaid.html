@@ -1,0 +1,21 @@
+{% extends "_base.html" %}
+{% block title %}Loan Paid in Full{% endblock %}
+
+{% block header_title %}Paid in full{% endblock %}
+{% block header_subtitle %}<p>Congratulations — your loan is fully repaid</p>{% endblock %}
+
+{% block badge %}<div class="badge">PAID IN FULL</div>{% endblock %}
+
+{% block content %}
+    <p>With your recent payment, we are pleased to inform you that your loan
+        <strong>{{ loan_id }}</strong> with <strong>{{ vendor_name }}</strong> has been paid in full.</p>
+
+    <p>Should you need our services in the future, please feel free to submit a new loan application from your
+        <a href="{{ dashboard_url }}">dashboard</a>.</p>
+
+    <div class="note">
+        <em>Please note: this notice will be invalid should the payment be returned or dishonoured.</em>
+    </div>
+
+    <p>Thank you for your business.</p>
+{% endblock %}

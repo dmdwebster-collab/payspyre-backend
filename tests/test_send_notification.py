@@ -81,7 +81,9 @@ def _payment_ctx() -> dict:
         payment_url="https://app.payspyre.com/pay/abc",
         late_fee="$25.00",
         account_url="https://app.payspyre.com/account",
-        days_until_due="3 days",
+        # int, matching the real producer (dunning._context) — the subject
+        # template compares it numerically.
+        days_until_due=3,
     )
 
 
@@ -102,7 +104,8 @@ def _notif_payload(db: Session, patient_id) -> dict:
 class TestRender:
     def test_email_renders_subject_and_body(self):
         subject, html = nr.render_email("payment_due_reminder", _payment_ctx())
-        assert "$250.00" in subject and "2026-07-01" in subject
+        # Dave's autopay subject: offset-aware, no amount/date in the subject.
+        assert "Autopay in 3 Days" in subject
         assert "Jordan" in html and "$250.00" in html
 
     def test_sms_renders(self):
@@ -149,7 +152,7 @@ class TestRealSendNotificationEmail:
         # Subject + rendered body reached the vendor.
         params = mock_send.call_args[0][0]
         assert params["to"] == "Alice@Example.COM"
-        assert "$250.00" in params["subject"]
+        assert "Autopay in 3 Days" in params["subject"]
         assert "Jordan" in params["html"]
 
         p = _notif_payload(db_session, patient.id)

@@ -1,0 +1,31 @@
+{% extends "_base.html" %}
+
+{% block title %}Deferment Approved{% endblock %}
+
+{% block header_title %}Deferment approved{% endblock %}
+{% block header_subtitle %}<p>Your payment deferment request has been approved</p>{% endblock %}
+
+{% block badge %}<div class="badge">DEFERMENT APPROVED</div>{% endblock %}
+
+{% block content %}
+    <div class="info-box">
+        <p><strong>Loan ID:</strong> {{ loan_id }}</p>
+        <p><strong>Vendor:</strong> {{ vendor_name }}</p>
+    </div>
+
+    <p>This is to inform you that your payment deferment request has been approved.</p>
+
+    <div class="note">
+        <p><strong>Important factors to understand about delaying payments:</strong></p>
+        <ul>
+            <li>Interest is calculated daily. Delaying a payment means more of the delayed payment goes toward
+                interest and less — potentially nothing — goes toward principal. This can increase your overall
+                cost of borrowing.</li>
+            <li>Your payment next month will still be due on its regular due date.</li>
+            <li>Deferment requests are reviewed individually, and approval is at our sole discretion.</li>
+        </ul>
+    </div>
+
+    <p>If you have any questions or concerns, or are experiencing difficulties making your loan payments,
+        please contact us at <a href="mailto:{{ support_email }}">{{ support_email }}</a>.</p>
+{% endblock %}

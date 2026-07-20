@@ -1,0 +1,25 @@
+{% extends "_base.html" %}
+{# Generic internal notice for back-office / vendor-user notifications.
+   Dave's Back Office + Vendor docs are all the same shape: one intro line and
+   a short key/value detail list. One template, parameterized:
+
+   context:
+     notice_title    - header line, e.g. "New unassigned loan"
+     intro           - one-sentence body lead
+     details         - list of {"label": .., "value": ..} rows
+     outro           - optional trailing paragraph (omit key for none)
+     recipient_name  - optional; greeting falls back to global default
+#}
+{% block title %}{{ notice_title }}{% endblock %}
+{% block header_title %}{{ notice_title }}{% endblock %}
+{% block greeting %}{% if recipient_name is defined %}<p>Dear {{ recipient_name }},</p>{% else %}<p>Hello,</p>{% endif %}{% endblock %}
+{% block content %}
+    <p>{{ intro }}</p>
+    <div class="info-box">
+        {% for row in details %}<p><strong>{{ row.label }}:</strong> {{ row.value }}</p>
+        {% endfor %}
+    </div>
+    {% if outro is defined %}<p>{{ outro }}</p>{% endif %}
+{% endblock %}
+{% block support %}{% endblock %}
+{% block signature %}<div class="signature"><p>— PaySpyre platform notification</p></div>{% endblock %}

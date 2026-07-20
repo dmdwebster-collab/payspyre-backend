@@ -1,0 +1,164 @@
+{
+  "types": [
+    {
+      "key": "payment_received",
+      "email_template": "payment_received.html",
+      "email_subject": "PaySpyre - Payment Initiated",
+      "sms_template": null,
+      "sample_context": {
+        "full_name": "Jordan Rivera",
+        "loan_id": "a1b2c3d4",
+        "vendor_name": "New Teeth Today",
+        "payment_amount": "$250.00",
+        "payment_date": "July 18, 2026",
+        "next_payment_amount": "$212.34",
+        "due_date": "August 1, 2026"
+      }
+    },
+    {
+      "key": "payment_nsf",
+      "email_template": "payment_nsf.html",
+      "email_subject": "PaySpyre - Dishonoured Payment - Action Required",
+      "sms_template": "PaySpyre: a recent payment on loan {{ loan_id }} was returned by your bank ({{ past_due_amount }} past due). Please sign in to make a payment: {{ dashboard_url }}",
+      "sample_context": {
+        "full_name": "Jordan Rivera",
+        "customer_name": "Jordan Rivera",
+        "loan_id": "a1b2c3d4",
+        "vendor_name": "New Teeth Today",
+        "outstanding_principal": "$4,812.90",
+        "due_as_of": "July 15, 2026",
+        "past_due_amount": "$212.34",
+        "nsf_fee": "$45.00"
+      }
+    },
+    {
+      "key": "payment_error",
+      "email_template": "payment_error.html",
+      "email_subject": "PaySpyre - Payment Not Processed (Error)",
+      "sms_template": null,
+      "sample_context": {
+        "full_name": "Jordan Rivera",
+        "loan_id": "a1b2c3d4",
+        "vendor_name": "New Teeth Today"
+      }
+    },
+    {
+      "key": "ptp_recorded",
+      "email_template": "ptp_recorded.html",
+      "email_subject": "PaySpyre - Promise to Pay Recorded",
+      "sms_template": null,
+      "sample_context": {
+        "full_name": "Jordan Rivera",
+        "loan_id": "a1b2c3d4",
+        "vendor_name": "New Teeth Today",
+        "ptp_amount": "$212.34",
+        "ptp_date": "July 25, 2026"
+      }
+    },
+    {
+      "key": "ptp_broken",
+      "email_template": "ptp_broken.html",
+      "email_subject": "PaySpyre - Broken Promise to Pay",
+      "sms_template": "PaySpyre: we have not received the {{ ptp_amount }} payment promised for {{ ptp_date }} on loan {{ loan_id }}. Please pay now to avoid late fees: {{ dashboard_url }}",
+      "sample_context": {
+        "full_name": "Jordan Rivera",
+        "loan_id": "a1b2c3d4",
+        "vendor_name": "New Teeth Today",
+        "past_due_amount": "$212.34",
+        "ptp_amount": "$212.34",
+        "ptp_date": "July 25, 2026"
+      }
+    },
+    {
+      "key": "deferment_approved",
+      "email_template": "deferment_approved.html",
+      "email_subject": "PaySpyre - Payment Deferment Request Approved",
+      "sms_template": null,
+      "sample_context": {
+        "full_name": "Jordan Rivera",
+        "loan_id": "a1b2c3d4",
+        "vendor_name": "New Teeth Today"
+      }
+    },
+    {
+      "key": "deferment_rejected",
+      "email_template": "deferment_rejected.html",
+      "email_subject": "PaySpyre - Payment Deferment Declined",
+      "sms_template": null,
+      "sample_context": {
+        "full_name": "Jordan Rivera",
+        "loan_id": "a1b2c3d4",
+        "vendor_name": "New Teeth Today"
+      }
+    },
+    {
+      "key": "agreement_signed",
+      "email_template": "agreement_signed.html",
+      "email_subject": "PaySpyre - Loan Agreement Signed",
+      "sms_template": null,
+      "sample_context": {
+        "full_name": "Jordan Rivera",
+        "loan_id": "a1b2c3d4",
+        "vendor_name": "New Teeth Today"
+      }
+    },
+    {
+      "key": "agreement_signature_reminder",
+      "email_template": "agreement_signature_reminder.html",
+      "email_subject": "PaySpyre - Loan Agreement Signature Reminder",
+      "sms_template": null,
+      "sample_context": {
+        "full_name": "Jordan Rivera",
+        "loan_id": "a1b2c3d4",
+        "vendor_name": "New Teeth Today",
+        "signature_sent_date": "July 12, 2026"
+      }
+    },
+    {
+      "key": "agreement_signature_expired",
+      "email_template": "agreement_signature_expired.html",
+      "email_subject": "PaySpyre - Loan Agreement Signature Period Expired",
+      "sms_template": null,
+      "sample_context": {
+        "full_name": "Jordan Rivera",
+        "loan_id": "a1b2c3d4",
+        "vendor_name": "New Teeth Today"
+      }
+    },
+    {
+      "key": "bank_verification_request",
+      "email_template": "bank_verification_request.html",
+      "email_subject": "PaySpyre - Bank Account Verification Required",
+      "sms_template": "PaySpyre: your loan application {{ loan_id }} requires bank account verification to move forward. Please sign in to complete it: {{ dashboard_url }}",
+      "sample_context": {
+        "full_name": "Jordan Rivera",
+        "loan_id": "a1b2c3d4",
+        "vendor_name": "New Teeth Today"
+      }
+    },
+    {
+      "key": "bank_verification_reminder",
+      "email_template": "bank_verification_reminder.html",
+      "email_subject": "PaySpyre - Bank Account Verification Reminder",
+      "sms_template": null,
+      "sample_context": {
+        "full_name": "Jordan Rivera",
+        "loan_id": "a1b2c3d4",
+        "vendor_name": "New Teeth Today",
+        "verification_sent_date": "July 12, 2026",
+        "verification_expiry_date": "July 22, 2026"
+      }
+    },
+    {
+      "key": "bank_verification_expired",
+      "email_template": "bank_verification_expired.html",
+      "email_subject": "PaySpyre - Bank Account Verification Expired",
+      "sms_template": null,
+      "sample_context": {
+        "full_name": "Jordan Rivera",
+        "loan_id": "a1b2c3d4",
+        "vendor_name": "New Teeth Today"
+      }
+    }
+  ]
+}
