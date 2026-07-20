@@ -645,12 +645,26 @@ def test_migration_chain():
     assert mod.down_revision == "053_delinquency_buckets"
 
 
+def _route_paths(routes):
+    """Collect route paths version-robustly (same pattern as
+    test_schedule_surgery): newer starlette/fastapi versions put router
+    objects (e.g. ``_IncludedRouter``) in ``app.routes`` with no ``.path`` —
+    never assume the attribute, and descend into nested ``.routes``."""
+    for r in routes:
+        p = getattr(r, "path", None)
+        if p:
+            yield p
+        sub = getattr(r, "routes", None)
+        if sub:
+            yield from _route_paths(sub)
+
+
 def test_app_imports_with_hardship_wired():
     """Smoke: the app (model, service, endpoints, webhook extension) imports
     and exposes the WS-J routes; the surface is permission-gated."""
     from app.main import app
 
-    paths = {r.path for r in app.routes}
+    paths = set(_route_paths(app.routes)) | set(app.openapi()["paths"])
     assert "/api/v1/admin/loans/{loan_id}/hardship" in paths
     assert "/api/v1/admin/loans/{loan_id}/hardship/{request_id}" in paths
     assert "/api/v1/admin/loans/{loan_id}/hardship/{request_id}/send-for-signature" in paths
