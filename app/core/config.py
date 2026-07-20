@@ -216,6 +216,14 @@ class Settings(BaseSettings):
     HISTORY_AGE_OF_MAJORITY_YEARS: int = 18
     HISTORY_GAP_TOLERANCE_DAYS: int = 31
 
+    # --- Multi-offer approvals (WS-D, Turnkey parity video 02) ---------------
+    # An underwriter may create up to OFFER_MAX_PER_APPLICATION open offers per
+    # application; unaccepted offers expire OFFER_EXPIRY_DAYS after creation.
+    # Turnkey's values (3 / 30d) kept per GAP_ANALYSIS open question #4 —
+    # config-driven so Dave can retune without a code change.
+    OFFER_MAX_PER_APPLICATION: int = 3
+    OFFER_EXPIRY_DAYS: int = 30
+
     # CORS
     CORS_ORIGINS: str = "http://localhost:3000,https://payspyre.com"
 

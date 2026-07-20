@@ -15,7 +15,9 @@ from app.api.v1.endpoints import (
     admin_import,
     admin_loans,
     admin_messages,
+    admin_offers,
     admin_report_exports,
+    admin_scorecards,
     admin_system,
     admin_vendor_changes,
     auth,
@@ -63,6 +65,11 @@ api_router.include_router(admin_config.router, prefix="/admin/config", tags=["ad
 api_router.include_router(
     admin_decision_reasons.router, prefix="/admin/decision-reasons", tags=["admin-config"]
 )
+# WS-D — multi-offer approvals ("Create Loan Offers") + AI bank-statement analysis.
+# Books NO loan on create; the borrower's acceptance (applicant API) books it.
+api_router.include_router(admin_offers.router, prefix="/admin", tags=["admin-offers"])
+# WS-D — editable 5-band verified-data scorecards + per-vendor assignment (mandate #3).
+api_router.include_router(admin_scorecards.router, prefix="/admin/scorecards", tags=["admin-scorecards"])
 # System mode (Simulation vs Live) — read-only, admin/staff, for the cockpit banner.
 api_router.include_router(admin_system.router, prefix="/admin/system", tags=["admin-system"])
 # Embedded pre-qual widget intake (server-to-server, X-Widget-Key gated; inert until

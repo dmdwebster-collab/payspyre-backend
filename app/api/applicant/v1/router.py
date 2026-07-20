@@ -12,6 +12,7 @@ from app.api.applicant.v1.endpoints import (
     loans,
     manual_application,
     marketplace,
+    offers,
     products,
 )
 from app.core.config import settings
@@ -26,6 +27,10 @@ applicant_router.include_router(disclosure.router)
 applicant_router.include_router(manual_application.router)
 applicant_router.include_router(finalize.router)
 applicant_router.include_router(documents.router)
+# Multi-offer borrower review/accept (WS-D). Registered BEFORE applications for
+# the same reason as finalize: applications.router has a GET /{application_id}
+# and a catch-all POST /consents/{purpose} that must not shadow these literals.
+applicant_router.include_router(offers.router)
 applicant_router.include_router(applications.router)
 applicant_router.include_router(products.router)
 applicant_router.include_router(marketplace.router)

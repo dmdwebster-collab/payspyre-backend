@@ -40,6 +40,11 @@ from app.models.platform.message import (
     PlatformApplicationMessage,
     PlatformApplicationMessageRead,
 )
+from app.models.platform.loan_offer import PlatformLoanOffer
+from app.models.platform.scorecard import (
+    PlatformScorecard,
+    PlatformVendorScorecard,
+)
 
 __all__ = [
     "PlatformPatient",
@@ -74,4 +79,7 @@ __all__ = [
     "PlatformHardshipRequest",
     "PlatformApplicationMessage",
     "PlatformApplicationMessageRead",
+    "PlatformLoanOffer",
+    "PlatformScorecard",
+    "PlatformVendorScorecard",
 ]
