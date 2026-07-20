@@ -40,6 +40,13 @@ from app.models.platform.message import (
     PlatformApplicationMessage,
     PlatformApplicationMessageRead,
 )
+from app.models.platform.collections_work import (
+    PlatformCollectorAssignment,
+    PlatformCollectionActionType,
+    PlatformCollectionAction,
+    PlatformPromiseToPay,
+    PlatformInsolvencyMaintenanceFee,
+)
 
 __all__ = [
     "PlatformPatient",
@@ -74,4 +81,9 @@ __all__ = [
     "PlatformHardshipRequest",
     "PlatformApplicationMessage",
     "PlatformApplicationMessageRead",
+    "PlatformCollectorAssignment",
+    "PlatformCollectionActionType",
+    "PlatformCollectionAction",
+    "PlatformPromiseToPay",
+    "PlatformInsolvencyMaintenanceFee",
 ]

@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from app.core.auth import get_current_user, require_roles
 from app.db.base import get_db
+from app.models.platform.collections_work import PlatformCollectorAssignment
 from app.models.platform.credit_application import PlatformCreditApplication
 from app.models.platform.loan import (
     PlatformLoan,
@@ -221,19 +222,36 @@ class CollectionsQueueRow(BaseModel):
     # overrides applied) + its insolvency classification, if any.
     month_end_bucket: str = "current"
     insolvency_status: Optional[str] = None
+    # WS-C collector assignment surfacing (Turnkey's "A" avatar column).
+    assigned_collector_user_id: Optional[UUID] = None
+    assignment_tier: Optional[str] = None
 
 
 @router.get("/queue", response_model=list[CollectionsQueueRow])
 def queue(
     bucket: Optional[str] = Query(None),
     month_end_bucket: Optional[str] = Query(None),
+    include_insolvency: bool = Query(
+        False,
+        description=(
+            "WS-C: the insolvency portfolio is SEGREGATED from normal "
+            "collections (Dave) — excluded here by default; use "
+            "/admin/collections/insolvency (or pass true / filter "
+            "month_end_bucket=insolvency explicitly)."
+        ),
+    ),
     limit: int = Query(100, ge=1, le=500),
     db: Session = Depends(get_db),
     _user=Depends(get_current_user),
 ):
     """Delinquent worklist, worst-first (highest DPD). Optional filters on the
-    legacy rolling-DPD ``bucket`` or the WS-H ``month_end_bucket`` (e.g.
-    ``insolvency`` gives Dave's segregated insolvency queue).
+    legacy rolling-DPD ``bucket`` or the WS-H ``month_end_bucket``.
+
+    WS-C: insolvency rows are segregated OUT by default (Dave: "essentially
+    going to be separated out of those other collection queues") — the
+    dedicated ``/insolvency`` endpoint serves that portfolio. Explicitly
+    filtering ``month_end_bucket=insolvency`` (or ``include_insolvency=true``)
+    still returns them here for back-compat.
 
     Phase 1 sorts by DPD; a risk/balance-weighted SCORED priority is Phase 4."""
     today = date.today()
@@ -247,6 +265,13 @@ def queue(
         .outerjoin(PlatformPatient, PlatformCreditApplication.patient_id == PlatformPatient.id)
         .all()
     )
+    # WS-C: surface the active collector assignment per loan (one query).
+    assignments = {
+        a.loan_id: a
+        for a in db.query(PlatformCollectorAssignment)
+        .filter(PlatformCollectorAssignment.active.is_(True))
+        .all()
+    }
     rows = []
     for loan, patient in loans:
         due = _earliest_unpaid_due(db, loan.id)
@@ -254,6 +279,13 @@ def queue(
         me_bucket = effective_bucket(
             loan.status, loan.insolvency_status, loan.current_bucket, dpd > 0
         )
+        # WS-C: the insolvency portfolio is SEGREGATED out of the normal
+        # queue (Dave) unless explicitly asked for — the dedicated
+        # /insolvency endpoint maintains it (sorted principal-then-DPD).
+        if me_bucket == "insolvency" and not (
+            include_insolvency or month_end_bucket == "insolvency"
+        ):
+            continue
         # Insolvent accounts stay in the worklist even at 0 DPD — Dave's
         # segregated insolvency portfolio is maintained, not dropped.
         if dpd <= 0 and me_bucket != "insolvency":
@@ -268,6 +300,7 @@ def queue(
             if patient
             else "—"
         ) or "—"
+        assignment = assignments.get(loan.id)
         rows.append(
             CollectionsQueueRow(
                 loan_id=loan.id,
@@ -277,6 +310,10 @@ def queue(
                 bucket=b,
                 month_end_bucket=me_bucket,
                 insolvency_status=loan.insolvency_status,
+                assigned_collector_user_id=(
+                    assignment.collector_user_id if assignment else None
+                ),
+                assignment_tier=str(assignment.tier) if assignment else None,
             )
         )
     rows.sort(key=lambda r: r.days_past_due, reverse=True)
