@@ -14,12 +14,14 @@ from app.api.v1.endpoints import (
     admin_dashboard,
     admin_decision_reasons,
     admin_document_templates,
+    admin_flags,
     admin_hardship,
     admin_import,
     admin_loan_documents,
     admin_loans,
     admin_messages,
     admin_offers,
+    admin_originations,
     admin_report_exports,
     admin_scorecards,
     admin_system,
@@ -46,6 +48,14 @@ api_router.include_router(
 # Whole-book reads, admin/staff gated (audit is admin-only). Mounted under /admin/*.
 api_router.include_router(admin_dashboard.router, prefix="/admin/dashboard", tags=["admin-cockpit"])
 api_router.include_router(admin_applications.router, prefix="/admin/applications", tags=["admin-cockpit"])
+# WS-E originations-admin depth: field-level editing w/ change log, staff offer
+# editing (PricingConfig bounds), header + profile photo, co-borrower linking.
+api_router.include_router(
+    admin_originations.router, prefix="/admin/applications", tags=["admin-originations"]
+)
+# WS-E customer/loan flags: directory CRUD + raise/clear; suppress-notifications
+# flags gate the notification processor's vendor sends.
+api_router.include_router(admin_flags.router, prefix="/admin", tags=["admin-flags"])
 api_router.include_router(admin_loans.router, prefix="/admin/loans", tags=["admin-cockpit"])
 # WS-J — Hardship v1 (deferment / due-date change; e-sign gated). Deliberately
 # NOT plain-staff: requires the dedicated hardship/create permission (admin

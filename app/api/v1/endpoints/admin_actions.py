@@ -24,6 +24,7 @@ from pydantic import BaseModel, model_validator
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.api.v1.endpoints.admin_originations import require_assignment_or_override
 from app.core.auth import require_roles
 from app.db.base import get_db
 from app.models.platform.credit_application import PlatformCreditApplication
@@ -100,6 +101,11 @@ def decide(
     )
     if app is None:
         raise HTTPException(status_code=404, detail="Application not found")
+    # WS-E assignment gate: working a file's decision requires being its
+    # assignee or an override (the admin role — implicitly allowed, keeping
+    # this admin-only endpoint's existing behavior — or the explicit
+    # applications/assignment_override permission). Override use is audited.
+    assignment_override_used = require_assignment_or_override(app, user)
     if app.status in ("approved", "declined") and not body.override:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -156,6 +162,9 @@ def decide(
     app.decision_by = actor
     app.decision_at = datetime.now(timezone.utc)
     app.status = new_status
+    # WS-E waiting-time anchor: stamp the transition like the orchestrator does
+    # so the pipeline's time-in-status column resets on a staff decision too.
+    app.status_updated_at = datetime.now(timezone.utc)
     # WS-I: a staff decision resolves any pending vendor reprocessing request,
     # so the admin queue's reprocessing lane only shows unhandled requests.
     app.vendor_reprocessing_requested = False
@@ -179,7 +188,8 @@ def decide(
     _audit(
         db, event_type="admin_application_decision", actor=actor, application_id=app.id,
         payload={"outcome": body.outcome, "reasons": body.reason_codes, "note": body.note,
-                 "override": body.override, "loan_id": loan_id},
+                 "override": body.override, "loan_id": loan_id,
+                 "assignment_override_used": assignment_override_used},
     )
     db.commit()
     return {"application_id": str(app.id), "status": app.status, "loan_id": loan_id}
@@ -216,6 +226,8 @@ def cancel_application(
     )
     if app is None:
         raise HTTPException(status_code=404, detail="Application not found")
+    # WS-E assignment gate (see decide) — cancel is a decision action too.
+    assignment_override_used = require_assignment_or_override(app, user)
     if app.status in _TERMINAL_STATUSES:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -256,6 +268,7 @@ def cancel_application(
             "reason_code": body.reason_code,
             "borrower_facing_text": reason.borrower_facing_text,
             "note": body.note,
+            "assignment_override_used": assignment_override_used,
         },
     )
     db.add(ev)
@@ -281,7 +294,14 @@ def assign_application(
     db: Session = Depends(get_db),
     user=Depends(require_roles("admin", "staff")),
 ):
-    """Assign an application to a staff user (default: self-assign). Audited."""
+    """Assign an application to a staff user (default: self-assign). Audited.
+
+    WS-E: plain staff may PICK UP work — self-assign an unassigned file or one
+    already theirs. REASSIGNING (assigning someone else, or taking a file off
+    another user) requires an override: the admin role or the explicit
+    ``applications``/``assignment_override`` permission."""
+    from app.services import originations_admin
+
     app = (
         db.query(PlatformCreditApplication)
         .filter(PlatformCreditApplication.id == application_id)
@@ -300,6 +320,24 @@ def assign_application(
             raise HTTPException(
                 status_code=422,
                 detail="Cannot self-assign without a resolvable user id; pass user_id.",
+            )
+
+    is_reassignment = (str(target_id) != actor) or (
+        app.assigned_to_user_id is not None and str(app.assigned_to_user_id) != actor
+    )
+    if is_reassignment:
+        user_roles = {ur.role.name for ur in getattr(user, "roles", [])}
+        user_perms = {
+            (rp.permission.resource, rp.permission.action)
+            for ur in getattr(user, "roles", [])
+            for rp in getattr(ur.role, "permissions", [])
+        }
+        if not originations_admin.has_assignment_override(user_roles, user_perms):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Reassigning requires the admin role or the "
+                       "applications/assignment_override permission; staff may only "
+                       "self-assign unassigned files.",
             )
     target = (
         db.query(User)
@@ -330,7 +368,10 @@ def unassign_application(
     db: Session = Depends(get_db),
     user=Depends(require_roles("admin", "staff")),
 ):
-    """Clear an application's assignment (audited)."""
+    """Clear an application's assignment (audited). Staff may drop their OWN
+    assignment; clearing another user's requires an override (WS-E)."""
+    from app.services import originations_admin
+
     app = (
         db.query(PlatformCreditApplication)
         .filter(PlatformCreditApplication.id == application_id)
@@ -338,6 +379,21 @@ def unassign_application(
     )
     if app is None:
         raise HTTPException(status_code=404, detail="Application not found")
+
+    actor = _actor_id(user)
+    if app.assigned_to_user_id is not None and str(app.assigned_to_user_id) != actor:
+        user_roles = {ur.role.name for ur in getattr(user, "roles", [])}
+        user_perms = {
+            (rp.permission.resource, rp.permission.action)
+            for ur in getattr(user, "roles", [])
+            for rp in getattr(ur.role, "permissions", [])
+        }
+        if not originations_admin.has_assignment_override(user_roles, user_perms):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Clearing another user's assignment requires the admin role "
+                       "or the applications/assignment_override permission.",
+            )
 
     previous = str(app.assigned_to_user_id) if app.assigned_to_user_id else None
     app.assigned_to_user_id = None

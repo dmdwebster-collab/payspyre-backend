@@ -54,6 +54,9 @@ from app.models.platform.loan_offer import PlatformLoanOffer
 from app.models.platform.scorecard import (
     PlatformScorecard,
     PlatformVendorScorecard,
+from app.models.platform.flag import (
+    PlatformFlagAssignment,
+    PlatformFlagDefinition,
 )
 
 __all__ = [
@@ -100,4 +103,6 @@ __all__ = [
     "PlatformLoanOffer",
     "PlatformScorecard",
     "PlatformVendorScorecard",
+    "PlatformFlagAssignment",
+    "PlatformFlagDefinition",
 ]
