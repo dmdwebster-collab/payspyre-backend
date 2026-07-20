@@ -4,6 +4,7 @@ from fastapi import APIRouter
 from app.api.applicant.v1.endpoints import (
     applications,
     auth,
+    bank_accounts,
     borrower_auth,
     borrower_documents,
     dashboard,
@@ -14,7 +15,11 @@ from app.api.applicant.v1.endpoints import (
     manual_application,
     marketplace,
     offers,
+    new_loan,
     products,
+    profile,
+    security,
+    servicing_views,
 )
 from app.core.config import settings
 
@@ -42,6 +47,14 @@ applicant_router.include_router(loans.router)
 # shares loans.py's /loans/{loan_id} prefix + patient scoping.
 applicant_router.include_router(borrower_documents.router)
 applicant_router.include_router(dashboard.router)
+# Borrower portal depth (WS-J full parity): 2FA step-up, versioned profile +
+# write-only ID uploads, bank details (read + default only), schedule views +
+# payout requests + banner, in-portal new loan.
+applicant_router.include_router(security.router)
+applicant_router.include_router(profile.router)
+applicant_router.include_router(bank_accounts.router)
+applicant_router.include_router(servicing_views.router)
+applicant_router.include_router(new_loan.router)
 
 # UNAUTHENTICATED dev helpers (surface the mock magic-link code; simulate verification
 # results). Auto-on in development/test; elsewhere requires an EXPLICIT ENABLE_DEV_TOOLS

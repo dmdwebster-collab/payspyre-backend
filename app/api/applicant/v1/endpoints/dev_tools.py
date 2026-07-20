@@ -44,6 +44,21 @@ def magic_link_code(application_id: uuid.UUID):
     return {"application_id": str(application_id), "code": code}
 
 
+@router.get("/2fa-code")
+def two_factor_code(patient_id: uuid.UUID):
+    """Surface the plaintext 2FA SMS code the simulator only stored as a hash
+    (WS-J; mirrors /dev/magic-link-code). Mock/simulator mode only."""
+    from app.services.borrower_security import peek_dev_2fa_code
+
+    code = peek_dev_2fa_code(str(patient_id))
+    if code is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No 2FA code on record for this patient (simulator mode only).",
+        )
+    return {"patient_id": str(patient_id), "code": code}
+
+
 @router.post("/applications/{application_id}/verifications/{purpose}/complete")
 def complete_verification(
     application_id: uuid.UUID,

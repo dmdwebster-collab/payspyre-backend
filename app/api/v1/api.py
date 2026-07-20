@@ -11,6 +11,7 @@ from app.api.v1.endpoints import (
     admin_audit,
     admin_blacklist,
     admin_bureau_reporting,
+    admin_borrower_security,
     admin_collections,
     admin_communications,
     admin_collections_work,
@@ -135,6 +136,10 @@ api_router.include_router(admin_system.router, prefix="/admin/system", tags=["ad
 api_router.include_router(admin_crm_vendors.router, prefix="/admin/crm", tags=["admin-crm-vendors"])
 api_router.include_router(
     admin_crm_customers.router, prefix="/admin/crm/customers", tags=["admin-crm-customers"]
+# WS-J borrower-portal depth, staff-only halves: audited ID-document reads,
+# bank-account add/remove, per-patient 2FA enforcement, payout-request queue.
+api_router.include_router(
+    admin_borrower_security.router, prefix="/admin", tags=["admin-borrower-security"]
 )
 # Embedded pre-qual widget intake (server-to-server, X-Widget-Key gated; inert until
 # WIDGET_API_KEY is set). Turns the widget's pre-qual into a real application.
