@@ -658,3 +658,76 @@ def test_app_imports_with_hardship_wired():
     # There is deliberately NO staff "apply" endpoint — only the e-sign webhook
     # (or the non-prod dev force-sign) can apply a hardship change.
     assert "/api/v1/admin/loans/{loan_id}/hardship/{request_id}/apply" not in paths
+
+    # The dev force-sign substitutes for the borrower's signature and is only
+    # mounted with the rest of the dev tools (never in production).
+    from app.core.config import settings
+
+    dev_tools_mounted = (
+        settings.ENVIRONMENT in ("development", "test") or settings.ENABLE_DEV_TOOLS
+    )
+    force_sign = "/api/v1/admin/dev/hardship/{request_id}/force-sign"
+    assert (force_sign in paths) == dev_tools_mounted
+
+
+def test_hardship_maintenance_job_module():
+    """Smoke: the cron runner (python -m app.jobs.hardship) imports and wraps
+    hardship.run_maintenance (no DB touched at import time)."""
+    from app.jobs import hardship as job
+
+    assert callable(job.main)
+    assert job.run_maintenance is hardship.run_maintenance
+
+
+# --- the dedicated permission gate ----------------------------------------------------
+
+
+class _FakePerm:
+    def __init__(self, resource, action):
+        self.resource = resource
+        self.action = action
+
+
+class _FakeUser:
+    """Mirrors the current_user.roles[*].role.{name,permissions[*].permission}
+    chain require_permission_or_admin walks."""
+
+    def __init__(self, role_name, perms=()):
+        role = type("R", (), {})()
+        role.name = role_name
+        role.permissions = [
+            type("RP", (), {"permission": p})() for p in perms
+        ]
+        self.roles = [type("UR", (), {"role": role})()]
+
+
+def test_require_permission_or_admin_gate():
+    """WS-J permission model (Dave: 'user-defined availability so that junior
+    staff members can't …'): admin is implicitly allowed; a plain staff role is
+    NOT; the dedicated hardship Role→Permission grant is."""
+    from fastapi import HTTPException
+
+    from app.core.auth import require_permission_or_admin
+
+    checker = require_permission_or_admin("hardship", "create")
+
+    # admin → implicit allow.
+    admin = _FakeUser("admin")
+    assert checker(current_user=admin) is admin
+
+    # plain staff (the rest of /admin/loans allows this) → 403 here.
+    with pytest.raises(HTTPException) as exc:
+        checker(current_user=_FakeUser("staff"))
+    assert exc.value.status_code == 403
+
+    # the dedicated hardship/create grant → allowed.
+    officer = _FakeUser("hardship_officer", perms=[_FakePerm("hardship", "create")])
+    assert checker(current_user=officer) is officer
+
+    # a grant on the wrong action/resource does NOT leak through.
+    wrong = _FakeUser(
+        "hardship_officer",
+        perms=[_FakePerm("hardship", "apply"), _FakePerm("loans", "create")],
+    )
+    with pytest.raises(HTTPException):
+        checker(current_user=wrong)

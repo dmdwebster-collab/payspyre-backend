@@ -29,7 +29,7 @@ from app.core.config import settings
 from app.core.security import create_access_token, get_password_hash
 from app.db.base import get_db
 from app.models.platform.loan import PlatformLoan
-from app.models.user import Role, User, UserRoleLink
+from app.models.user import Permission, Role, RolePermission, User, UserRoleLink
 from app.services import demo_simulation, dev_seed_collections
 
 router = APIRouter(prefix="/dev", tags=["admin-dev"])
@@ -154,7 +154,10 @@ class SeedAdminRequest(BaseModel):
     # the email) — reject it here as a 422 instead.
     email: Optional[EmailStr] = None
     password: Optional[str] = None
-    role: str = "admin"  # "admin" (full cockpit) or "staff" (read + servicing)
+    # "admin" (full cockpit), "staff" (read + servicing), or "hardship_officer"
+    # (staff + the dedicated hardship/create + hardship/apply Role→Permission
+    # grants — WS-J; lets staging exercise the non-admin permission gate).
+    role: str = "admin"
 
 
 class SeedAdminResponse(BaseModel):
@@ -175,8 +178,11 @@ def seed_admin(body: SeedAdminRequest, db: Session = Depends(get_db)):
     accepts directly; the email/password also work at ``POST /api/v1/auth/login``.
     """
     role_name = (body.role or "admin").strip().lower()
-    if role_name not in ("admin", "staff"):
-        raise HTTPException(status_code=422, detail="role must be 'admin' or 'staff'")
+    if role_name not in ("admin", "staff", "hardship_officer"):
+        raise HTTPException(
+            status_code=422,
+            detail="role must be 'admin', 'staff' or 'hardship_officer'",
+        )
 
     suffix = secrets.token_hex(4)
     email = body.email or f"admin-{suffix}@example.com"
@@ -187,6 +193,36 @@ def seed_admin(body: SeedAdminRequest, db: Session = Depends(get_db)):
     if role is None:
         role = Role(name=role_name, description=f"{role_name} (seeded)", is_system=True)
         db.add(role)
+        db.flush()
+
+    if role_name == "hardship_officer":
+        # WS-J: attach the dedicated hardship permissions to the role
+        # (find-or-create both the Permission rows and the links).
+        for action in ("create", "apply"):
+            perm = (
+                db.query(Permission)
+                .filter(Permission.resource == "hardship", Permission.action == action)
+                .first()
+            )
+            if perm is None:
+                perm = Permission(
+                    name=f"hardship:{action}",
+                    description=f"Hardship v1 — {action} (seeded)",
+                    resource="hardship",
+                    action=action,
+                )
+                db.add(perm)
+                db.flush()
+            link = (
+                db.query(RolePermission)
+                .filter(
+                    RolePermission.role_id == role.id,
+                    RolePermission.permission_id == perm.id,
+                )
+                .first()
+            )
+            if link is None:
+                db.add(RolePermission(role_id=role.id, permission_id=perm.id))
         db.flush()
 
     user = User(

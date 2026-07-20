@@ -896,6 +896,12 @@ def run_maintenance(db: Session, *, as_of: Optional[datetime] = None) -> dict:
         .all()
     )
     for request in stale:
+        # Status re-checked Python-side (same convention as
+        # _deferred_count_in_window: keeps the pass trivially fake-able in
+        # DB-free tests, and guards against rows this very pass already
+        # transitioned).
+        if request.status != "awaiting_signature":
+            continue
         expires = request.signature_expires_at
         if expires is None:
             continue
@@ -911,7 +917,7 @@ def run_maintenance(db: Session, *, as_of: Optional[datetime] = None) -> dict:
         .all()
     )
     for request in active:
-        if request.kind != "deferment":
+        if request.status != "active" or request.kind != "deferment":
             continue
         dates = [
             date.fromisoformat(ch["new_scheduled_date"])
