@@ -237,6 +237,27 @@ def mark_underwriting(application: PlatformCreditApplication) -> None:
     application.status_updated_at = datetime.now(timezone.utc)
 
 
+def mark_vendor_reprocessing(application: PlatformCreditApplication) -> None:
+    """Vendor "Request reprocessing" — the ONLY vendor underwriting action (WS-I).
+
+    Dave (10__Vendor_Access.md): vendors get exactly one lever while a deal is
+    with PaySpyre — a request to send it back. Valid while the deal is in
+    adjudication (``under_review`` / ``underwriting``) and on a ``declined``
+    file (an auto-decline must route to a human, never hard-reject to the
+    vendor); the request re-opens the file into ``under_review`` for a human
+    underwriter. It must never re-open ``approved``/``withdrawn``/``expired``
+    (those stay behind the standard terminal guard).
+    """
+    reprocessable = ("declined", "under_review", "underwriting")
+    if application.status not in reprocessable:
+        raise InvalidStateTransition(
+            f"Cannot request reprocessing from status '{application.status}' "
+            f"(allowed: {', '.join(reprocessable)})"
+        )
+    application.status = "under_review"
+    application.status_updated_at = datetime.now(timezone.utc)
+
+
 def mark_cancelled(application: PlatformCreditApplication) -> None:
     """Terminal NON-CREDIT closure — the staff "Cancel" action (WS-E).
 

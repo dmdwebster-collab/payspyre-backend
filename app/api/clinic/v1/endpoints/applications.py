@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.api.clinic.v1.deps import ClinicPrincipal, get_current_clinic_user
 from app.api.clinic.v1.schemas import ClinicApplication, ClinicDashboardSummary
-from app.api.clinic.v1.status_map import to_clinic_status
+from app.api.clinic.v1.status_map import to_vendor_visible_status
 from app.db.base import get_db
 from app.models.platform.credit_application import PlatformCreditApplication
 
@@ -85,22 +85,27 @@ def to_clinic_application(row: PlatformCreditApplication) -> ClinicApplication:
         product_name=_product_name(row.credit_product),
         amount_cents=row.requested_amount_cents,
         currency=_product_currency(row.credit_product),
-        status=to_clinic_status(row.status),
+        # WS-I: vendors see the SILENT-ESCALATION view — an auto-decline pending
+        # human review surfaces as manual_review, never as a final decline.
+        status=to_vendor_visible_status(row.status, getattr(row, "decision_by", None)),
         created_at=row.created_at,
     )
 
 
-def _summary_from_status_counts(pairs) -> ClinicDashboardSummary:
-    """Fold ``(platform_status, count)`` pairs into the 4 clinic buckets.
+def _summary_from_status_counts(triples) -> ClinicDashboardSummary:
+    """Fold ``(platform_status, decision_by, count)`` triples into the 4 clinic
+    buckets, through the VENDOR-VISIBLE mapping (WS-I silent-escalation rule —
+    the cards must agree with the table, so an auto-decline pending human
+    review counts as manual_review, not declined).
 
     Pure (no DB) so the bucketing — and the fact that it counts *all* rows, not a
     capped slice — is unit-testable.
     """
     counts = {"started": 0, "approved": 0, "declined": 0, "manual_review": 0}
     total = 0
-    for status, n in pairs:
+    for status, decision_by, n in triples:
         total += n
-        counts[to_clinic_status(status)] += n
+        counts[to_vendor_visible_status(status, decision_by)] += n
     return ClinicDashboardSummary(total=total, **counts)
 
 
@@ -109,15 +114,24 @@ def summarize_applications(db: Session, vendor_id: UUID) -> ClinicDashboardSumma
 
     Counts every application for the clinic regardless of volume. (The previous
     path counted a 200-row capped fetch, so a busy clinic's dashboard cards
-    silently undercounted past 200.) Clinic-scoped to ``vendor_id``.
+    silently undercounted past 200.) Clinic-scoped to ``vendor_id``. Grouped by
+    (status, decision_by) so the vendor-visible mapping can distinguish an
+    auto-decline (pending human review → manual_review) from a human-confirmed
+    decline.
     """
-    pairs = (
-        db.query(PlatformCreditApplication.status, func.count().label("n"))
+    triples = (
+        db.query(
+            PlatformCreditApplication.status,
+            PlatformCreditApplication.decision_by,
+            func.count().label("n"),
+        )
         .filter(PlatformCreditApplication.vendor_id == vendor_id)
-        .group_by(PlatformCreditApplication.status)
+        .group_by(
+            PlatformCreditApplication.status, PlatformCreditApplication.decision_by
+        )
         .all()
     )
-    return _summary_from_status_counts(pairs)
+    return _summary_from_status_counts(triples)
 
 
 # --- routes ----------------------------------------------------------------

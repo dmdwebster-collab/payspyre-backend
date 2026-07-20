@@ -48,6 +48,32 @@ class PlatformCreditApplication(Base):
     vendor_id = Column(UUID(as_uuid=True), ForeignKey("vendors.id"), nullable=True)
     treatment_plan_ref = Column(String, nullable=True)
 
+    # =====================================================================
+    # VENDOR-ORIGINATED INTAKE (WS-I, migration 052) — Dave's "Application
+    # Submission Checklist" money model + vendor-arranged terms. All nullable:
+    # patient-originated applications never populate these. Integer cents.
+    #   treatment_cost − insurance_coverage − down_payment = requested_amount
+    # (invariant enforced at the clinic intake endpoint).
+    # =====================================================================
+    treatment_cost_cents = Column(BigInteger, nullable=True)
+    insurance_coverage_cents = Column(BigInteger, nullable=True)
+    down_payment_cents = Column(BigInteger, nullable=True)
+    # Patient's stated payment preferences (checklist rows 11-13).
+    preferred_payment_amount_cents = Column(BigInteger, nullable=True)
+    preferred_payment_frequency = Column(String, nullable=True)
+    preferred_first_due_date = Column(Date, nullable=True)
+    # Vendor-arranged terms: term + rate (role-gated within the product's
+    # PricingConfig band) and the treatment-aligned dates from the intake form.
+    requested_term_months = Column(Integer, nullable=True)
+    requested_annual_rate_bps = Column(Integer, nullable=True)
+    provider_name = Column(String, nullable=True)  # free text — no providers table yet
+    loan_start_date = Column(Date, nullable=True)
+    first_due_date = Column(Date, nullable=True)  # "custom first due date"
+    # The vendor's single underwriting action (Dave: "one button — request
+    # reprocessing"). True while a vendor reprocessing request is pending;
+    # admin queue filters on it; cleared when staff record a decision.
+    vendor_reprocessing_requested = Column(Boolean, nullable=False, default=False)
+
     # State — Dave's canonical status workflow maps onto this enum as:
     #   pre-origination -> started
     #   origination     -> origination   (application is being filled out / originated)
