@@ -115,6 +115,8 @@ def test_every_registry_type_is_exercised():
         "application_declined", "application_under_review", "application_cancelled",
         # WS-G auto-collection PAD pre-notification — rendered by its own suite.
         "pad_pre_notification",
+        # WS-J hardship amendment notice — rendered in tests/test_hardship.py.
+        "hardship_agreement_sent",
     }
     missing = set(nr.NOTIFICATION_TYPES) - covered
     assert not missing, f"registry types without render coverage: {sorted(missing)}"
