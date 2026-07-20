@@ -196,6 +196,34 @@ def mark_read(db: Session, *, application_id: UUID, user_id: UUID) -> None:
 # --- unread + thread summaries (badge + channel list) ----------------------
 
 
+# The unread + thread-summary queries are fully STATIC SQL literals (no string
+# interpolation or concatenation — every caller value binds as a parameter, and
+# the vendor-scoped variants are separate literals), mirroring the applicant
+# dashboard read path. There is no injection surface, and bandit B608 stays quiet
+# for the same reason.
+
+_UNREAD_COUNT_SQL = """
+    SELECT count(*)
+    FROM platform_application_messages m
+    JOIN platform_credit_applications a ON a.id = m.application_id
+    LEFT JOIN platform_application_message_reads r
+      ON r.application_id = m.application_id AND r.user_id = :uid
+    WHERE m.sender_kind = :other
+      AND (r.last_read_at IS NULL OR m.created_at > r.last_read_at)
+"""
+
+_UNREAD_COUNT_VENDOR_SQL = """
+    SELECT count(*)
+    FROM platform_application_messages m
+    JOIN platform_credit_applications a ON a.id = m.application_id
+    LEFT JOIN platform_application_message_reads r
+      ON r.application_id = m.application_id AND r.user_id = :uid
+    WHERE m.sender_kind = :other
+      AND (r.last_read_at IS NULL OR m.created_at > r.last_read_at)
+      AND a.vendor_id = :vendor_id
+"""
+
+
 def unread_count(
     db: Session,
     *,
@@ -207,18 +235,10 @@ def unread_count(
     across all threads the viewer can see. Clinic passes ``vendor_id`` to scope
     to its own applications; admin passes none (whole-book)."""
     other_side = _OTHER_SIDE[viewer_side]
-    sql = """
-        SELECT count(*)
-        FROM platform_application_messages m
-        JOIN platform_credit_applications a ON a.id = m.application_id
-        LEFT JOIN platform_application_message_reads r
-          ON r.application_id = m.application_id AND r.user_id = :uid
-        WHERE m.sender_kind = :other
-          AND (r.last_read_at IS NULL OR m.created_at > r.last_read_at)
-    """
     params: dict = {"uid": str(user_id), "other": other_side}
+    sql = _UNREAD_COUNT_SQL
     if vendor_id is not None:
-        sql += " AND a.vendor_id = :vendor_id"
+        sql = _UNREAD_COUNT_VENDOR_SQL
         params["vendor_id"] = str(vendor_id)
     n = db.execute(text(sql), params).scalar_one()
     return int(n or 0)
@@ -234,10 +254,13 @@ def thread_summaries(
 ) -> list[ThreadSummary]:
     """The viewer's "channel list": one row per application that has any
     messages, most-recently-active first, each with its unread count + a preview
-    of the latest message."""
+    of the latest message.
+
+    Static SQL literal with an always-present vendor filter: ``:vendor_id`` is
+    NULL for the whole-book (admin) view, so the OR-arm disables the scope
+    without any string assembly (see the static-SQL note above)."""
     other_side = _OTHER_SIDE[viewer_side]
-    where_vendor = "WHERE a.vendor_id = :vendor_id" if vendor_id is not None else ""
-    sql = f"""
+    sql = """
         SELECT m.application_id AS application_id,
                p.legal_first_name AS first_name,
                p.legal_last_name AS last_name,
@@ -254,14 +277,17 @@ def thread_summaries(
         LEFT JOIN platform_patients p ON p.id = a.patient_id
         LEFT JOIN platform_application_message_reads r
           ON r.application_id = m.application_id AND r.user_id = :uid
-        {where_vendor}
+        WHERE (CAST(:vendor_id AS uuid) IS NULL OR a.vendor_id = :vendor_id)
         GROUP BY m.application_id, p.legal_first_name, p.legal_last_name
         ORDER BY last_message_at DESC
         LIMIT :lim
     """
-    params: dict = {"uid": str(user_id), "other": other_side, "lim": limit}
-    if vendor_id is not None:
-        params["vendor_id"] = str(vendor_id)
+    params: dict = {
+        "uid": str(user_id),
+        "other": other_side,
+        "lim": limit,
+        "vendor_id": str(vendor_id) if vendor_id is not None else None,
+    }
     rows = db.execute(text(sql), params).mappings().all()
 
     summaries = []
