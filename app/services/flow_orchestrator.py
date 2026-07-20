@@ -923,10 +923,33 @@ class FlowOrchestrator:
         # (never an auto-approve). Derived here so the engine stays pure
         # (flag in, decision out). Set by the vendor-origination path (WS-I).
         vendor_override = bool((application.flow_state or {}).get("vendor_override"))
+        # WS-D: resolve the governing 5-band scorecard (vendor assignment →
+        # platform default → None). None = the legacy 680/600 path, unchanged —
+        # a fresh install has no scorecard rows, so default decisions are
+        # identical to before. Inputs come from the SAME stored verification
+        # results the replay adapters use (verified data only, never
+        # self-reported). A malformed scorecard row must never block a decision:
+        # fall back to the legacy path and log.
+        from app.services import scorecards as scorecards_svc
+
+        scorecard_ref = None
+        scorecard_inputs = None
+        try:
+            scorecard_ref = scorecards_svc.resolve_for_application(self.db, application)
+        except Exception as exc:  # noqa: BLE001 — decision integrity over scorecard config
+            logger.error(
+                "scorecard_resolution_failed",
+                application_id=str(application.id),
+                error=str(exc),
+            )
+        if scorecard_ref is not None:
+            scorecard_inputs = scorecards_svc.build_verified_inputs(stored)
         flow_decision: FlowDecision = asyncio.run(
             run_flow(
                 application, decision_product, profile, adapters,
                 vendor_override=vendor_override,
+                scorecard=scorecard_ref,
+                scorecard_inputs=scorecard_inputs,
             )
         )
 
@@ -937,6 +960,11 @@ class FlowOrchestrator:
             "verifications_performed": flow_decision.verifications_performed,
             "next_state": flow_decision.next_state,
         }
+        # WS-D: persist the scorecard band + per-band limit/rate on the decision
+        # record so underwriters see WHY (and offer creation can honor the
+        # band's limit/rate). Absent on the legacy path — payload unchanged.
+        if flow_decision.scorecard_result is not None:
+            decision_summary["scorecard"] = flow_decision.scorecard_result
         # next_state is the valid status enum value (manual_review → under_review).
         application.status = flow_decision.next_state
         application.status_updated_at = datetime.now(timezone.utc)

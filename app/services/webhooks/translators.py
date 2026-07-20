@@ -26,7 +26,7 @@ we don't care about.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Literal, Optional
 from uuid import UUID
 
@@ -193,6 +193,21 @@ def translate_flinks_payload(payload: FlinksWebhookPayload) -> TranslateResult:
 
     derived = _derive_bank_metrics(accounts) if is_ok else _empty_bank_metrics()
 
+    # WS-D — AI bank-statement analysis v1: income/expense categorization +
+    # micro-lender risk flag + human-visible summary, computed HERE because the
+    # raw Flinks payload is deliberately not stored anywhere (see the PII note
+    # below). The payload is aggregates + canonical lender-registry names only
+    # (StatementAnalysis.to_payload is PII-free by contract), so it is safe in
+    # the WORM event log. Analysis failure must never fail the verification.
+    statement_analysis: Optional[dict[str, Any]] = None
+    if is_ok:
+        try:
+            from app.services.bank.statement_analysis import analyze_statement
+
+            statement_analysis = analyze_statement(accounts).to_payload()
+        except Exception:  # noqa: BLE001 — advisory analysis, never blocks bank_link
+            statement_analysis = None
+
     rich_payload: dict[str, Any] = {
         "result": result,
         # Keys consumed by ReplayBankAdapter (see replay_adapters.py:90–104).
@@ -214,6 +229,8 @@ def translate_flinks_payload(payload: FlinksWebhookPayload) -> TranslateResult:
         "flinks_response_type": payload.ResponseType,
         "flinks_request_id": payload.RequestId,
     }
+    if statement_analysis is not None:
+        rich_payload["statement_analysis"] = statement_analysis
 
     return TranslateResult(
         application_id=application_id,

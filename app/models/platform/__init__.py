@@ -50,6 +50,10 @@ from app.models.platform.collections_work import (
     PlatformCollectionAction,
     PlatformPromiseToPay,
     PlatformInsolvencyMaintenanceFee,
+from app.models.platform.loan_offer import PlatformLoanOffer
+from app.models.platform.scorecard import (
+    PlatformScorecard,
+    PlatformVendorScorecard,
 )
 
 __all__ = [
@@ -93,4 +97,7 @@ __all__ = [
     "PlatformCollectionAction",
     "PlatformPromiseToPay",
     "PlatformInsolvencyMaintenanceFee",
+    "PlatformLoanOffer",
+    "PlatformScorecard",
+    "PlatformVendorScorecard",
 ]
