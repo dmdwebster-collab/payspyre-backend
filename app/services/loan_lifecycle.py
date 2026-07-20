@@ -297,6 +297,22 @@ def book_loan(
         loan_id=str(loan.id),
         principal_cents=loan.principal_cents,
     )
+
+    # WS-B: freeze the agreement documents (loan agreement + PAD) for this loan
+    # from the versioned template store — the static snapshot the borrower sees
+    # and signs. Best-effort by design: booking is a money-path transition and
+    # must never fail because a template is missing/broken.
+    try:
+        from app.services import document_engine
+
+        document_engine.generate_booking_documents(db, loan)
+    except Exception:
+        db.rollback()
+        logger.warning(
+            "loan_booking_document_generation_failed",
+            loan_id=str(loan.id),
+            exc_info=True,
+        )
     return loan
 
 

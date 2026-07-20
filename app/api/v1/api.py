@@ -11,8 +11,10 @@ from app.api.v1.endpoints import (
     admin_config,
     admin_dashboard,
     admin_decision_reasons,
+    admin_document_templates,
     admin_hardship,
     admin_import,
+    admin_loan_documents,
     admin_loans,
     admin_messages,
     admin_report_exports,
@@ -45,6 +47,12 @@ api_router.include_router(admin_loans.router, prefix="/admin/loans", tags=["admi
 # NOT plain-staff: requires the dedicated hardship/create permission (admin
 # implicitly allowed) — Dave's "user-defined availability" mandate.
 api_router.include_router(admin_hardship.router, prefix="/admin/loans", tags=["admin-hardship"])
+# WS-B — per-loan generated documents (agreement/PAD/schedules/statements) +
+# versioned system-document templates w/ merge-field engine (Turnkey parity).
+api_router.include_router(admin_loan_documents.router, prefix="/admin/loans", tags=["admin-documents"])
+api_router.include_router(
+    admin_document_templates.router, prefix="/admin/document-templates", tags=["admin-documents"]
+)
 api_router.include_router(admin_collections.router, prefix="/admin/collections", tags=["admin-cockpit"])
 # Vendor⇄PaySpyre application messaging (in-app Slack replacement), whole-book.
 api_router.include_router(admin_messages.router, prefix="/admin", tags=["admin-messages"])

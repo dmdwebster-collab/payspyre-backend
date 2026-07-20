@@ -5,6 +5,7 @@ from app.api.applicant.v1.endpoints import (
     applications,
     auth,
     borrower_auth,
+    borrower_documents,
     dashboard,
     disclosure,
     documents,
@@ -32,6 +33,9 @@ applicant_router.include_router(marketplace.router)
 # Borrower portal (docs/borrower_portal_spec.md): email login + loan servicing (reads + Pay Now).
 applicant_router.include_router(borrower_auth.router)
 applicant_router.include_router(loans.router)
+# WS-B borrower documents tab (agreement/T&Cs/privacy + on-demand statements);
+# shares loans.py's /loans/{loan_id} prefix + patient scoping.
+applicant_router.include_router(borrower_documents.router)
 applicant_router.include_router(dashboard.router)
 
 # UNAUTHENTICATED dev helpers (surface the mock magic-link code; simulate verification

@@ -40,6 +40,10 @@ from app.models.platform.message import (
     PlatformApplicationMessage,
     PlatformApplicationMessageRead,
 )
+from app.models.platform.document_template import (
+    PlatformDocumentTemplate,
+    PlatformLoanDocument,
+)
 
 __all__ = [
     "PlatformPatient",
@@ -74,4 +78,6 @@ __all__ = [
     "PlatformHardshipRequest",
     "PlatformApplicationMessage",
     "PlatformApplicationMessageRead",
+    "PlatformDocumentTemplate",
+    "PlatformLoanDocument",
 ]
