@@ -32,7 +32,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Optional
-from uuid import UUID
 
 from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
@@ -629,16 +628,31 @@ class NotificationProcessor:
             "read": False,
             "recorded_at": datetime.now(timezone.utc).isoformat(),
         }
-        self.db.add(
-            PlatformEvent(
-                event_type=DASHBOARD_EVENT_TYPE,
-                actor="system",
-                patient_id=ev["patient_id"],
-                application_id=ev["application_id"],
-                payload=payload,
-            )
+        event = PlatformEvent(
+            event_type=DASHBOARD_EVENT_TYPE,
+            actor="system",
+            patient_id=ev["patient_id"],
+            application_id=ev["application_id"],
+            payload=payload,
         )
+        self.db.add(event)
         self.db.flush()
+        # WS-A comms log (mandate #4): the dashboard channel is a communication
+        # too — record the rendered card content in the same transaction.
+        from app.services import communications_log
+
+        communications_log.record_communication(
+            self.db,
+            channel=DASHBOARD_CHANNEL,
+            subject=subject,
+            body=body,
+            notification_type=plan.notification_type,
+            patient_id=ev["patient_id"],
+            application_id=ev["application_id"],
+            loan_id=plan.loan_id,
+            status="recorded",
+            source_event_id=event.id,
+        )
 
     # -- cursor -------------------------------------------------------------
 

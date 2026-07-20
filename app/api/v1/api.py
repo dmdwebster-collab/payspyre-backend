@@ -8,6 +8,7 @@ from app.api.v1.endpoints import (
     admin_applications,
     admin_audit,
     admin_collections,
+    admin_communications,
     admin_config,
     admin_dashboard,
     admin_decision_reasons,
@@ -48,6 +49,13 @@ api_router.include_router(admin_hardship.router, prefix="/admin/loans", tags=["a
 api_router.include_router(admin_collections.router, prefix="/admin/collections", tags=["admin-cockpit"])
 # Vendor⇄PaySpyre application messaging (in-app Slack replacement), whole-book.
 api_router.include_router(admin_messages.router, prefix="/admin", tags=["admin-messages"])
+# WS-A — communications hub: append-only legal comms log (full message bodies,
+# Dave mandate #4) + staff templated email/SMS send + offline contact log.
+api_router.include_router(
+    admin_communications.router,
+    prefix="/admin/communications",
+    tags=["admin-communications"],
+)
 api_router.include_router(admin_audit.router, prefix="/admin/audit", tags=["admin-cockpit"])
 # Phase 2 — write actions (decision/payment/payoff) + maker-checker (charge-off/disburse).
 api_router.include_router(admin_actions.router, prefix="/admin", tags=["admin-actions"])
