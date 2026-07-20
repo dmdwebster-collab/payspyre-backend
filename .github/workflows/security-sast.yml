@@ -32,7 +32,7 @@ jobs:
     container:
       image: semgrep/semgrep
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Scope to app/ — the runtime money/PII/application code. Migrations
       # (alembic/, reviewed one-time DDL/seed scripts, already gated by CODEOWNERS)
       # and tests legitimately build SQL strings / carry fixture data, so the
@@ -48,7 +48,7 @@ jobs:
     container:
       image: semgrep/semgrep
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Custom PaySpyre guardrails. flow_orchestrator.py is the sanctioned owner
       # of application status writes, so it is excluded from our own ruleset.

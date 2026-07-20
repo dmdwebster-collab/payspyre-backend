@@ -55,7 +55,7 @@ jobs:
       STRIPE_SECRET_KEY: sk_test_fake_secret
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -95,7 +95,7 @@ jobs:
     outputs:
       image-tag: ${{ steps.meta.outputs.tags }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Log in to DO Container Registry
         uses: docker/login-action@v3
@@ -131,7 +131,7 @@ jobs:
     if: github.ref == 'refs/heads/main'
     environment: production
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install doctl  # used below to derive the live URL for the smoke test
         uses: digitalocean/action-doctl@v2
@@ -165,7 +165,7 @@ jobs:
     if: github.ref == 'refs/heads/staging'
     environment: staging
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install doctl
         uses: digitalocean/action-doctl@v2
