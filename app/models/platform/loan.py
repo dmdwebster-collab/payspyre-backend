@@ -170,6 +170,14 @@ class PlatformLoan(Base):
         cascade="all, delete-orphan",
         order_by="PlatformLoanTransaction.effective_date, PlatformLoanTransaction.seq",
     )
+    # Staff-added custom scheduled transactions (WS-F schedule surgery) —
+    # one-off future payment instructions layered on top of the plan.
+    custom_transactions = relationship(
+        "PlatformLoanCustomTransaction",
+        back_populates="loan",
+        cascade="all, delete-orphan",
+        order_by="PlatformLoanCustomTransaction.scheduled_date",
+    )
 
     def __repr__(self) -> str:
         return (
@@ -198,6 +206,11 @@ class PlatformLoanScheduleItem(Base):
     interest_cents = Column(BigInteger, nullable=False)
     total_cents = Column(BigInteger, nullable=False)
 
+    # ``suspended`` (WS-F schedule surgery, migration 050): a staff-parked
+    # installment. The delinquency-aging and dunning jobs SKIP it (that is the
+    # point of suspending), and it never drags the loan into ``delinquent``.
+    # The money is still owed — unsuspending restores ``partial``/``scheduled``
+    # (derived from paid_cents) and aging re-derives ``late`` if overdue.
     status = Column(
         ENUM(
             "scheduled",
@@ -205,6 +218,7 @@ class PlatformLoanScheduleItem(Base):
             "partial",
             "late",
             "waived",
+            "suspended",
             name="platform_loan_schedule_status",
             create_type=False,
         ),
@@ -364,6 +378,101 @@ class PlatformLoanTransaction(Base):
         return (
             f"<PlatformLoanTransaction(reference={self.reference}, "
             f"txn_type={self.txn_type}, amount_cents={self.amount_cents})>"
+        )
+
+
+class PlatformLoanCustomTransaction(Base):
+    """A staff-added CUSTOM scheduled transaction (WS-F schedule surgery,
+    migration 050) — Turnkey's "Add transaction" on the Scheduled-transactions
+    tab (03__WP_Servicing f0077, Dave: "a very, very important section").
+
+    A custom transaction is a one-off FUTURE payment instruction (date, amount,
+    repayment mode) layered ON TOP of the amortization plan — the plan itself
+    is never altered (Dave's borrower-protection rule). Typical use: borrower
+    misses June 26, promises July 10 → suspend the June 26 installment, add a
+    custom transaction on July 10.
+
+    Deliberately a DEDICATED table, not a flagged ``platform_loan_schedule``
+    row: schedule rows carry amortization semantics (installment_number
+    ordering, principal/interest split, oldest-first cash filling in
+    record_payment, DPD derivation) that a custom transaction must NOT
+    participate in.
+
+    Rows are never hard-deleted: removing one flips ``status`` to
+    ``cancelled`` (auditable). When the auto-collection job (WS-G) or a staff
+    manual payment executes it, ``status`` → ``processed`` and
+    ``processed_transaction_id`` links the resulting immutable ledger row.
+    ``comment`` is MANDATORY (Dave). Money is integer cents.
+    """
+
+    __tablename__ = "platform_loan_custom_transactions"
+    __table_args__ = (
+        CheckConstraint(
+            "amount_cents > 0", name="ck_platform_loan_custom_txn_amount_positive"
+        ),
+        Index("ix_platform_loan_custom_txn_loan", "loan_id", "scheduled_date"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    loan_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("platform_loans.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    scheduled_date = Column(Date, nullable=False)
+    amount_cents = Column(BigInteger, nullable=False)
+    # How the cash will be allocated when it executes (reuses the ledger enum).
+    repayment_mode = Column(
+        ENUM(
+            "regular",
+            "add_on",
+            "special",
+            "payoff",
+            name="platform_loan_repayment_mode",
+            create_type=False,
+        ),
+        nullable=False,
+        default="regular",
+    )
+
+    status = Column(
+        ENUM(
+            "scheduled",
+            "processed",
+            "cancelled",
+            name="platform_loan_custom_txn_status",
+            create_type=False,
+        ),
+        nullable=False,
+        default="scheduled",
+    )
+    # The ledger row this instruction produced, once executed.
+    processed_transaction_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("platform_loan_transactions.id"),
+        nullable=True,
+    )
+
+    # MANDATORY (Dave): why this transaction exists, e.g. "Borrower request,
+    # authorization obtained".
+    comment = Column(String, nullable=False)
+    created_by = Column(String, nullable=False)
+    cancelled_by = Column(String, nullable=True)
+    cancelled_at = Column(DateTime(timezone=True), nullable=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    loan = relationship("PlatformLoan", back_populates="custom_transactions")
+
+    def __repr__(self) -> str:
+        return (
+            f"<PlatformLoanCustomTransaction(loan_id={self.loan_id}, "
+            f"date={self.scheduled_date}, amount_cents={self.amount_cents}, "
+            f"mode={self.repayment_mode}, status={self.status})>"
         )
 
 

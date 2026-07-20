@@ -17,7 +17,7 @@ queries instead of vendor-scoped. Money is integer cents throughout;
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
-from typing import Iterable, Optional
+from typing import Iterable, Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -352,13 +352,47 @@ def get_statements(
 
 
 class PayNowBody(BaseModel):
-    amount_cents: int = Field(..., gt=0, description="Amount to pay, in cents")
+    # Optional because a PAYOFF amount is server-computed (non-editable): omit
+    # it (or echo the quote from /payment-options to confirm). Required and
+    # editable for regular; required and capped for add_on.
+    amount_cents: Optional[int] = Field(
+        None, gt=0, description="Amount to pay, in cents (omitted for payoff)"
+    )
+    # WS-F borrower modes. ``special`` is deliberately NOT offered here
+    # (staff-only, permission-gated); ``add_on`` is valid only while the loan
+    # carries an add-on balance (see /payment-options).
+    mode: Literal["regular", "add_on", "payoff"] = "regular"
 
 
 class PayNowResponse(BaseModel):
     transaction_id: str
     status: str
     amount_cents: int
+    # Defaulted, not required: the pre-WS-F contract (3 fields) must keep
+    # working unchanged for existing callers/stubs of the service layer; the
+    # real service always populates the mode.
+    repayment_mode: str = "regular"
+
+
+class PaymentOptions(BaseModel):
+    as_of: date
+    modes: list[str]
+    outstanding_cents: int
+    add_on_balance_cents: int
+    payoff_cents: int
+
+
+@router.get("/loans/{loan_id}/payment-options", response_model=PaymentOptions)
+def get_payment_options(
+    loan_id: UUID,
+    db: Session = Depends(get_db),
+    claims: ApplicantClaims = Depends(get_current_applicant),
+) -> PaymentOptions:
+    """The borrower's Pay-Now options (WS-F): available repayment modes (an
+    add-on option only when the add-on balance is positive) + the SERVER-QUOTED
+    payoff amount (non-editable — quote here, confirm in POST /payments)."""
+    loan = _get_owned_loan(db, loan_id, claims.patient_id)
+    return PaymentOptions(**loan_payments.payment_options(db, loan))
 
 
 @router.post(
@@ -374,10 +408,14 @@ def pay_now(
 ) -> PayNowResponse:
     """Initiate a borrower payment (Zumrails collection). Patient-scoped (404 if
     not owned). The payment settles out-of-band when the Zumrails webhook
-    confirms it; this returns the in-flight transaction so the UI can poll."""
+    confirms it; this returns the in-flight transaction so the UI can poll.
+    WS-F: ``mode`` selects regular (editable amount) / add_on (only while an
+    add-on balance exists) / payoff (server-quoted, non-editable)."""
     loan = _get_owned_loan(db, loan_id, claims.patient_id)
     try:
-        result = loan_payments.initiate_payment(db, loan, body.amount_cents)
+        result = loan_payments.initiate_payment(
+            db, loan, body.amount_cents, mode=body.mode
+        )
     except loan_payments.PaymentValidationError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     except loan_payments.PaymentProviderUnavailable as exc:
