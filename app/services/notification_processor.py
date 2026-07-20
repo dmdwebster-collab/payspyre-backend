@@ -59,12 +59,14 @@ DASHBOARD_CHANNEL = "dashboard"
 # Event types the processor reacts to. decision_made and application_cancelled
 # (WS-E staff Cancel — a non-credit closure, so NOT an adverse-action notice)
 # are transactional; the two payment_* types are the synthetic events WS3's
-# dunning job emits.
+# dunning job emits; pad_pre_notification is the synthetic event the WS-G
+# auto-collection job emits N business days before each scheduled PAD pull.
 TRIGGER_EVENT_TYPES = (
     "decision_made",
     "application_cancelled",
     "payment_due_reminder",
     "payment_overdue",
+    "pad_pre_notification",
     # Loan lifecycle (Dave's Customer notification spec, 2026-07). Each maps to
     # a registry notification_type in _plan_loan_lifecycle below.
     "loan_disbursed",
@@ -255,7 +257,7 @@ class NotificationProcessor:
             return self._plan_decision(ev)
         if etype == "application_cancelled":
             return self._plan_cancelled(ev)
-        if etype in ("payment_due_reminder", "payment_overdue"):
+        if etype in ("payment_due_reminder", "payment_overdue", "pad_pre_notification"):
             return self._plan_passthrough(ev)
         if etype in _LIFECYCLE_NOTIFICATION_MAP or etype == "loan_payment_recorded":
             return self._plan_loan_lifecycle(ev)

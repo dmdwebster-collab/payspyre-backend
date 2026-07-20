@@ -2,6 +2,7 @@ from uuid import uuid4
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     Column,
     Date,
@@ -137,6 +138,14 @@ class PlatformLoan(Base):
     principal_balance_cents = Column(BigInteger, nullable=False)
 
     currency = Column(String, nullable=False, default="CAD")
+
+    # ---- Auto-collection (WS-G, migration 051) ----------------------------
+    # Per-loan "Disable Auto-Charges" switch (Turnkey Servicing parity).
+    # NULL = inherit the platform default (enabled — but the engine itself is
+    # inert until the AUTO_COLLECTION_ENABLED feature flag is on).
+    # Explicit False = staff or dead-account auto-disable; reason is mandatory.
+    auto_charge_enabled = Column(Boolean, nullable=True)
+    auto_charge_disabled_reason = Column(String, nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(
@@ -378,6 +387,91 @@ class PlatformLoanTransaction(Base):
         return (
             f"<PlatformLoanTransaction(reference={self.reference}, "
             f"txn_type={self.txn_type}, amount_cents={self.amount_cents})>"
+        )
+
+
+class PlatformCollectionAttempt(Base):
+    """One auto-collection attempt against one schedule installment (WS-G).
+
+    The idempotency spine of the auto-collection engine: UNIQUE
+    ``(schedule_item_id, attempt_number)`` means a duplicate cron run or a
+    crash-restart can never initiate the same attempt twice — the row is
+    claimed (committed) BEFORE the Zumrails call, and the deterministic
+    ``client_transaction_id = autocol-{schedule_item_id}-{attempt_number}``
+    gives the payment rail a stable per-attempt dedupe handle.
+
+    Lifecycle: ``pending`` (claimed / in flight) → ``completed`` | ``failed``
+    | ``cancelled`` via the Zumrails webhook (or a synchronous terminal ack).
+    A ``pending`` attempt with no terminal outcome BLOCKS further auto
+    attempts on its installment (conservative: never risk a double-pull while
+    one may still settle).
+    """
+
+    __tablename__ = "platform_collection_attempts"
+    __table_args__ = (
+        UniqueConstraint(
+            "schedule_item_id",
+            "attempt_number",
+            name="uq_platform_collection_attempt_item_n",
+        ),
+        CheckConstraint(
+            "amount_cents > 0", name="ck_platform_collection_attempt_amount_pos"
+        ),
+        CheckConstraint(
+            "outcome IN ('pending', 'completed', 'failed', 'cancelled')",
+            name="ck_platform_collection_attempt_outcome",
+        ),
+        Index("ix_platform_collection_attempts_loan", "loan_id"),
+        Index("ix_platform_collection_attempts_ref", "external_ref"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    loan_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("platform_loans.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    schedule_item_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("platform_loan_schedule.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    attempt_number = Column(Integer, nullable=False)
+    amount_cents = Column(BigInteger, nullable=False)
+
+    # Deterministic idempotency ref sent to Zumrails as ClientTransactionId.
+    client_transaction_id = Column(String, nullable=False)
+    # Zumrails transaction id — NULL until the create-collection call returns.
+    external_ref = Column(String, nullable=True)
+
+    outcome = Column(String, nullable=False, default="pending", server_default="pending")
+    # Vendor return / failure code on a failed pull (drives NSF + dead-account).
+    return_code = Column(String, nullable=True)
+    # Adapter-level error detail when the create call itself blew up.
+    error = Column(String, nullable=True)
+
+    # The NSF fee ledger row charged for THIS failed attempt (idempotency
+    # marker: at most one NSF fee per failed attempt).
+    nsf_fee_transaction_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("platform_loan_transactions.id"),
+        nullable=True,
+    )
+
+    initiated_at = Column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    created_by = Column(
+        String, nullable=False, default="auto_collection", server_default="auto_collection"
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<PlatformCollectionAttempt(item={self.schedule_item_id}, "
+            f"n={self.attempt_number}, amount_cents={self.amount_cents}, "
+            f"outcome={self.outcome})>"
         )
 
 

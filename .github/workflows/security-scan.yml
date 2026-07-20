@@ -29,13 +29,20 @@ jobs:
           python -m pip install --upgrade pip   # clears PYSEC-2026-196 (pip self)
           pip install -e .
           pip install bandit pip-audit
+          # clears PYSEC-2026-3447 (setuptools <83) — build-time tool, not a runtime dep
+          python -m pip install --upgrade "setuptools>=83"
 
       - name: Bandit SAST (fail on medium+ severity)
         run: bandit -r app/ -ll -q
 
       - name: pip-audit SCA (fail on known CVEs)
         # The project itself isn't on PyPI; --skip-editable avoids auditing it.
-        run: pip-audit --skip-editable --progress-spinner off
+        # PYSEC-2026-1325 (ecdsa, pulled in ONLY by python-jose): no fixed release
+        # exists — the ecdsa maintainers treat side-channel/timing attacks as out
+        # of scope. Our JWTs are HS256 (HMAC; JWT_ALGORITHM in app/core/config.py),
+        # so the ECDSA signing paths are never exercised. Documented accept;
+        # re-check for a fix or a python-jose replacement periodically (2026-07-19).
+        run: pip-audit --skip-editable --progress-spinner off --ignore-vuln PYSEC-2026-1325
 
   secrets:
     name: gitleaks

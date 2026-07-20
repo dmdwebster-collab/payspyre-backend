@@ -111,7 +111,11 @@ def test_every_registry_type_is_exercised():
     # Types with bespoke templates predating the Dave integration, covered by
     # their own suites (adverse action + under-review + WS-E cancellation,
     # which renders in test_decision_reasons_directory).
-    covered |= {"application_declined", "application_under_review", "application_cancelled"}
+    covered |= {
+        "application_declined", "application_under_review", "application_cancelled",
+        # WS-G auto-collection PAD pre-notification — rendered by its own suite.
+        "pad_pre_notification",
+    }
     missing = set(nr.NOTIFICATION_TYPES) - covered
     assert not missing, f"registry types without render coverage: {sorted(missing)}"
 
