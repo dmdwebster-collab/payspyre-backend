@@ -1,0 +1,37 @@
+name: Auto-collection scan (daily)
+
+# Initiates scheduled PAD pulls for installments due today (and retry-eligible
+# past-due attempts) on loans with auto-charge enabled — the WS-G engine
+# (app/jobs/auto_collection.py). Strictly idempotent per (schedule_item,
+# attempt): a duplicate run can never double-charge.
+#
+# TRIPLE-GATED — this job is a no-op unless ALL of:
+#   1. The cron below is uncommented (parked like the other crons until a real
+#      DB secret is wired).
+#   2. secret PROD_DATABASE_URL is set.
+#   3. AUTO_COLLECTION_ENABLED=true in the environment (default false) — the
+#      business go-live switch, to be flipped only after Dave/counsel sign off
+#      on the PAD pre-notification copy and retry policy.
+#
+# Schedule note: run AFTER the PAD pre-notification window has elapsed and
+# BEFORE the notification processor, so failure/NSF notices go out same-day.
+# 15:00 UTC ≈ 08:00 Pacific (adjust for DST when enabling).
+on:
+  # schedule:
+  #   - cron: "0 15 * * *"   # ~08:00 Pacific — re-enable when DB secret + flag are wired
+  workflow_dispatch: {}
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e .
+      - name: Run auto-collection scan
+        env:
+          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+          AUTO_COLLECTION_ENABLED: ${{ vars.AUTO_COLLECTION_ENABLED || 'false' }}
+        run: python -m app.jobs.auto_collection
