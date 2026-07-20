@@ -6,7 +6,10 @@ from app.api.v1.endpoints import (
     admin_actions,
     admin_analytics,
     admin_applications,
+    admin_archive,
     admin_audit,
+    admin_blacklist,
+    admin_bureau_reporting,
     admin_collections,
     admin_config,
     admin_dashboard,
@@ -49,6 +52,11 @@ api_router.include_router(admin_collections.router, prefix="/admin/collections",
 # Vendor⇄PaySpyre application messaging (in-app Slack replacement), whole-book.
 api_router.include_router(admin_messages.router, prefix="/admin", tags=["admin-messages"])
 api_router.include_router(admin_audit.router, prefix="/admin/audit", tags=["admin-cockpit"])
+api_router.include_router(admin_archive.router, prefix="/admin/archive", tags=["admin-archive"])
+api_router.include_router(admin_blacklist.router, prefix="/admin/blacklist", tags=["admin-blacklist"])
+api_router.include_router(
+    admin_bureau_reporting.router, prefix="/admin/bureau-reporting", tags=["admin-bureau-reporting"]
+)
 # Phase 2 — write actions (decision/payment/payoff) + maker-checker (charge-off/disburse).
 api_router.include_router(admin_actions.router, prefix="/admin", tags=["admin-actions"])
 # Turnkey cutover import (P0 WS-D) — CSV upload -> preview -> confirm, admin-only.

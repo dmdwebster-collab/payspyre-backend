@@ -40,6 +40,8 @@ from app.models.platform.message import (
     PlatformApplicationMessage,
     PlatformApplicationMessageRead,
 )
+from app.models.platform.blacklist import PlatformBlacklistEntry
+from app.models.platform.bureau_batch import PlatformBureauBatch
 
 __all__ = [
     "PlatformPatient",
@@ -74,4 +76,6 @@ __all__ = [
     "PlatformHardshipRequest",
     "PlatformApplicationMessage",
     "PlatformApplicationMessageRead",
+    "PlatformBlacklistEntry",
+    "PlatformBureauBatch",
 ]

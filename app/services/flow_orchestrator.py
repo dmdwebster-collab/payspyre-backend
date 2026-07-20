@@ -930,15 +930,37 @@ class FlowOrchestrator:
             )
         )
 
+        # WS-I blacklist screen (Tools → Blacklists parity). Policy (pure,
+        # pinned in blacklists.apply_screen): a match on a suspicious
+        # phone/email/name/etc. FLAGS the file — an auto-APPROVE is downgraded
+        # to manual review so a human looks first; a match NEVER auto-declines
+        # and never worsens a non-approve outcome. Local import (flow_orchestrator
+        # module-import idiom for optional/late deps).
+        from app.services import blacklists
+
+        blacklist_matches = blacklists.screen_application(
+            self.db, application, patient=patient
+        )
+        screen = blacklists.apply_screen(
+            flow_decision.decision,
+            flow_decision.next_state,
+            list(flow_decision.decision_reasons),
+            blacklist_matches,
+        )
+        if screen.flagged:
+            blacklists.emit_match_event(
+                self.db, application, blacklist_matches, downgraded=screen.downgraded
+            )
+
         before_status = application.status
         decision_summary = {
-            "decision": flow_decision.decision,
-            "decision_reasons": flow_decision.decision_reasons,
+            "decision": screen.decision,
+            "decision_reasons": list(screen.decision_reasons),
             "verifications_performed": flow_decision.verifications_performed,
-            "next_state": flow_decision.next_state,
+            "next_state": screen.next_state,
         }
         # next_state is the valid status enum value (manual_review → under_review).
-        application.status = flow_decision.next_state
+        application.status = screen.next_state
         application.status_updated_at = datetime.now(timezone.utc)
         application.decision = decision_summary
         application.decision_at = datetime.now(timezone.utc)
@@ -959,13 +981,13 @@ class FlowOrchestrator:
             actor_id="system",
             application=application,
             before={"status": before_status},
-            after={"status": application.status, "decision": flow_decision.decision},
+            after={"status": application.status, "decision": screen.decision},
             rich_payload={"flow_decision": flow_decision.to_dict()},
         )
         self.db.flush()
         from app.services.metrics.platform_metrics import record_decision
 
-        record_decision(product.code, flow_decision.decision)
+        record_decision(product.code, screen.decision)
         # P9.x — LMS hand-off: when approved, book the loan now (DB, in-txn) but DEFER
         # the e-sign invite. book_loan persists the loan + amortization schedule with
         # the decision, so it stays inside this unit-of-work; it never makes a vendor
@@ -1010,7 +1032,7 @@ class FlowOrchestrator:
         logger.info(
             "decision_made",
             application_id=str(application.id),
-            decision=flow_decision.decision,
+            decision=screen.decision,
             status=application.status,
         )
         return decision_summary

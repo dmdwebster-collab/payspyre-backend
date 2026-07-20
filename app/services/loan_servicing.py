@@ -441,6 +441,8 @@ def record_payment(
     created_by: str = "system",
     comment: Optional[str] = None,
     repayment_mode: str = "regular",
+    effective_date: Optional[date] = None,
+    payment_type: Optional[str] = None,
 ) -> PlatformLoanPayment:
     """Apply a received payment to a loan. MONEY-PATH (WS-A actuals engine +
     WS-F repayment modes).
@@ -488,8 +490,10 @@ def record_payment(
 
     Side effects:
       * Inserts a PlatformLoanPayment row (the cash receipt / audit trail).
-      * Appends the immutable ledger row (dual dates: effective = processing =
-        the received date; backdating is a later, permission-gated workstream).
+      * Appends the immutable ledger row (dual dates: processing = the
+        received date; effective defaults to it, or is a PERMISSION-BOUNDED
+        backdate — ≤``loan_ledger.BACKDATE_WINDOW_DAYS`` back, mandatory
+        comment, ``ledger.backdate`` permission enforced at the endpoint).
       * Updates installment ``paid_cents``/status per the plan (see 1).
       * Decrements ``loan.principal_balance_cents`` by the actuals-allocated
         principal (see 2).
@@ -510,6 +514,21 @@ def record_payment(
             f"unknown repayment mode {repayment_mode!r} "
             f"(expected one of {REPAYMENT_MODES})"
         )
+    if payment_type is not None and payment_type not in loan_ledger.PAYMENT_TYPES:
+        raise ValueError(
+            f"unknown payment type {payment_type!r} "
+            f"(expected one of {loan_ledger.PAYMENT_TYPES})"
+        )
+    # WS-I permission-bounded backdating: the dual-date mandate made real. The
+    # PROCESSING date is always the received date (when the row was recorded);
+    # an explicit earlier ``effective_date`` (when the money is TREATED as
+    # applied) must pass the bounded-window + mandatory-comment rules. The
+    # ``ledger.backdate`` permission gate lives at the endpoint; this is the
+    # service-level bound (defense-in-depth). All validation happens BEFORE any
+    # state is touched.
+    processing_date = received_at.date()
+    if effective_date is not None and effective_date != processing_date:
+        loan_ledger.validate_backdate(effective_date, processing_date, comment=comment)
 
     # MONEY-PATH serialization: take a row lock on the loan (SELECT ... FOR
     # UPDATE, same idiom as loan_lifecycle/marketplace) so two concurrent
@@ -546,7 +565,7 @@ def record_payment(
     # principal-only / full-bucket payoff). The allocator VALIDATES the mode's
     # amount rules (raises ValueError) BEFORE any state is touched — nothing is
     # added to the session until the allocation is known-good.
-    effective_date = received_at.date()
+    effective_date = effective_date or processing_date
     balances_before = loan_ledger.loan_balances(loan, as_of=effective_date)
     allocation = allocate_payment(repayment_mode, amount_cents, balances_before)
 
@@ -574,7 +593,9 @@ def record_payment(
         seq=seq,
         reference=loan_ledger.build_reference(vendor_id, loan.id, seq),
         txn_type="payment",
-        payment_type=loan_ledger.payment_type_for_method(method),
+        # Reconciliation dimension (WS-I): an explicit payment_type wins;
+        # otherwise derived from the method string (bank rails → 'eft').
+        payment_type=payment_type or loan_ledger.payment_type_for_method(method),
         repayment_mode=repayment_mode,
         amount_cents=amount_cents,
         principal_cents=allocation.principal_cents,
@@ -582,7 +603,7 @@ def record_payment(
         fees_cents=allocation.fees_cents,
         add_on_cents=allocation.add_on_cents,
         effective_date=effective_date,
-        processing_date=effective_date,
+        processing_date=processing_date,
         created_by=created_by,
         comment=comment,
     )
@@ -700,6 +721,12 @@ def record_payment(
                     "principal_balance_cents": loan.principal_balance_cents,
                     # WS-A ledger row (actuals allocation): ids + cents only.
                     "ledger_reference": txn.reference,
+                    # WS-I dual dates — a backdated row is visible in the audit
+                    # trail (effective earlier than processing).
+                    "effective_date": effective_date.isoformat(),
+                    "processing_date": processing_date.isoformat(),
+                    "backdated": effective_date != processing_date,
+                    "payment_type": txn.payment_type,
                     "allocation": {
                         "interest_cents": allocation.interest_cents,
                         "principal_cents": allocation.principal_cents,

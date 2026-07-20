@@ -98,6 +98,22 @@ def require_permission(resource: str, action: str):
     return permission_checker
 
 
+def user_has_permission_or_admin(user, resource: str, action: str) -> bool:
+    """Non-dependency form of ``require_permission_or_admin`` for CONDITIONAL
+    gates — where the permission is only needed for some request shapes (e.g.
+    a backdated effective_date needs ``ledger.backdate``; a same-day one
+    doesn't). Same semantics: admin is implicitly allowed everywhere."""
+    user_roles = {user_role.role.name for user_role in getattr(user, "roles", [])}
+    if "admin" in user_roles:
+        return True
+    for user_role in getattr(user, "roles", []):
+        for role_perm in user_role.role.permissions:
+            perm = role_perm.permission
+            if perm.resource == resource and perm.action == action:
+                return True
+    return False
+
+
 def require_permission_or_admin(resource: str, action: str):
     """Permission gate with an implicit admin allowance (WS-J hardship model).
 
