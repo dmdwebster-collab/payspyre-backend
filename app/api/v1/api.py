@@ -13,6 +13,7 @@ from app.api.v1.endpoints import (
     admin_decision_reasons,
     admin_import,
     admin_loans,
+    admin_report_exports,
     admin_system,
     admin_vendor_changes,
     auth,
@@ -46,6 +47,8 @@ api_router.include_router(admin_actions.router, prefix="/admin", tags=["admin-ac
 api_router.include_router(admin_import.router, prefix="/admin/import", tags=["admin-import"])
 # Phase 4 — advanced portfolio analytics (vintage / originations / CEI). Read-only.
 api_router.include_router(admin_analytics.router, prefix="/admin/analytics", tags=["admin-analytics"])
+# Turnkey-parity XLSX report downloads (Dave's TL Smart Marker templates). Read-only.
+api_router.include_router(admin_report_exports.router, prefix="/admin/reports", tags=["admin-reports"])
 # Phase 3 — config surfaces (RBAC visibility). Products reuse /credit-products. Read-only, admin.
 api_router.include_router(admin_config.router, prefix="/admin/config", tags=["admin-config"])
 # WS-E — reject/cancel decision-reason directory (admin CRUD, soft-deactivate only).
