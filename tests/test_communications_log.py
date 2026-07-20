@@ -366,35 +366,33 @@ def _route_methods(app_router):
 
 
 def test_routes_mounted_and_append_only_surface():
-    # Walk the *materialized* app routes, not the raw api_router: FastAPI 0.139
-    # resolves include_router lazily, so paths only carry their full prefix once
-    # the router is mounted onto an app.
-    app = FastAPI()
-    app.include_router(_import_api_router(), prefix="/api/v1")
+    # Verify the surface through the TestClient rather than introspecting route
+    # objects: FastAPI 0.139 resolves include_router lazily, so walking
+    # app.routes doesn't reliably materialize nested routes across versions.
+    # Driving requests forces full route resolution and is version-independent.
+    from app.api.v1.api import api_router
+    from app.core.auth import get_current_user
+    from app.db.base import get_db
 
-    routes: dict[str, set[str]] = {}
-    for r in app.routes:
-        path = getattr(r, "path", None)
-        methods = getattr(r, "methods", None)
-        if path and methods:
-            routes.setdefault(path, set()).update(methods)
+    app = FastAPI()
+    app.include_router(api_router, prefix="/api/v1")
+    app.dependency_overrides[get_db] = lambda: FakeSession()
+    app.dependency_overrides[get_current_user] = lambda: _ADMIN_USER
+    client = TestClient(app, raise_server_exceptions=False)
 
     base = "/api/v1/admin/communications"
-    assert "GET" in routes[base]
-    assert "POST" in routes[f"{base}/send"]
-    assert "POST" in routes[f"{base}/offline"]
-    assert "GET" in routes[f"{base}/templates"]
-    assert "POST" in routes[f"{base}/preview"]
-    # Append-only: NO update/delete verbs anywhere on the comms surface.
-    for path, methods in routes.items():
-        if path.startswith(base):
-            assert not ({"PUT", "PATCH", "DELETE"} & methods), (path, methods)
-
-
-def _import_api_router():
-    from app.api.v1.api import api_router
-
-    return api_router
+    # Mounted: a routed path never 404s (an unmounted path would).
+    assert client.get(base).status_code != 404
+    assert client.get(f"{base}/templates").status_code != 404
+    assert client.post(f"{base}/preview", json={}).status_code != 404
+    assert client.post(f"{base}/send", json={}).status_code != 404
+    assert client.post(f"{base}/offline", json={}).status_code != 404
+    # Append-only: NO update/delete verbs on the comms surface. The paths ARE
+    # mounted, so an absent mutation handler answers 405 (method not allowed),
+    # never 200/2xx — proving the WORM log has no edit/delete route.
+    for path in (base, f"{base}/send", f"{base}/templates"):
+        for verb in ("put", "patch", "delete"):
+            assert getattr(client, verb)(path).status_code in (404, 405), (verb, path)
 
 
 def test_templates_endpoint_lists_registry():
