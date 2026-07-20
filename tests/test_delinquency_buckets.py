@@ -566,4 +566,4 @@ def test_migration_chain():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     assert mod.revision == "053_delinquency_buckets"
-    assert mod.down_revision == "049_loan_ledger"
+    assert mod.down_revision == "052_vendor_origination"
