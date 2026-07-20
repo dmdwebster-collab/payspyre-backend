@@ -366,18 +366,35 @@ def _route_methods(app_router):
 
 
 def test_routes_mounted_and_append_only_surface():
-    from app.api.v1.api import api_router
+    # Walk the *materialized* app routes, not the raw api_router: FastAPI 0.139
+    # resolves include_router lazily, so paths only carry their full prefix once
+    # the router is mounted onto an app.
+    app = FastAPI()
+    app.include_router(_import_api_router(), prefix="/api/v1")
 
-    routes = dict(_route_methods(api_router))
-    assert "GET" in routes["/admin/communications"]
-    assert "POST" in routes["/admin/communications/send"]
-    assert "POST" in routes["/admin/communications/offline"]
-    assert "GET" in routes["/admin/communications/templates"]
-    assert "POST" in routes["/admin/communications/preview"]
+    routes: dict[str, set[str]] = {}
+    for r in app.routes:
+        path = getattr(r, "path", None)
+        methods = getattr(r, "methods", None)
+        if path and methods:
+            routes.setdefault(path, set()).update(methods)
+
+    base = "/api/v1/admin/communications"
+    assert "GET" in routes[base]
+    assert "POST" in routes[f"{base}/send"]
+    assert "POST" in routes[f"{base}/offline"]
+    assert "GET" in routes[f"{base}/templates"]
+    assert "POST" in routes[f"{base}/preview"]
     # Append-only: NO update/delete verbs anywhere on the comms surface.
     for path, methods in routes.items():
-        if path.startswith("/admin/communications"):
+        if path.startswith(base):
             assert not ({"PUT", "PATCH", "DELETE"} & methods), (path, methods)
+
+
+def _import_api_router():
+    from app.api.v1.api import api_router
+
+    return api_router
 
 
 def test_templates_endpoint_lists_registry():
