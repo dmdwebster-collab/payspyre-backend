@@ -16,6 +16,7 @@ from app.api.v1.endpoints import (
     admin_loans,
     admin_messages,
     admin_report_exports,
+    admin_settings,
     admin_system,
     admin_vendor_changes,
     auth,
@@ -59,6 +60,9 @@ api_router.include_router(admin_analytics.router, prefix="/admin/analytics", tag
 api_router.include_router(admin_report_exports.router, prefix="/admin/reports", tags=["admin-reports"])
 # Phase 3 — config surfaces (RBAC visibility). Products reuse /credit-products. Read-only, admin.
 api_router.include_router(admin_config.router, prefix="/admin/config", tags=["admin-config"])
+# WS-F — settings suite (decision rules / company info / business calendar /
+# notification matrix). Admin-only, audited writes.
+api_router.include_router(admin_settings.router, prefix="/admin/settings", tags=["admin-settings"])
 # WS-E — reject/cancel decision-reason directory (admin CRUD, soft-deactivate only).
 api_router.include_router(
     admin_decision_reasons.router, prefix="/admin/decision-reasons", tags=["admin-config"]

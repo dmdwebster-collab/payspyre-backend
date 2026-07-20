@@ -28,15 +28,24 @@ from fastapi import APIRouter, Depends, HTTPException, status as http_status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.core.auth import get_current_user, require_permission_or_admin
+from app.core.auth import get_current_user, require_any_permission_or_admin
 from app.db.base import get_db
 from app.models.platform.hardship import PlatformHardshipRequest
 from app.models.platform.loan import PlatformLoan
 from app.services import hardship
 from app.services.hardship import HardshipError
 
+# WS-F granular permissions: the new hardship/manage umbrella grant (seeded in
+# migration 060) OR the legacy hardship/create grant (kept valid so existing
+# role assignments keep working), OR the implicit admin allowance.
 router = APIRouter(
-    dependencies=[Depends(require_permission_or_admin("hardship", "create"))]
+    dependencies=[
+        Depends(
+            require_any_permission_or_admin(
+                ("hardship", "manage"), ("hardship", "create")
+            )
+        )
+    ]
 )
 
 

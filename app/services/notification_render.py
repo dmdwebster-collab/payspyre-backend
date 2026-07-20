@@ -60,7 +60,7 @@ def _global_context() -> dict:
     from app.core.config import settings
 
     base = settings.BORROWER_PORTAL_BASE_URL.rstrip("/")
-    return {
+    ctx = {
         "company_name": "PaySpyre Financial Inc.",
         "support_email": getattr(settings, "SUPPORT_EMAIL", "support@payspyre.com"),
         "company_phone": getattr(settings, "COMPANY_PHONE", ""),
@@ -71,6 +71,13 @@ def _global_context() -> dict:
         "privacy_url": "https://www.payspyre.com/privacy-policy/",
         "nominate_url": "https://www.payspyre.com/nominate-your-provider/",
     }
+    # WS-F: DB-backed company info (admin-editable single-row config) overrides
+    # the static values above. get_company_context NEVER raises — no DB / empty
+    # table degrades to the shipped defaults, which equal the values above.
+    from app.services.company_info import get_company_context
+
+    ctx.update(get_company_context())
+    return ctx
 
 
 # Registry. Add a row here (and a mapping in the WS2 processor) to wire a new
@@ -258,6 +265,18 @@ NOTIFICATION_TYPES: dict[str, NotificationSpec] = {
     # must supply the exact regulatory notice wording (and confirm the reduced
     # notice period / weekly-frequency waiver clauses in the PAD agreement)
     # before AUTO_COLLECTION_ENABLED is flipped on.
+    # WS-F business calendar: due date lands on a statutory holiday / closure —
+    # proactive "your payment may process a day late" notice (Dave's manual
+    # workflow, automated). Emitted by business_calendar.queue_payment_delay_notices.
+    "payment_delay_notice": NotificationSpec(
+        email_template="payment_delay_notice.html",
+        email_subject="PaySpyre - Payment Processing Notice for {{ due_date }}",
+        sms_template=(
+            "PaySpyre: your payment of {{ payment_amount }} due {{ due_date }} "
+            "falls on {{ holiday_name }}; banks may process it on "
+            "{{ processing_date }}. No action needed. {{ account_url }}"
+        ),
+    ),
     "pad_pre_notification": NotificationSpec(
         email_template="pad_pre_notification.html",
         email_subject="Upcoming automatic payment — {{ payment_amount }} on {{ charge_date }}",

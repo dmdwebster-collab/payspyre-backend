@@ -245,6 +245,12 @@ class Settings(BaseSettings):
     SUPPORT_EMAIL: str = "support@payspyre.com"
     COMPANY_PHONE: str = ""  # rendered only when set
 
+    # WS-F granular permissions: how many days in the past a transaction may be
+    # backdated (received_at) by a holder of the transactions/backdate grant.
+    # The bound applies to admins too — older postings need a data-migration
+    # path, not a servicing write.
+    TRANSACTION_BACKDATE_WINDOW_DAYS: int = 30
+
     RESEND_API_KEY: str = ""
     RESEND_FROM_EMAIL: str = "noreply@payspyre.com"
 

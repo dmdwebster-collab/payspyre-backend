@@ -902,6 +902,14 @@ class FlowOrchestrator:
 
         product = self._get_product(application.credit_product_id)
         decision_product = self._decision_product_view(application, product)
+        # WS-F decision-rules directory overlay: admin-edited WIRED rules
+        # (bureau score band / bankruptcy discharge years) override the snapshot
+        # thresholds. NO-OP unless an admin edited a wired rule — returns the
+        # same object otherwise (pinned by tests); any directory failure falls
+        # back to the snapshot.
+        from app.services import decision_rules as _decision_rules
+
+        decision_product = _decision_rules.apply_overlay(self.db, decision_product)
         patient = (
             self.db.query(PlatformPatient)
             .filter(PlatformPatient.id == application.patient_id)

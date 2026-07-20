@@ -51,6 +51,18 @@ class PlatformNotificationRule(Base):
 
     enabled = Column(Boolean, nullable=False, default=True)
 
+    # WS-F notification matrix: per-audience × per-channel cells
+    #   {"borrower": {"email": true, "sms": false, "dashboard": true}, ...}
+    # Audiences: borrower/vendor/staff/admin. Missing cells fall back to the
+    # legacy per-channel flags above (see app.services.notification_matrix);
+    # dashboard is forced always-on by the accessor (Dave).
+    audience_channels = Column(JSONB, nullable=False, default=dict)
+
+    # WS-F: TL attachment picker — list of attachment keys to include on the
+    # email channel (loan_agreement, terms_conditions, privacy_policy,
+    # loan_statements, amortization_schedule).
+    attachments = Column(JSONB, nullable=False, default=list)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(
         DateTime(timezone=True),
