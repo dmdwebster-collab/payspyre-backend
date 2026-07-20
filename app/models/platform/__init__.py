@@ -40,6 +40,11 @@ from app.models.platform.message import (
     PlatformApplicationMessage,
     PlatformApplicationMessageRead,
 )
+from app.models.platform.report_schedule import (
+    PlatformReportDefinition,
+    PlatformReportSchedule,
+    PlatformReportScheduleRun,
+)
 
 __all__ = [
     "PlatformPatient",
@@ -74,4 +79,7 @@ __all__ = [
     "PlatformHardshipRequest",
     "PlatformApplicationMessage",
     "PlatformApplicationMessageRead",
+    "PlatformReportDefinition",
+    "PlatformReportSchedule",
+    "PlatformReportScheduleRun",
 ]

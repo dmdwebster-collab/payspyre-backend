@@ -188,7 +188,6 @@ class SendGridEmailSender:
     def send_message(self, *, to_email: str, subject: str, html: str) -> SendOutcome:
         """Generic email send (WS1) — same vendor/error + X-Message-Id contract
         as ``send_magic_link`` with a caller-supplied subject + body."""
-        from sendgrid import SendGridAPIClient
         from sendgrid.helpers.mail import Mail
 
         message = Mail(
@@ -197,6 +196,53 @@ class SendGridEmailSender:
             subject=subject,
             html_content=html,
         )
+        return self._dispatch(message)
+
+    def send_report(
+        self,
+        *,
+        to_email: str,
+        subject: str,
+        html: str,
+        attachment_filename: str,
+        attachment_bytes: bytes,
+        attachment_mime: str = (
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+    ) -> SendOutcome:
+        """Email with one file attachment (WS-H scheduled reports) — same
+        vendor/error + X-Message-Id contract as ``send_message``. The
+        attachment is base64-encoded per the SendGrid v3 API; nothing is
+        persisted — the artifact exists only inside this request."""
+        import base64
+
+        from sendgrid.helpers.mail import (
+            Attachment,
+            Disposition,
+            FileContent,
+            FileName,
+            FileType,
+            Mail,
+        )
+
+        message = Mail(
+            from_email=self._from_email,
+            to_emails=to_email,
+            subject=subject,
+            html_content=html,
+        )
+        message.attachment = Attachment(
+            FileContent(base64.b64encode(attachment_bytes).decode("ascii")),
+            FileName(attachment_filename),
+            FileType(attachment_mime),
+            Disposition("attachment"),
+        )
+        return self._dispatch(message)
+
+    def _dispatch(self, message) -> SendOutcome:
+        """Shared send + response contract for the generic-mail paths."""
+        from sendgrid import SendGridAPIClient
+
         client = SendGridAPIClient(self._api_key)
         try:
             response = client.send(message)
