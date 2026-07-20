@@ -24,8 +24,13 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session, joinedload
 
-from app.api.applicant.v1.deps import ApplicantClaims, get_current_applicant
+from app.api.applicant.v1.deps import (
+    ApplicantClaims,
+    get_current_applicant,
+    require_step_up,
+)
 from app.db.base import get_db
+from app.models.platform.borrower_portal import PlatformPatientBankAccount
 from app.models.platform.credit_application import PlatformCreditApplication
 from app.models.platform.credit_product import PlatformCreditProduct
 from app.models.platform.loan import (
@@ -374,12 +379,25 @@ class PayNowResponse(BaseModel):
     repayment_mode: str = "regular"
 
 
+class PaymentMethodOut(BaseModel):
+    """The DEFAULT verified bank account, read-only (WS-J item 4): Pay Now is
+    locked to it — the modal displays it and never offers a choice."""
+
+    institution_name: str
+    currency: str
+    routing_mask: Optional[str] = None
+    account_mask: str
+
+
 class PaymentOptions(BaseModel):
     as_of: date
     modes: list[str]
     outstanding_cents: int
     add_on_balance_cents: int
     payoff_cents: int
+    # None until a default verified account exists (Flinks link or staff add).
+    # Defaulted so pre-WS-J callers/stubs of the service layer keep working.
+    payment_method: Optional[PaymentMethodOut] = None
 
 
 @router.get("/loans/{loan_id}/payment-options", response_model=PaymentOptions)
@@ -390,9 +408,32 @@ def get_payment_options(
 ) -> PaymentOptions:
     """The borrower's Pay-Now options (WS-F): available repayment modes (an
     add-on option only when the add-on balance is positive) + the SERVER-QUOTED
-    payoff amount (non-editable — quote here, confirm in POST /payments)."""
+    payoff amount (non-editable — quote here, confirm in POST /payments).
+    WS-J: also surfaces the DEFAULT verified bank account read-only — the
+    payment method is locked to it (not selectable in the modal)."""
     loan = _get_owned_loan(db, loan_id, claims.patient_id)
-    return PaymentOptions(**loan_payments.payment_options(db, loan))
+    default_account = (
+        db.query(PlatformPatientBankAccount)
+        .filter(
+            PlatformPatientBankAccount.patient_id == claims.patient_id,
+            PlatformPatientBankAccount.status == "active",
+            PlatformPatientBankAccount.is_default.is_(True),
+        )
+        .first()
+    )
+    payment_method = (
+        PaymentMethodOut(
+            institution_name=default_account.institution_name,
+            currency=default_account.currency,
+            routing_mask=default_account.routing_mask,
+            account_mask=default_account.account_mask,
+        )
+        if default_account
+        else None
+    )
+    return PaymentOptions(
+        **loan_payments.payment_options(db, loan), payment_method=payment_method
+    )
 
 
 @router.post(
@@ -404,13 +445,15 @@ def pay_now(
     loan_id: UUID,
     body: PayNowBody,
     db: Session = Depends(get_db),
-    claims: ApplicantClaims = Depends(get_current_applicant),
+    claims: ApplicantClaims = Depends(require_step_up),
 ) -> PayNowResponse:
     """Initiate a borrower payment (Zumrails collection). Patient-scoped (404 if
     not owned). The payment settles out-of-band when the Zumrails webhook
     confirms it; this returns the in-flight transaction so the UI can poll.
     WS-F: ``mode`` selects regular (editable amount) / add_on (only while an
-    add-on balance exists) / payoff (server-quoted, non-editable)."""
+    add-on balance exists) / payoff (server-quoted, non-editable).
+    WS-J: payments are a SENSITIVE action — ``require_step_up`` demands a 2FA
+    step-up token for enrolled patients (additive no-op for everyone else)."""
     loan = _get_owned_loan(db, loan_id, claims.patient_id)
     try:
         result = loan_payments.initiate_payment(

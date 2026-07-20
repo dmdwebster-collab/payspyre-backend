@@ -50,6 +50,53 @@ def get_current_applicant(authorization: str = Header(...)) -> ApplicantClaims:
     return ApplicantClaims(patient_id=patient_id, app_ids=app_ids)
 
 
+def require_step_up(
+    claims: ApplicantClaims = Depends(get_current_applicant),
+    x_step_up_token: str | None = Header(None),
+    db: Session = Depends(get_db),
+) -> ApplicantClaims:
+    """Sensitive-action gate (WS-J 2FA step-up). STRICTLY ADDITIVE:
+
+    * patient not enrolled + not staff-enforced → passes through unchanged
+      (identical behavior to before 2FA existed);
+    * patient with an ACTIVE enrollment → must present a live
+      ``X-Step-Up-Token`` (minted by POST /security/2fa/verify) → else 401;
+    * patient staff-ENFORCED but unenrolled → 403 until they enroll.
+
+    Returns the claims so endpoints can use it as their auth dependency.
+    """
+    from app.services.borrower_security import (
+        TwoFactorService,
+        validate_step_up_token,
+    )
+
+    service = TwoFactorService(db)
+    state = service.get_state(claims.patient_id)
+    if state is None:
+        return claims
+    if state.status != "active":
+        if state.enforced:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "code": "step_up_enrollment_required",
+                    "message": "Two-factor authentication is required on this account. "
+                    "Enroll a second factor to continue.",
+                },
+            )
+        return claims
+    if not x_step_up_token or not validate_step_up_token(x_step_up_token, claims.patient_id):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "code": "step_up_required",
+                "message": "This action requires two-factor verification. "
+                "Verify a code at /security/2fa/verify and retry with X-Step-Up-Token.",
+            },
+        )
+    return claims
+
+
 def require_app_scope(application_id: UUID, claims: ApplicantClaims) -> None:
     """Endpoint-level authorization: 403 if the JWT doesn't cover this application."""
     if application_id not in claims.app_ids:

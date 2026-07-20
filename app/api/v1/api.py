@@ -7,6 +7,7 @@ from app.api.v1.endpoints import (
     admin_analytics,
     admin_applications,
     admin_audit,
+    admin_borrower_security,
     admin_collections,
     admin_config,
     admin_dashboard,
@@ -65,6 +66,11 @@ api_router.include_router(
 )
 # System mode (Simulation vs Live) — read-only, admin/staff, for the cockpit banner.
 api_router.include_router(admin_system.router, prefix="/admin/system", tags=["admin-system"])
+# WS-J borrower-portal depth, staff-only halves: audited ID-document reads,
+# bank-account add/remove, per-patient 2FA enforcement, payout-request queue.
+api_router.include_router(
+    admin_borrower_security.router, prefix="/admin", tags=["admin-borrower-security"]
+)
 # Embedded pre-qual widget intake (server-to-server, X-Widget-Key gated; inert until
 # WIDGET_API_KEY is set). Turns the widget's pre-qual into a real application.
 from app.api.v1.endpoints import widget_intake  # noqa: E402

@@ -40,6 +40,12 @@ from app.models.platform.message import (
     PlatformApplicationMessage,
     PlatformApplicationMessageRead,
 )
+from app.models.platform.borrower_portal import (
+    PlatformPatientSecondFactor,
+    PlatformPatientBankAccount,
+    PlatformPatientIdDocument,
+    PlatformPayoutRequest,
+)
 
 __all__ = [
     "PlatformPatient",
@@ -74,4 +80,8 @@ __all__ = [
     "PlatformHardshipRequest",
     "PlatformApplicationMessage",
     "PlatformApplicationMessageRead",
+    "PlatformPatientSecondFactor",
+    "PlatformPatientBankAccount",
+    "PlatformPatientIdDocument",
+    "PlatformPayoutRequest",
 ]
