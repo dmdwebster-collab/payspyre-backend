@@ -246,6 +246,13 @@ NOTIFICATION_TYPES: dict[str, NotificationSpec] = {
         email_subject='PaySpyre - Bank Account Verification Expired',
         sms_template=None,
     ),
+    # WS-J: hardship amendment awaiting the borrower's e-signature. Email-only —
+    # a legal amendment summary does not fit / belong in SMS.
+    "hardship_agreement_sent": NotificationSpec(
+        email_template="hardship_agreement.html",
+        email_subject="Action required — sign your loan amendment ({{ kind_label }})",
+        sms_template=None,
+    ),
     # WS-G: PAD pre-notification — advance notice of a scheduled automatic
     # debit (Payments Canada Rule H1 mechanism). COPY IS PLACEHOLDER: counsel
     # must supply the exact regulatory notice wording (and confirm the reduced

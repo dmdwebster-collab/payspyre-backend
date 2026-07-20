@@ -41,6 +41,7 @@ from app.core.logging import get_logger
 from app.db.base import get_db
 from app.models.platform.event import PlatformEvent
 from app.models.platform.loan import PlatformLoan
+from app.services import hardship as hardship_service
 from app.services import integration_settings, loan_lifecycle
 from app.services.esign.signnow_adapter import (
     SignNowAdapter,
@@ -155,6 +156,22 @@ async def receive_signnow_agreement(
         .first()
     )
     if loan is None:
+        # 4b. Not a loan agreement — a hardship AMENDMENT document? (WS-J: the
+        #     borrower-signed amendment is the legal gate before any schedule
+        #     change; on "signed" the hardship service applies the change.)
+        outcome = hardship_service.handle_esign_event(
+            db, document_id=event.document_id, status=event.status
+        )
+        if outcome is not None:
+            db.commit()  # hardship service adds+flushes; the webhook owns the commit
+            logger.info(
+                "signnow_webhook_hardship_processed",
+                document_id=event.document_id,
+                status=event.status,
+                outcome=outcome,
+            )
+            return {"status": "accepted"}
+
         # Unknown document — ack so SignNow stops retrying; record for ops.
         logger.info(
             "signnow_webhook_orphaned",
