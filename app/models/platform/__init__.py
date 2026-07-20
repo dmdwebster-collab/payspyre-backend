@@ -14,10 +14,12 @@ from app.models.platform.event import PlatformEvent
 from app.models.platform.integration_settings import PlatformIntegrationSettings
 from app.models.platform.loan import (
     PlatformLoan,
+    PlatformLoanCustomTransaction,
     PlatformLoanScheduleItem,
     PlatformLoanPayment,
     PlatformLoanStatement,
     PlatformLoanTransaction,
+    PlatformCollectionAttempt,
 )
 from app.models.platform.clinic_membership import PlatformClinicMembership
 from app.models.platform.marketplace import (
@@ -32,6 +34,10 @@ from app.models.platform.notification_cursor import PlatformNotificationCursor
 from app.models.platform.notification_rule import PlatformNotificationRule
 from app.models.platform.decision_reason import PlatformDecisionReason
 from app.models.platform.import_batch import PlatformImportBatch
+from app.models.platform.message import (
+    PlatformApplicationMessage,
+    PlatformApplicationMessageRead,
+)
 
 __all__ = [
     "PlatformPatient",
@@ -47,10 +53,12 @@ __all__ = [
     "PlatformEvent",
     "PlatformIntegrationSettings",
     "PlatformLoan",
+    "PlatformLoanCustomTransaction",
     "PlatformLoanScheduleItem",
     "PlatformLoanPayment",
     "PlatformLoanStatement",
     "PlatformLoanTransaction",
+    "PlatformCollectionAttempt",
     "PlatformClinicMembership",
     "PlatformMarketplaceListing",
     "PlatformMarketplaceVendorInterest",
@@ -60,4 +68,6 @@ __all__ = [
     "PlatformNotificationRule",
     "PlatformDecisionReason",
     "PlatformImportBatch",
+    "PlatformApplicationMessage",
+    "PlatformApplicationMessageRead",
 ]

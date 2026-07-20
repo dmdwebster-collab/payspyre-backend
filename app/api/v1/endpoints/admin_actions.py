@@ -346,6 +346,14 @@ class PaymentBody(BaseModel):
     received_at: Optional[datetime] = None
     external_ref: Optional[str] = None
     note: Optional[str] = None
+    # WS-F repayment modes (Turnkey "Submit repayment" — Dave's spec):
+    #   regular — accrued interest → principal → fees (default)
+    #   add_on  — pays the non-accruing add-on bucket only (≤ add-on balance)
+    #   special — 100% principal (permission-gated: admin role only)
+    #   payoff  — must equal the server-computed payoff for the effective date
+    #             (GET /loans/{id}/payoff-quote first; server computes, client
+    #             confirms) and closes the loan
+    repayment_mode: Literal["regular", "add_on", "special", "payoff"] = "regular"
 
 
 def _get_loan(db: Session, loan_id: UUID) -> PlatformLoan:
@@ -362,10 +370,22 @@ def record_payment(
     db: Session = Depends(get_db),
     user=Depends(require_roles("admin")),
 ):
-    """Manually post a payment/adjustment to a loan (audited)."""
+    """Manually post a payment/adjustment to a loan (audited). WS-F: the
+    ``repayment_mode`` selects the Turnkey allocation semantics; mode-rule
+    violations (amount caps, payoff exact-match) return 422 with the reason."""
     loan = _get_loan(db, loan_id)
     if body.amount_cents <= 0:
         raise HTTPException(status_code=422, detail="amount_cents must be positive")
+    # SPECIAL is permission-gated beyond the router's admin gate (Dave: 100%
+    # principal, bypassing interest — a write-down lever). Explicit role check
+    # so the gate survives if this endpoint is ever widened to staff.
+    if body.repayment_mode == "special":
+        user_roles = {role.role.name for role in getattr(user, "roles", [])}
+        if "admin" not in user_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="special payments require the admin role",
+            )
     # Idempotency: when the caller supplies an external_ref, a retry / double-submit
     # must NOT post the payment (and reduce the balance) twice. Return the existing
     # receipt instead. Without an external_ref we can't dedupe, so the caller owns it.
@@ -382,17 +402,26 @@ def record_payment(
             return {"payment_id": str(prior.id), "loan_status": loan.status,
                     "principal_balance_cents": loan.principal_balance_cents,
                     "idempotent_replay": True}
-    payment = loan_servicing.record_payment(
-        db, loan, body.amount_cents, body.received_at or datetime.now(timezone.utc),
-        body.method, body.external_ref,
-        created_by=_actor_id(user), comment=body.note,
-    )
+    try:
+        payment = loan_servicing.record_payment(
+            db, loan, body.amount_cents, body.received_at or datetime.now(timezone.utc),
+            body.method, body.external_ref,
+            created_by=_actor_id(user), comment=body.note,
+            repayment_mode=body.repayment_mode,
+        )
+    except ValueError as exc:
+        # Mode-rule violation (add-on/special amount caps, payoff exact-match).
+        # Nothing was committed; the message carries the expected figure so the
+        # client can re-confirm (e.g. a stale payoff quote).
+        raise HTTPException(status_code=422, detail=str(exc))
     _audit(db, event_type="admin_loan_payment", actor=_actor_id(user),
            payload={"loan_id": str(loan_id), "amount_cents": body.amount_cents,
-                    "method": body.method, "note": body.note})
+                    "method": body.method, "repayment_mode": body.repayment_mode,
+                    "note": body.note})
     db.commit()
     return {"payment_id": str(payment.id), "loan_status": loan.status,
-            "principal_balance_cents": loan.principal_balance_cents}
+            "principal_balance_cents": loan.principal_balance_cents,
+            "repayment_mode": body.repayment_mode}
 
 
 @router.get("/loans/{loan_id}/payoff-quote")

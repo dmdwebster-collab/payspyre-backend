@@ -229,8 +229,8 @@ def allocate_regular_payment(
     """Turnkey "Regular" repayment mode: accrued interest → principal → fees.
 
     Add-on balance is NOT touched by a regular payment (it is targeted only by
-    the Add-on repayment mode — a later workstream). Anything left after fees
-    is recorded as principal (overpayment; see ``PaymentAllocation``).
+    the Add-on repayment mode). Anything left after fees is recorded as
+    principal (overpayment; see ``PaymentAllocation``).
     """
     if amount_cents <= 0:
         raise ValueError("amount_cents must be positive")
@@ -253,3 +253,113 @@ def allocate_regular_payment(
         add_on_cents=0,
         overpayment_cents=remaining,
     )
+
+
+def allocate_add_on_payment(
+    amount_cents: int, balances: BalanceView
+) -> PaymentAllocation:
+    """Turnkey "Add-on" repayment mode: pays the ADD-ON bucket ONLY.
+
+    Dave (03__WP_Servicing f0053+): "add-on payments target the add-on section
+    … where any fees that don't incur interest live — NSF fees as an example."
+    No interest, principal or scheduled-fee allocation ever happens here, and
+    the amount may not exceed the current add-on balance (there is nowhere else
+    for the cash to go — an overshoot would silently strand money).
+    """
+    if amount_cents <= 0:
+        raise ValueError("amount_cents must be positive")
+    if amount_cents > balances.add_on_balance_cents:
+        raise ValueError(
+            f"add-on payment ({amount_cents}) exceeds the add-on balance "
+            f"({balances.add_on_balance_cents})"
+        )
+    return PaymentAllocation(
+        interest_cents=0,
+        principal_cents=0,
+        fees_cents=0,
+        add_on_cents=amount_cents,
+        overpayment_cents=0,
+    )
+
+
+def allocate_special_payment(
+    amount_cents: int, balances: BalanceView
+) -> PaymentAllocation:
+    """Turnkey "Special" repayment mode: 100% to PRINCIPAL, bypassing interest.
+
+    Dave: "a special payment is designed to go 100 percent to principal."
+    Staff-only + permission-gated at the endpoint layer (this pure function is
+    policy-free). The amount may not exceed outstanding principal — a special
+    payment beyond principal has no defined bucket for the excess.
+    """
+    if amount_cents <= 0:
+        raise ValueError("amount_cents must be positive")
+    if amount_cents > balances.outstanding_principal_cents:
+        raise ValueError(
+            f"special payment ({amount_cents}) exceeds outstanding principal "
+            f"({balances.outstanding_principal_cents})"
+        )
+    return PaymentAllocation(
+        interest_cents=0,
+        principal_cents=amount_cents,
+        fees_cents=0,
+        add_on_cents=0,
+        overpayment_cents=0,
+    )
+
+
+def allocate_payoff_payment(
+    amount_cents: int, balances: BalanceView
+) -> PaymentAllocation:
+    """Turnkey "Payoff" repayment mode: the fixed, NON-EDITABLE closing amount.
+
+    Dave: "payoff is designed to close the account and calculate a fixed amount
+    that is not editable" = all principal + accrued interest + fees due +
+    add-on balance as of the effective date (0% future interest by
+    construction). The amount MUST equal the server-computed payoff exactly —
+    the server computes, the client only confirms.
+    """
+    if amount_cents <= 0:
+        raise ValueError("amount_cents must be positive")
+    if amount_cents != balances.payoff_cents:
+        raise ValueError(
+            f"payoff amount ({amount_cents}) must equal the computed payoff "
+            f"({balances.payoff_cents}) as of {balances.as_of.isoformat()}"
+        )
+    return PaymentAllocation(
+        interest_cents=balances.interest_due_cents,
+        principal_cents=balances.outstanding_principal_cents,
+        fees_cents=balances.fees_due_cents,
+        add_on_cents=balances.add_on_balance_cents,
+        overpayment_cents=0,
+    )
+
+
+# The four Turnkey repayment modes (03__WP_Servicing §"Submit repayment").
+REPAYMENT_MODES = ("regular", "add_on", "special", "payoff")
+
+_ALLOCATORS = {
+    "regular": allocate_regular_payment,
+    "add_on": allocate_add_on_payment,
+    "special": allocate_special_payment,
+    "payoff": allocate_payoff_payment,
+}
+
+
+def allocate_payment(
+    mode: str, amount_cents: int, balances: BalanceView
+) -> PaymentAllocation:
+    """Dispatch one payment to its repayment-mode allocator (pure).
+
+    Every allocator preserves the BalanceView invariant: applying the returned
+    allocation as a LedgerEvent moves the payoff down by exactly
+    ``amount_cents - overpayment_cents`` (property-tested in
+    tests/test_repayment_modes.py). Raises ``ValueError`` for an unknown mode
+    or a mode-rule violation (amount caps / payoff exact-match).
+    """
+    allocator = _ALLOCATORS.get(mode)
+    if allocator is None:
+        raise ValueError(
+            f"unknown repayment mode {mode!r} (expected one of {REPAYMENT_MODES})"
+        )
+    return allocator(amount_cents, balances)

@@ -27,6 +27,7 @@ from app.api.clinic.v1.endpoints import (
     dashboard_overview,
     financing_links,
     marketplace,
+    messages,
     products,
     vendor_origination,
 )
@@ -40,6 +41,8 @@ clinic_router.include_router(applications.router)
 clinic_router.include_router(vendor_origination.router)
 clinic_router.include_router(financing_links.router)
 clinic_router.include_router(marketplace.router)
+# Vendor⇄PaySpyre application messaging (in-app Slack replacement), vendor-scoped.
+clinic_router.include_router(messages.router)
 # Vendor performance dashboard (spec: docs/vendor_dashboard_spec.md).
 clinic_router.include_router(dashboard_overview.router)
 clinic_router.include_router(dashboard_applications.router)
