@@ -9,6 +9,7 @@ from app.api.v1.endpoints import (
     admin_audit,
     admin_collections,
     admin_communications,
+    admin_collections_work,
     admin_config,
     admin_dashboard,
     admin_decision_reasons,
@@ -55,6 +56,16 @@ api_router.include_router(
     admin_document_templates.router, prefix="/admin/document-templates", tags=["admin-documents"]
 )
 api_router.include_router(admin_collections.router, prefix="/admin/collections", tags=["admin-cockpit"])
+# WS-C — collections work-surface: collector assignment (bulk + tiers), action
+# plans, promise-to-pay, header math, segregated insolvency portfolio.
+api_router.include_router(
+    admin_collections_work.router, prefix="/admin/collections", tags=["admin-collections"]
+)
+api_router.include_router(
+    admin_collections_work.admin_router,
+    prefix="/admin/collections",
+    tags=["admin-collections"],
+)
 # Vendor⇄PaySpyre application messaging (in-app Slack replacement), whole-book.
 api_router.include_router(admin_messages.router, prefix="/admin", tags=["admin-messages"])
 # WS-A — communications hub: append-only legal comms log (full message bodies,

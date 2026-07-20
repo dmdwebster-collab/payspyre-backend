@@ -44,6 +44,12 @@ from app.models.platform.communication import PlatformCommunicationLog
 from app.models.platform.document_template import (
     PlatformDocumentTemplate,
     PlatformLoanDocument,
+from app.models.platform.collections_work import (
+    PlatformCollectorAssignment,
+    PlatformCollectionActionType,
+    PlatformCollectionAction,
+    PlatformPromiseToPay,
+    PlatformInsolvencyMaintenanceFee,
 )
 
 __all__ = [
@@ -82,4 +88,9 @@ __all__ = [
     "PlatformCommunicationLog",
     "PlatformDocumentTemplate",
     "PlatformLoanDocument",
+    "PlatformCollectorAssignment",
+    "PlatformCollectionActionType",
+    "PlatformCollectionAction",
+    "PlatformPromiseToPay",
+    "PlatformInsolvencyMaintenanceFee",
 ]
