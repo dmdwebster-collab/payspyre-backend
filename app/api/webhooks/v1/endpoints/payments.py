@@ -39,7 +39,7 @@ from app.core.logging import get_logger
 from app.db.base import get_db
 from app.models.platform.event import PlatformEvent
 from app.models.platform.loan import PlatformLoan
-from app.services import integration_settings, loan_lifecycle, loan_payments
+from app.services import auto_collection, integration_settings, loan_lifecycle, loan_payments
 from app.services.payments.zumrails_adapter import (
     PermanentZumrailsError,
     TransactionStatus,
@@ -129,6 +129,36 @@ def _extract_txn(parsed: dict) -> tuple[str, TransactionStatus]:
     return str(txn_id), _normalize_status(raw_status)
 
 
+def _extract_return_code(parsed: dict) -> str | None:
+    """Best-effort failure return code from a verified webhook body (WS-G).
+
+    Zumrails' public docs don't pin the field name, so we probe the plausible
+    case-variants; whatever string comes back is matched against the
+    CONFIGURABLE dead-account code list in ``auto_collection`` (normalized
+    substring match), so an imperfect extraction degrades to "no dead-account
+    auto-disable", never a wrong charge."""
+    result = parsed.get("result") or parsed.get("Result") or parsed
+    if not isinstance(result, dict):
+        result = parsed
+    for key in (
+        "ReturnCode",
+        "returnCode",
+        "return_code",
+        "FailureReasonCode",
+        "failureReasonCode",
+        "FailureReason",
+        "failureReason",
+        "Reason",
+        "reason",
+        "Message",
+        "message",
+    ):
+        value = result.get(key)
+        if value:
+            return str(value)
+    return None
+
+
 @router.post("/transaction", status_code=status.HTTP_200_OK)
 async def receive_zumrails_transaction(
     request: Request,
@@ -209,15 +239,27 @@ async def receive_zumrails_transaction(
     if loan is None:
         # Not a disbursement — it may be a borrower payment (collection), which is
         # resolved from the loan_payment_initiated event log rather than a column.
+        # Auto-collection attempts (WS-G) travel the same lane: they emit the same
+        # initiation event, so settlement reuses record_payment unchanged; the
+        # auto_collection hooks below only do attempt bookkeeping + NSF/dead-account
+        # handling and no-op for borrower Pay Now transactions.
         if txn_status == TransactionStatus.COMPLETED:
             if loan_payments.on_collection_complete(db, txn_id):
+                auto_collection.on_collection_settled(db, txn_id)
                 logger.info("zumrails_collection_settled", transaction_id=txn_id)
                 return {"status": "accepted"}
         elif txn_status == TransactionStatus.FAILED:
             if loan_payments.on_collection_failed(db, txn_id):
+                auto_collection.on_collection_failed_txn(
+                    db, txn_id, return_code=_extract_return_code(parsed)
+                )
                 logger.info("zumrails_collection_failed", transaction_id=txn_id)
                 return {"status": "accepted"}
         else:
+            if txn_status == TransactionStatus.CANCELLED:
+                # Terminal for an auto-collection attempt (retry-eligible, no
+                # NSF); a no-op for anything else.
+                auto_collection.on_collection_cancelled(db, txn_id)
             db.commit()  # non-terminal collection update — ack, nonce persisted
             return JSONResponse(
                 status_code=status.HTTP_202_ACCEPTED,

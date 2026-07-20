@@ -106,9 +106,7 @@ def payment_options(db: Session, loan: PlatformLoan, *, as_of=None) -> dict:
     server computes, the client confirms); ``add_on`` is exposed ONLY when the
     add-on balance is positive (there is otherwise nothing for it to pay).
     """
-    from datetime import date as _date
-
-    as_of = as_of or _date.today()
+    as_of = as_of or datetime.now(timezone.utc).date()
     balances = loan_ledger.loan_balances(loan, as_of=as_of)
     modes = ["regular"]
     if balances.add_on_balance_cents > 0:
@@ -148,8 +146,6 @@ def initiate_payment(
     it. If Zumrails returns COMPLETED synchronously, the payment is recorded
     immediately. Raises ``PaymentValidationError`` / ``PaymentProviderUnavailable``.
     """
-    from datetime import date as _date
-
     if loan.status not in ("active", "delinquent"):
         raise PaymentValidationError(
             f"loan is not in a payable state (status={loan.status})"
@@ -160,7 +156,7 @@ def initiate_payment(
         )
 
     if mode == "payoff":
-        balances = loan_ledger.loan_balances(loan, as_of=_date.today())
+        balances = loan_ledger.loan_balances(loan, as_of=datetime.now(timezone.utc).date())
         payoff = balances.payoff_cents
         if payoff <= 0:
             raise PaymentValidationError("loan has no outstanding balance")
@@ -172,7 +168,7 @@ def initiate_payment(
             )
         amount_cents = payoff
     elif mode == "add_on":
-        balances = loan_ledger.loan_balances(loan, as_of=_date.today())
+        balances = loan_ledger.loan_balances(loan, as_of=datetime.now(timezone.utc).date())
         add_on = balances.add_on_balance_cents
         if add_on <= 0:
             raise PaymentValidationError("loan has no add-on balance to pay")

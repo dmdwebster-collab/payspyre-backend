@@ -13,6 +13,7 @@ from app.api.v1.endpoints import (
     admin_decision_reasons,
     admin_import,
     admin_loans,
+    admin_messages,
     admin_report_exports,
     admin_system,
     admin_vendor_changes,
@@ -40,6 +41,8 @@ api_router.include_router(admin_dashboard.router, prefix="/admin/dashboard", tag
 api_router.include_router(admin_applications.router, prefix="/admin/applications", tags=["admin-cockpit"])
 api_router.include_router(admin_loans.router, prefix="/admin/loans", tags=["admin-cockpit"])
 api_router.include_router(admin_collections.router, prefix="/admin/collections", tags=["admin-cockpit"])
+# Vendor⇄PaySpyre application messaging (in-app Slack replacement), whole-book.
+api_router.include_router(admin_messages.router, prefix="/admin", tags=["admin-messages"])
 api_router.include_router(admin_audit.router, prefix="/admin/audit", tags=["admin-cockpit"])
 # Phase 2 — write actions (decision/payment/payoff) + maker-checker (charge-off/disburse).
 api_router.include_router(admin_actions.router, prefix="/admin", tags=["admin-actions"])

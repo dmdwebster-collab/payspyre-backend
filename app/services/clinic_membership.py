@@ -29,3 +29,26 @@ def resolve_clinic_vendor_id(db: Session, user_id) -> UUID | None:
     if membership is None:
         return None
     return membership.vendor_id
+
+
+def resolve_clinic_user_emails(db: Session, vendor_id) -> list[str]:
+    """Distinct emails of the active staff users who belong to a clinic.
+
+    Used to notify a clinic's staff when PaySpyre posts a message on one of
+    their applications. Returns ``[]`` when the clinic has no members.
+    """
+    from app.models.user import User
+
+    rows = (
+        db.query(User.email)
+        .join(PlatformClinicMembership, PlatformClinicMembership.user_id == User.id)
+        .filter(PlatformClinicMembership.vendor_id == vendor_id)
+        .filter(User.is_active.is_(True))
+        .all()
+    )
+    # Preserve determinism + dedupe while keeping only truthy emails.
+    seen: list[str] = []
+    for (email,) in rows:
+        if email and email not in seen:
+            seen.append(email)
+    return seen
