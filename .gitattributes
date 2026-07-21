@@ -1,0 +1,6 @@
+# Append-only registration files: additive across parallel workstreams.
+# Union merge keeps both sides so parallel imports/registrations don't conflict.
+app/models/platform/__init__.py merge=union
+app/api/v1/api.py merge=union
+app/api/applicant/v1/router.py merge=union
+app/api/applicant/v1/api.py merge=union

@@ -32,7 +32,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Optional
-from uuid import UUID
 
 from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
@@ -40,6 +39,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.models.platform.notification_cursor import PlatformNotificationCursor
+from app.services import flags as flags_service
 from app.services.real_notification_dispatcher import (
     PermanentNotificationError,
     TransientNotificationError,
@@ -70,6 +70,10 @@ TRIGGER_EVENT_TYPES = (
     # (email; the payload carries channels+context, passthrough shape).
     "hardship_agreement_sent",
     "pad_pre_notification",
+    # WS-F business calendar: due date on a non-business day → proactive
+    # processing-delay notice (passthrough shape, emitted by
+    # business_calendar.queue_payment_delay_notices).
+    "payment_delay_notice",
     # Loan lifecycle (Dave's Customer notification spec, 2026-07). Each maps to
     # a registry notification_type in _plan_loan_lifecycle below.
     "loan_disbursed",
@@ -135,6 +139,8 @@ class NotificationProcessor:
         # Wall-clock used for the per-province send-window gate. Injectable for
         # deterministic tests; defaults to now (UTC) per run.
         self._now = now
+        # WS-E flag-suppression memo: (patient_id, loan_id) -> bool, per run.
+        self._flag_suppression_cache: dict[tuple, bool] = {}
         # Same selector the applicant API uses; injectable for tests.
         if dispatcher is not None:
             self.dispatcher = dispatcher
@@ -186,6 +192,20 @@ class NotificationProcessor:
                     self._record_dashboard(ev, plan)
                     self.db.commit()
                     result.dashboard += 1
+                    continue
+
+                # WS-E customer/loan flags: an active suppress-notifications
+                # flag on the borrower or the loan blocks VENDOR sends only —
+                # the skip is still audited (suppress sends, still log). The
+                # dashboard branch above is exempt: an in-app record is the
+                # log, not an outbound send. Adverse-action + magic-link never
+                # route through this processor and are never suppressed.
+                if self._flag_suppressed(ev["patient_id"], plan.loan_id):
+                    self._record_skipped(
+                        ev, plan, reason=flags_service.SUPPRESSION_SKIP_REASON
+                    )
+                    self.db.commit()
+                    result.skipped += 1
                     continue
 
                 # Vendor channels (email/sms): gate on the borrower's per-province
@@ -265,6 +285,7 @@ class NotificationProcessor:
             "payment_overdue",
             "hardship_agreement_sent",
             "pad_pre_notification",
+            "payment_delay_notice",
         ):
             return self._plan_passthrough(ev)
         if etype in _LIFECYCLE_NOTIFICATION_MAP or etype == "loan_payment_recorded":
@@ -525,6 +546,20 @@ class NotificationProcessor:
             "_loan_id": str(loan.id),
         }
 
+    # -- WS-E flag suppression ----------------------------------------------
+
+    def _flag_suppressed(self, patient_id, loan_id) -> bool:
+        """Memoized per-run check of the customer/loan suppression flags."""
+        key = (
+            str(patient_id) if patient_id is not None else None,
+            str(loan_id) if loan_id is not None else None,
+        )
+        if key not in self._flag_suppression_cache:
+            self._flag_suppression_cache[key] = flags_service.notification_suppressed(
+                self.db, patient_id=patient_id, loan_id=loan_id
+            )
+        return self._flag_suppression_cache[key]
+
     # -- dedup + skip audit -------------------------------------------------
 
     def _already_handled(
@@ -629,16 +664,31 @@ class NotificationProcessor:
             "read": False,
             "recorded_at": datetime.now(timezone.utc).isoformat(),
         }
-        self.db.add(
-            PlatformEvent(
-                event_type=DASHBOARD_EVENT_TYPE,
-                actor="system",
-                patient_id=ev["patient_id"],
-                application_id=ev["application_id"],
-                payload=payload,
-            )
+        event = PlatformEvent(
+            event_type=DASHBOARD_EVENT_TYPE,
+            actor="system",
+            patient_id=ev["patient_id"],
+            application_id=ev["application_id"],
+            payload=payload,
         )
+        self.db.add(event)
         self.db.flush()
+        # WS-A comms log (mandate #4): the dashboard channel is a communication
+        # too — record the rendered card content in the same transaction.
+        from app.services import communications_log
+
+        communications_log.record_communication(
+            self.db,
+            channel=DASHBOARD_CHANNEL,
+            subject=subject,
+            body=body,
+            notification_type=plan.notification_type,
+            patient_id=ev["patient_id"],
+            application_id=ev["application_id"],
+            loan_id=plan.loan_id,
+            status="recorded",
+            source_event_id=event.id,
+        )
 
     # -- cursor -------------------------------------------------------------
 

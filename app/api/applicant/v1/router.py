@@ -4,7 +4,9 @@ from fastapi import APIRouter
 from app.api.applicant.v1.endpoints import (
     applications,
     auth,
+    bank_accounts,
     borrower_auth,
+    borrower_documents,
     dashboard,
     disclosure,
     documents,
@@ -12,7 +14,12 @@ from app.api.applicant.v1.endpoints import (
     loans,
     manual_application,
     marketplace,
+    offers,
+    new_loan,
     products,
+    profile,
+    security,
+    servicing_views,
 )
 from app.core.config import settings
 
@@ -26,13 +33,28 @@ applicant_router.include_router(disclosure.router)
 applicant_router.include_router(manual_application.router)
 applicant_router.include_router(finalize.router)
 applicant_router.include_router(documents.router)
+# Multi-offer borrower review/accept (WS-D). Registered BEFORE applications for
+# the same reason as finalize: applications.router has a GET /{application_id}
+# and a catch-all POST /consents/{purpose} that must not shadow these literals.
+applicant_router.include_router(offers.router)
 applicant_router.include_router(applications.router)
 applicant_router.include_router(products.router)
 applicant_router.include_router(marketplace.router)
 # Borrower portal (docs/borrower_portal_spec.md): email login + loan servicing (reads + Pay Now).
 applicant_router.include_router(borrower_auth.router)
 applicant_router.include_router(loans.router)
+# WS-B borrower documents tab (agreement/T&Cs/privacy + on-demand statements);
+# shares loans.py's /loans/{loan_id} prefix + patient scoping.
+applicant_router.include_router(borrower_documents.router)
 applicant_router.include_router(dashboard.router)
+# Borrower portal depth (WS-J full parity): 2FA step-up, versioned profile +
+# write-only ID uploads, bank details (read + default only), schedule views +
+# payout requests + banner, in-portal new loan.
+applicant_router.include_router(security.router)
+applicant_router.include_router(profile.router)
+applicant_router.include_router(bank_accounts.router)
+applicant_router.include_router(servicing_views.router)
+applicant_router.include_router(new_loan.router)
 
 # UNAUTHENTICATED dev helpers (surface the mock magic-link code; simulate verification
 # results). Auto-on in development/test; elsewhere requires an EXPLICIT ENABLE_DEV_TOOLS

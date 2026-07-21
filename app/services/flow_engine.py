@@ -25,9 +25,9 @@ mandated by the kickoff (Hard Rules #2 / #3); stateful orchestration is P6.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, Awaitable, Optional, TypeVar
+from typing import Any, Awaitable, Mapping, Optional, TypeVar
 from uuid import UUID
 
 import structlog
@@ -38,6 +38,13 @@ from app.services.adapters.base import (
     FlowAdapters,
     PatientProfile,
     VerificationResult,
+)
+from app.services.scorecards import (
+    REASON_SCORECARD_BAND_FAIL,
+    REASON_SCORECARD_BAND_REVIEW,
+    ScorecardRef,
+    ScorecardResult,
+    score as score_scorecard,
 )
 
 logger = structlog.get_logger(__name__)
@@ -91,6 +98,9 @@ class FlowDecision:
     verifications_performed: list[dict[str, Any]]
     next_state: str
     events_to_emit: list[dict[str, Any]]
+    # WS-D: present only when a 5-band scorecard governed this decision (the
+    # ``score``/``band``/per-band limit+rate audit record). None = legacy path.
+    scorecard_result: Optional[dict[str, Any]] = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -99,6 +109,7 @@ class FlowDecision:
             "verifications_performed": self.verifications_performed,
             "next_state": self.next_state,
             "events_to_emit": self.events_to_emit,
+            "scorecard_result": self.scorecard_result,
         }
 
 
@@ -119,6 +130,8 @@ class _ApplicantOutcome:
     verifications: list[dict[str, Any]]
     events: list[dict[str, Any]]
     band: dict[str, int]
+    # WS-D: populated only when a scorecard governed this applicant.
+    scorecard_result: Optional[ScorecardResult] = field(default=None)
 
 
 async def _call_with_timeout(coro: Awaitable[T], timeout_seconds: float) -> Optional[T]:
@@ -333,9 +346,66 @@ def _resolve_decision(
     return "approved"
 
 
+def _resolve_decision_scorecard(
+    outcome: _ApplicantOutcome,
+    result: ScorecardResult,
+    *,
+    bankruptcy_declines: bool,
+    bankruptcy_review: bool,
+    fraud_review: bool,
+    has_unknown: bool,
+    has_failed_required: bool,
+    identity_manual_review: bool,
+) -> str:
+    """WS-D: resolve a decision from a 5-band scorecard result.
+
+    Replaces ONLY the legacy score-banding step; every overlay keeps its
+    precedence:
+      * a bankruptcy the discharge policy declines is final (unchanged);
+      * a band DECLINE is final only when the data is complete — with any
+        unknown/failed verification the data was not fully VERIFIED, so it
+        demotes to manual_review (Dave: score only verified data; incomplete
+        data goes to a human, never to an auto-decline);
+      * any soft-review condition (unknown, failed-required, fraud signal,
+        identity manual-review, discharge-window bankruptcy under vendor
+        override) or a band whose configured decision is manual_review yields
+        manual_review;
+      * only a clean band APPROVE approves.
+    """
+    review = (
+        has_unknown
+        or has_failed_required
+        or fraud_review
+        or identity_manual_review
+        or bankruptcy_review
+    )
+
+    if bankruptcy_declines:
+        return "declined"
+
+    if result.decision == "declined":
+        if REASON_SCORECARD_BAND_FAIL not in outcome.reasons:
+            outcome.reasons.append(REASON_SCORECARD_BAND_FAIL)
+        if has_unknown or has_failed_required:
+            return "manual_review"
+        return "declined"
+
+    if result.decision == "manual_review":
+        if REASON_SCORECARD_BAND_REVIEW not in outcome.reasons:
+            outcome.reasons.append(REASON_SCORECARD_BAND_REVIEW)
+        return "manual_review"
+
+    # Band approved — but any soft-review overlay still pulls to a human.
+    if review:
+        return "manual_review"
+    return "approved"
+
+
 async def _run_single_applicant(
     application: Any, product: Any, patient: PatientProfile, adapters: FlowAdapters,
     timeout_seconds: float, vendor_override: bool = False,
+    scorecard: Optional[ScorecardRef] = None,
+    scorecard_inputs: Optional[Mapping[str, Any]] = None,
 ) -> _ApplicantOutcome:
     reasons: list[str] = []
     verifications: list[dict[str, Any]] = []
@@ -478,6 +548,34 @@ async def _run_single_applicant(
         reasons.append(REASON_FRAUD_SIGNAL_REVIEW)
 
     outcome = _ApplicantOutcome("manual_review", effective_score, reasons, verifications, events, band)
+
+    if scorecard is not None:
+        # WS-D banded scorecard path: score the VERIFIED inputs (assembled by
+        # the orchestrator from stored post-verification results — never
+        # self-reported data) and let the 5-band ladder replace the legacy
+        # two-cut. All hard/soft overlays keep their precedence (see
+        # _resolve_decision_scorecard).
+        result = score_scorecard(scorecard, scorecard_inputs or {})
+        outcome.scorecard_result = result
+        events.append(_event("flow.scorecard_evaluated", patient_id, application_id, {
+            "scorecard_id": result.scorecard_id,
+            "scorecard_name": result.scorecard_name,
+            "total": result.total,
+            "band": result.band,
+            "band_decision": result.decision,
+        }))
+        outcome.decision = _resolve_decision_scorecard(
+            outcome,
+            result,
+            bankruptcy_declines=bankruptcy_outcome == "declined",
+            bankruptcy_review=bankruptcy_outcome == "manual_review",
+            fraud_review=fraud_review,
+            has_unknown=has_unknown,
+            has_failed_required=has_failed_required,
+            identity_manual_review=has_identity_manual_review,
+        )
+        return outcome
+
     outcome.decision = _resolve_decision(
         outcome,
         bankruptcy_declines=bankruptcy_outcome == "declined",
@@ -493,12 +591,22 @@ def _finalize(outcome: _ApplicantOutcome, patient_id: Optional[UUID], applicatio
     decision = outcome.decision
     reasons = _dedupe(outcome.reasons)
     events = list(outcome.events)
-    events.append(_event("flow.decision_evaluated", patient_id, application_id, {
+    scorecard_dict = (
+        outcome.scorecard_result.to_dict() if outcome.scorecard_result is not None else None
+    )
+    decision_payload: dict[str, Any] = {
         "decision": decision,
         "decision_reasons": reasons,
         "effective_score": outcome.effective_score,
         "next_state": DECISION_TO_STATE[decision],
-    }))
+    }
+    if scorecard_dict is not None:
+        decision_payload["scorecard"] = {
+            "scorecard_id": scorecard_dict["scorecard_id"],
+            "total": scorecard_dict["total"],
+            "band": scorecard_dict["band"],
+        }
+    events.append(_event("flow.decision_evaluated", patient_id, application_id, decision_payload))
     logger.info("flow_decision", application_id=str(application_id) if application_id else None,
                 decision=decision, decision_reasons=reasons, effective_score=outcome.effective_score)
     return FlowDecision(
@@ -507,6 +615,7 @@ def _finalize(outcome: _ApplicantOutcome, patient_id: Optional[UUID], applicatio
         verifications_performed=outcome.verifications,
         next_state=DECISION_TO_STATE[decision],
         events_to_emit=events,
+        scorecard_result=scorecard_dict,
     )
 
 
@@ -575,6 +684,8 @@ async def run_flow(
     combination_strategy: str = "average",
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     vendor_override: bool = False,
+    scorecard: Optional[ScorecardRef] = None,
+    scorecard_inputs: Optional[Mapping[str, Any]] = None,
 ) -> FlowDecision:
     """Run the verification + decision flow for an application and return a
     :class:`FlowDecision`. Pure: no DB writes, no network calls outside adapters.
@@ -589,9 +700,26 @@ async def run_flow(
     bankruptcy case to manual_review instead of decline (see
     :func:`resolve_bankruptcy_policy`). The orchestrator derives it from the
     application (config/flag in, decision out — the engine stays pure).
+
+    ``scorecard`` / ``scorecard_inputs`` (WS-D): when a 5-band scorecard is
+    resolved for the application (per-vendor assignment or the platform
+    default), the banded model REPLACES the legacy 680/600 two-cut for the
+    banding step only — every hard/soft overlay keeps its precedence. With
+    ``scorecard=None`` (the shipped default: no scorecard configured) this
+    function is byte-for-byte the legacy path. V1 LIMIT: co-applicant groups
+    keep the legacy averaging path (a supplied scorecard is ignored for groups
+    — banding averages are not defined for v1; descoped, see PR).
     """
+    use_scorecard = scorecard if not co_applicants else None
+    if scorecard is not None and co_applicants:
+        logger.info(
+            "flow_scorecard_skipped_for_group",
+            application_id=str(getattr(application, "id", None)),
+            scorecard_id=scorecard.id,
+        )
     primary = await _run_single_applicant(
-        application, product, patient, adapters, timeout_seconds, vendor_override
+        application, product, patient, adapters, timeout_seconds, vendor_override,
+        scorecard=use_scorecard, scorecard_inputs=scorecard_inputs,
     )
 
     if not co_applicants:

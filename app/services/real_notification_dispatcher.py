@@ -426,6 +426,25 @@ class RealNotificationDispatcher:
             outcome=outcome,
             magic_link_event_id=issued_event.id,
         )
+        # WS-A comms log (mandate #4): the sign-in message IS a communication,
+        # but its body carries the plaintext code — store the hidden marker
+        # (the on-camera Turnkey behavior for credential-bearing bodies).
+        from app.services import communications_log
+
+        communications_log.record_communication(
+            self.db,
+            channel=contact_method,
+            recipient=recipient,
+            subject="Your PaySpyre verification code",
+            body=communications_log.HIDDEN_BODY,
+            notification_type="magic_link",
+            patient_id=patient_id,
+            application_id=application_id,
+            status=outcome.status,
+            vendor=outcome.vendor,
+            vendor_message_id=outcome.vendor_message_id,
+            source_event_id=issued_event.id,
+        )
         return issued_event.id
 
     def send_notification(
@@ -439,6 +458,9 @@ class RealNotificationDispatcher:
         loan_id: Optional[str] = None,
         correlation_id: Optional[UUID] = None,
         source_event_id: Optional[int] = None,
+        sent_by: str = "system",
+        sent_by_user_id: Optional[UUID] = None,
+        comment: Optional[str] = None,
     ) -> int:
         """Render ``notification_type`` against ``context`` and send it (WS1).
 
@@ -446,28 +468,32 @@ class RealNotificationDispatcher:
         body comes from ``notification_render`` and the audit event carries
         ``notification_type`` / ``source_event_id`` instead of a magic-link id.
 
+        ``sent_by`` / ``sent_by_user_id`` / ``comment`` attribute a staff-
+        initiated send (WS-A cockpit compose) in the communications log;
+        automated callers leave the defaults ('system').
+
         Returns the ``notification_sent`` event id. Raises ``NotificationError``
         on vendor failure (the WS2 processor catches it to decide retry); no
         ``notification_sent`` event lands on failure, matching the magic-link
         rollback semantics.
         """
-        from app.services import notification_render
+        from app.services import communications_log, notification_render
 
         recipient = self._resolve_recipient(patient_id, contact_method)
         self._check_suppression(contact_method, recipient)
 
         if contact_method == "email":
-            subject, html = notification_render.render_email(notification_type, context)
+            subject, body = notification_render.render_email(notification_type, context)
         else:
-            body = notification_render.render_sms(notification_type, context)
+            subject, body = None, notification_render.render_sms(notification_type, context)
 
         sender = self._build_sender(contact_method)
         if contact_method == "email":
-            outcome = sender.send_message(to_email=recipient, subject=subject, html=html)
+            outcome = sender.send_message(to_email=recipient, subject=subject, html=body)
         else:
             outcome = sender.send_message(to_phone=recipient, body=body)
 
-        return self._record_notification_sent(
+        event_id = self._record_notification_sent(
             patient_id=patient_id,
             application_id=application_id,
             contact_method=contact_method,
@@ -478,6 +504,27 @@ class RealNotificationDispatcher:
             correlation_id=correlation_id,
             source_event_id=source_event_id,
         )
+        # WS-A comms log (mandate #4): FULL rendered body, same transaction as
+        # the notification_sent audit event — log and audit commit together.
+        communications_log.record_communication(
+            self.db,
+            channel=contact_method,
+            recipient=recipient,
+            subject=subject,
+            body=body,
+            notification_type=notification_type,
+            patient_id=patient_id,
+            application_id=application_id,
+            loan_id=loan_id,
+            sent_by=sent_by,
+            sent_by_user_id=sent_by_user_id,
+            comment=comment,
+            status=outcome.status,
+            vendor=outcome.vendor,
+            vendor_message_id=outcome.vendor_message_id,
+            source_event_id=event_id,
+        )
+        return event_id
 
     # -- internals ----------------------------------------------------------
 

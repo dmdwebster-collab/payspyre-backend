@@ -42,6 +42,28 @@ class MockNotificationDispatcher:
         # Test-only introspection: plaintext tokens are recorded here, never in a response.
         self._sent: list[dict] = []
 
+    def _lookup_recipient(self, patient_id: UUID, contact_method: str) -> str | None:
+        """Best-effort recipient for the comms log. The mock never resolves a
+        real destination (nothing is sent), so a missing patient/contact is
+        tolerated rather than an error — the log row still lands."""
+        from app.models.platform.patient import PlatformPatient
+
+        try:
+            patient = (
+                self.db.query(PlatformPatient)
+                .filter(PlatformPatient.id == patient_id)
+                .first()
+            )
+        except Exception:  # pragma: no cover - fake sessions in unit tests
+            return None
+        if patient is None:
+            return None
+        if contact_method == "email":
+            return patient.email
+        if contact_method == "sms":
+            return patient.phone_e164
+        return None
+
     def send_magic_link(
         self,
         patient_id: UUID,
@@ -87,6 +109,25 @@ class MockNotificationDispatcher:
         # captures cleanly.
         from app.services.observability.posthog_bridge import capture_event
         capture_event(event)
+        # WS-A comms log (mandate #4): mirror the real dispatcher — the sign-in
+        # message is a communication, but its body carries the plaintext code,
+        # so store the hidden marker (Turnkey's on-camera behavior).
+        from app.services import communications_log
+
+        communications_log.record_communication(
+            self.db,
+            channel=contact_method,
+            recipient=self._lookup_recipient(patient_id, contact_method),
+            subject="Your PaySpyre verification code",
+            body=communications_log.HIDDEN_BODY,
+            notification_type="magic_link",
+            patient_id=patient_id,
+            application_id=application_id,
+            status="sent",
+            vendor="mock",
+            vendor_message_id="mock",
+            source_event_id=event.id,
+        )
         _DEV_PLAINTEXT_CODES[str(application_id)] = token  # dev-only peek (see module note)
         self._sent.append(
             {
@@ -110,13 +151,18 @@ class MockNotificationDispatcher:
         loan_id: str | None = None,
         correlation_id: UUID | None = None,
         source_event_id: int | None = None,
+        sent_by: str = "system",
+        sent_by_user_id: UUID | None = None,
+        comment: str | None = None,
     ) -> int:
         """Mock parity for ``RealNotificationDispatcher.send_notification`` (WS1).
 
         Renders the template (so a missing template / missing context key fails
         in dev + tests exactly as it would in prod), then records a
         ``notification_sent`` event with the rendered subject/preview for
-        introspection instead of calling a vendor.
+        introspection instead of calling a vendor. ``sent_by`` /
+        ``sent_by_user_id`` / ``comment`` attribute staff-initiated sends
+        (WS-A cockpit compose) in the communications log.
         """
         from app.services import notification_render
 
@@ -153,6 +199,29 @@ class MockNotificationDispatcher:
         self.db.flush()
         from app.services.observability.posthog_bridge import capture_event
         capture_event(event)
+        # WS-A comms log (mandate #4): FULL rendered body, same transaction as
+        # the notification_sent event — identical hook to the real dispatcher
+        # so staging/demo (mock mode) produces a real-looking legal log.
+        from app.services import communications_log
+
+        communications_log.record_communication(
+            self.db,
+            channel=contact_method,
+            recipient=self._lookup_recipient(patient_id, contact_method),
+            subject=subject,
+            body=body,
+            notification_type=notification_type,
+            patient_id=patient_id,
+            application_id=application_id,
+            loan_id=loan_id,
+            sent_by=sent_by,
+            sent_by_user_id=sent_by_user_id,
+            comment=comment,
+            status="sent",
+            vendor="mock",
+            vendor_message_id="mock",
+            source_event_id=event.id,
+        )
         self._sent.append(
             {
                 "notification_type": notification_type,

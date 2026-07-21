@@ -47,6 +47,10 @@ class PlatformCreditApplication(Base):
     # Origination context
     vendor_id = Column(UUID(as_uuid=True), ForeignKey("vendors.id"), nullable=True)
     treatment_plan_ref = Column(String, nullable=True)
+    # Branch label (WS-E, migration 059). Dave skipped TL's branch-offices
+    # MODULE ("single-branch reality") but the FIELD stays per the parity
+    # plan's omissions list — imports/UI carry it, the pipeline filters on it.
+    branch = Column(String, nullable=True, index=True)
 
     # =====================================================================
     # VENDOR-ORIGINATED INTAKE (WS-I, migration 052) — Dave's "Application

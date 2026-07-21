@@ -374,6 +374,17 @@ class PatientAuthService:
         )
         self.db.commit()
 
+    def issue_patient_session(self, patient_id: UUID) -> dict:
+        """Re-issue a patient session JWT with the CURRENT app_ids claim.
+
+        Public, additive wrapper over ``_issue_jwt`` for flows that change the
+        patient's application set mid-session (WS-J in-portal new loan): the
+        24h JWT snapshot of ``app_ids`` would otherwise exclude the new
+        application until the next login.
+        """
+        token_str, expires_at = self._issue_jwt(patient_id)
+        return {"jwt": token_str, "expires_at": expires_at.isoformat()}
+
     def _issue_jwt(self, patient_id: UUID) -> tuple[str, datetime]:
         rows = (
             self.db.query(PlatformCreditApplication.id)

@@ -24,7 +24,7 @@ from pydantic import BaseModel, EmailStr
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.auth import require_permission_or_admin, require_roles
+from app.core.auth import require_any_permission_or_admin, require_roles
 from app.core.config import settings
 from app.core.security import create_access_token, get_password_hash
 from app.db.base import get_db
@@ -65,7 +65,14 @@ def mark_loan_signed(loan_id: UUID, db: Session = Depends(get_db)):
 
 @router.post(
     "/hardship/{request_id}/force-sign",
-    dependencies=[Depends(require_permission_or_admin("hardship", "apply"))],
+    # WS-F: hardship/manage umbrella grant OR the legacy hardship/apply grant.
+    dependencies=[
+        Depends(
+            require_any_permission_or_admin(
+                ("hardship", "manage"), ("hardship", "apply")
+            )
+        )
+    ],
 )
 def force_sign_hardship(request_id: UUID, db: Session = Depends(get_db)):
     """DEV/staging: substitute for the borrower's e-signature on a hardship

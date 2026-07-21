@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status as http_sta
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.core.auth import get_current_user, require_roles
+from app.core.auth import get_current_user, require_roles, user_has_permission_or_admin
 from app.db.base import get_db
 from app.models.loan import Vendor
 from app.models.platform.credit_application import PlatformCreditApplication
@@ -548,8 +548,24 @@ def add_custom_transaction(
 ):
     """Add a one-off custom scheduled transaction (date / amount / repayment
     mode) layered on top of the plan — the amortization schedule is untouched.
-    Audited."""
+    Audited.
+
+    WS-I: a PAST ``scheduled_date`` is a permission-bounded backdate — it
+    requires the ``ledger.backdate`` permission (admin implicitly allowed) and
+    is bounded to loan_ledger.BACKDATE_WINDOW_DAYS days back inside the
+    service; the audit event carries ``backdated: true``."""
     loan = _get_loan_for_surgery(db, loan_id)
+    allow_backdate = False
+    if body.scheduled_date < date.today():
+        if not user_has_permission_or_admin(user, "ledger", "backdate"):
+            raise HTTPException(
+                status_code=http_status.HTTP_403_FORBIDDEN,
+                detail=(
+                    "backdating a custom transaction requires the "
+                    "ledger.backdate permission"
+                ),
+            )
+        allow_backdate = True
     try:
         row = schedule_surgery.add_custom_transaction(
             db,
@@ -559,6 +575,7 @@ def add_custom_transaction(
             repayment_mode=body.repayment_mode,
             comment=body.comment,
             actor=_actor_id(user),
+            allow_backdate=allow_backdate,
         )
     except schedule_surgery.ScheduleSurgeryError as exc:
         raise HTTPException(status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))

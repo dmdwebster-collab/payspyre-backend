@@ -216,6 +216,14 @@ class Settings(BaseSettings):
     HISTORY_AGE_OF_MAJORITY_YEARS: int = 18
     HISTORY_GAP_TOLERANCE_DAYS: int = 31
 
+    # --- Multi-offer approvals (WS-D, Turnkey parity video 02) ---------------
+    # An underwriter may create up to OFFER_MAX_PER_APPLICATION open offers per
+    # application; unaccepted offers expire OFFER_EXPIRY_DAYS after creation.
+    # Turnkey's values (3 / 30d) kept per GAP_ANALYSIS open question #4 —
+    # config-driven so Dave can retune without a code change.
+    OFFER_MAX_PER_APPLICATION: int = 3
+    OFFER_EXPIRY_DAYS: int = 30
+
     # CORS
     CORS_ORIGINS: str = "http://localhost:3000,https://payspyre.com"
 
@@ -245,6 +253,12 @@ class Settings(BaseSettings):
     SUPPORT_EMAIL: str = "support@payspyre.com"
     COMPANY_PHONE: str = ""  # rendered only when set
 
+    # WS-F granular permissions: how many days in the past a transaction may be
+    # backdated (received_at) by a holder of the transactions/backdate grant.
+    # The bound applies to admins too — older postings need a data-migration
+    # path, not a servicing write.
+    TRANSACTION_BACKDATE_WINDOW_DAYS: int = 30
+
     RESEND_API_KEY: str = ""
     RESEND_FROM_EMAIL: str = "noreply@payspyre.com"
 
@@ -257,6 +271,14 @@ class Settings(BaseSettings):
     TWILIO_ACCOUNT_SID: str = ""
     TWILIO_AUTH_TOKEN: str = ""
     TWILIO_FROM_NUMBER: str = ""
+
+    # WS-H profit-split reporting: vendor revenue-share overrides by product
+    # funding_source, as a JSON map of bps (10000 = 100% to the vendor), e.g.
+    # '{"clinic_self": 8500, "hybrid": 5000}'. Empty → the structural defaults
+    # in app/services/metrics/reports_depth.py (clinic_self → vendor, else
+    # PaySpyre). Values here are Dave's call — reporting only, never money
+    # movement.
+    PROFIT_SPLIT_VENDOR_SHARE_BPS: str = ""
 
     # Where "a clinic sent PaySpyre a message" pings go (the ops inbox that
     # replaced the shared Slack channel). Empty → those pings are skipped

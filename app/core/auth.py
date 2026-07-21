@@ -98,6 +98,58 @@ def require_permission(resource: str, action: str):
     return permission_checker
 
 
+def user_has_permission(user, resource: str, action: str) -> bool:
+    """True if any of the user's roles grants (resource, action). Does NOT
+    include the implicit-admin allowance — callers add that where policy says."""
+    for user_role in getattr(user, "roles", []):
+        for role_perm in user_role.role.permissions:
+            perm = role_perm.permission
+            if perm.resource == resource and perm.action == action:
+                return True
+    return False
+
+
+def user_has_permission_or_admin(user, resource: str, action: str) -> bool:
+    """Non-dependency form of ``require_permission_or_admin`` for CONDITIONAL
+    gates — where the permission is only needed for some request shapes (e.g.
+    a backdated effective_date needs ``ledger.backdate``; a same-day one
+    doesn't). Same semantics: admin is implicitly allowed everywhere."""
+    user_roles = {user_role.role.name for user_role in getattr(user, "roles", [])}
+    if "admin" in user_roles:
+        return True
+    for user_role in getattr(user, "roles", []):
+        for role_perm in user_role.role.permissions:
+            perm = role_perm.permission
+            if perm.resource == resource and perm.action == action:
+                return True
+    return False
+
+
+def user_is_admin(user) -> bool:
+    return "admin" in {ur.role.name for ur in getattr(user, "roles", [])}
+
+
+def require_any_permission_or_admin(*pairs: tuple):
+    """Like :func:`require_permission_or_admin`, but accepts ANY of several
+    (resource, action) grants — used where a new umbrella permission (e.g.
+    ``hardship/manage``, WS-F) supersedes narrower legacy grants
+    (``hardship/create``) without revoking them."""
+
+    def permission_checker(current_user=Depends(get_current_user)):
+        if user_is_admin(current_user):
+            return current_user
+        for resource, action in pairs:
+            if user_has_permission(current_user, resource, action):
+                return current_user
+        wanted = ", ".join(f"{a} on {r}" for r, a in pairs)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"User does not have any of the required permissions: {wanted}",
+        )
+
+    return permission_checker
+
+
 def require_permission_or_admin(resource: str, action: str):
     """Permission gate with an implicit admin allowance (WS-J hardship model).
 

@@ -63,24 +63,41 @@ def _ratio(num: int | None, den: int | None) -> float | None:
 
 
 class ReportFilters:
-    """Parsed, validated report filters — passed by Depends into each report."""
+    """Parsed, validated report filters — passed by Depends into each report.
+
+    ``vendor_ids`` is Dave's most-repeated video-05 ask: multi-select vendor
+    checkboxes with a multi-location rollup ("Dr. Webster in all of his
+    locations… select those three vendor accounts and have a total report").
+    It combines with the pre-existing single ``vendor_id`` into one
+    de-duplicated scope, so every existing caller keeps working.
+    """
 
     def __init__(
         self,
         interval: str = Query("monthly", description="daily|weekly|monthly|quarterly|annually"),
         vendor_id: Optional[UUID] = Query(None, description="Scope to one vendor (provider drill)"),
+        vendor_ids: Optional[list[UUID]] = Query(
+            None,
+            description="Multi-select vendor scope (repeat the param); rolls the "
+            "selected vendors up into one report. Combines with vendor_id.",
+        ),
         province: Optional[str] = Query(None, description="Scope to one province (vendor province)"),
         periods: int = Query(12, ge=1, le=60, description="Trendline periods to return"),
     ):
         self.interval = R.valid_interval(interval)
         self.trunc = R.interval_trunc_field(self.interval)
         self.vendor_id = vendor_id
+        ids: list[UUID] = list(vendor_ids or [])
+        if vendor_id is not None and vendor_id not in ids:
+            ids.append(vendor_id)
+        # None = all vendors; else the de-duplicated multi-select rollup scope.
+        self.vendor_scope: Optional[tuple[UUID, ...]] = tuple(dict.fromkeys(ids)) or None
         self.province = province
         self.periods = periods
 
     @property
     def needs_app_join(self) -> bool:
-        return self.vendor_id is not None or self.province is not None
+        return self.vendor_scope is not None or self.province is not None
 
 
 def _scope_loans(q: SAQuery, f: ReportFilters) -> SAQuery:
@@ -92,8 +109,8 @@ def _scope_loans(q: SAQuery, f: ReportFilters) -> SAQuery:
     if f.needs_app_join:
         q = q.join(PlatformCreditApplication,
                    PlatformLoan.application_id == PlatformCreditApplication.id)
-        if f.vendor_id is not None:
-            q = q.filter(PlatformCreditApplication.vendor_id == f.vendor_id)
+        if f.vendor_scope is not None:
+            q = q.filter(PlatformCreditApplication.vendor_id.in_(f.vendor_scope))
         if f.province is not None:
             q = q.join(Vendor, PlatformCreditApplication.vendor_id == Vendor.id)
             q = q.filter(Vendor.province == f.province)
@@ -102,8 +119,8 @@ def _scope_loans(q: SAQuery, f: ReportFilters) -> SAQuery:
 
 def _scope_apps(q: SAQuery, f: ReportFilters) -> SAQuery:
     """Apply vendor/province scope to a query selecting from PlatformCreditApplication."""
-    if f.vendor_id is not None:
-        q = q.filter(PlatformCreditApplication.vendor_id == f.vendor_id)
+    if f.vendor_scope is not None:
+        q = q.filter(PlatformCreditApplication.vendor_id.in_(f.vendor_scope))
     if f.province is not None:
         q = q.join(Vendor, PlatformCreditApplication.vendor_id == Vendor.id)
         q = q.filter(Vendor.province == f.province)
@@ -137,31 +154,34 @@ class PortfolioSummary(BaseModel):
 
 
 @router.get("/portfolio", response_model=PortfolioSummary)
-def portfolio(db: Session = Depends(get_db)):
-    originated_count, originated_principal = db.query(
+def portfolio(f: ReportFilters = Depends(), db: Session = Depends(get_db)):
+    originated_count, originated_principal = _scope_loans(db.query(
         func.count(PlatformLoan.id), func.coalesce(func.sum(PlatformLoan.principal_cents), 0)
-    ).one()
+    ), f).one()
 
-    outstanding, active_loans, wapr_num = db.query(
+    outstanding, active_loans, wapr_num = _scope_loans(db.query(
         func.coalesce(func.sum(PlatformLoan.principal_balance_cents), 0),
         func.count(PlatformLoan.id),
         func.coalesce(func.sum(PlatformLoan.principal_balance_cents * PlatformLoan.annual_rate_bps), 0),
-    ).filter(PlatformLoan.status.in_(_LIVE)).one()
+    ).filter(PlatformLoan.status.in_(_LIVE)), f).one()
 
-    delinquent_principal = db.query(
+    delinquent_principal = _scope_loans(db.query(
         func.coalesce(func.sum(PlatformLoan.principal_balance_cents), 0)
-    ).filter(PlatformLoan.status == "delinquent").scalar()
+    ).filter(PlatformLoan.status == "delinquent"), f).scalar()
 
-    co_count, co_principal = db.query(
+    co_count, co_principal = _scope_loans(db.query(
         func.count(PlatformLoan.id), func.coalesce(func.sum(PlatformLoan.principal_cents), 0)
-    ).filter(PlatformLoan.status == "charged_off").one()
+    ).filter(PlatformLoan.status == "charged_off"), f).one()
 
-    paid_off = db.query(func.count(PlatformLoan.id)).filter(PlatformLoan.status == "paid_off").scalar()
-    avg_size = db.query(func.avg(PlatformLoan.principal_cents)).scalar()
+    paid_off = _scope_loans(
+        db.query(func.count(PlatformLoan.id)).filter(PlatformLoan.status == "paid_off"), f
+    ).scalar()
+    avg_size = _scope_loans(db.query(func.avg(PlatformLoan.principal_cents)), f).scalar()
 
     by_status = {
-        s: c for s, c in db.query(PlatformLoan.status, func.count(PlatformLoan.id))
-        .group_by(PlatformLoan.status).all()
+        s: c for s, c in _scope_loans(
+            db.query(PlatformLoan.status, func.count(PlatformLoan.id)), f
+        ).group_by(PlatformLoan.status).all()
     }
 
     return PortfolioSummary(
@@ -193,12 +213,12 @@ class VintageCohort(BaseModel):
 
 
 @router.get("/vintage", response_model=list[VintageCohort])
-def vintage(db: Session = Depends(get_db)):
+def vintage(f: ReportFilters = Depends(), db: Session = Depends(get_db)):
     """Origination cohorts by month — the vintage curve of how each book ages."""
     month = func.to_char(func.date_trunc("month", _ORIG), "YYYY-MM")
     is_co = PlatformLoan.status == "charged_off"
     rows = (
-        db.query(
+        _scope_loans(db.query(
             month.label("cohort"),
             func.count(PlatformLoan.id),
             func.coalesce(func.sum(PlatformLoan.principal_cents), 0),
@@ -207,7 +227,7 @@ def vintage(db: Session = Depends(get_db)):
             func.coalesce(func.sum(case((is_co, 1), else_=0)), 0),
             func.coalesce(func.sum(case((is_co, PlatformLoan.principal_cents), else_=0)), 0),
             func.coalesce(func.sum(case((PlatformLoan.status == "delinquent", 1), else_=0)), 0),
-        )
+        ), f)
         .group_by("cohort")
         .order_by("cohort")
         .all()
@@ -230,13 +250,15 @@ class OriginationPoint(BaseModel):
 
 
 @router.get("/originations", response_model=list[OriginationPoint])
-def originations(months: int = 12, db: Session = Depends(get_db)):
+def originations(months: int = 12, f: ReportFilters = Depends(), db: Session = Depends(get_db)):
     """Monthly origination trend (funded count + volume), most recent last."""
     month = func.to_char(func.date_trunc("month", _ORIG), "YYYY-MM")
     rows = (
-        db.query(month.label("m"), func.count(PlatformLoan.id),
-                 func.coalesce(func.sum(PlatformLoan.principal_cents), 0))
-        .group_by("m").order_by("m").all()
+        _scope_loans(
+            db.query(month.label("m"), func.count(PlatformLoan.id),
+                     func.coalesce(func.sum(PlatformLoan.principal_cents), 0)),
+            f,
+        ).group_by("m").order_by("m").all()
     )
     points = [OriginationPoint(month=m, count=n, principal_cents=int(p)) for m, n, p in rows]
     return points[-months:] if months and months > 0 else points
@@ -250,22 +272,32 @@ class CeiPoint(BaseModel):
 
 
 @router.get("/cei", response_model=list[CeiPoint])
-def cei(months: int = 6, db: Session = Depends(get_db)):
+def cei(months: int = 6, f: ReportFilters = Depends(), db: Session = Depends(get_db)):
     """Collection-effectiveness proxy per month: payments collected vs amount due."""
     today = datetime.now(timezone.utc).date()
     # First-of-month, `months` back.
     start_month = (today.replace(day=1) - timedelta(days=31 * max(months - 1, 0))).replace(day=1)
 
     pay_m = func.to_char(func.date_trunc("month", PlatformLoanPayment.received_at), "YYYY-MM")
-    collected = {
-        m: int(v) for m, v in db.query(pay_m, func.coalesce(func.sum(PlatformLoanPayment.amount_cents), 0))
-        .filter(PlatformLoanPayment.received_at >= start_month).group_by(pay_m).all()
-    }
+    pay_q = (
+        db.query(pay_m, func.coalesce(func.sum(PlatformLoanPayment.amount_cents), 0))
+        .filter(PlatformLoanPayment.received_at >= start_month)
+    )
+    if f.needs_app_join:
+        pay_q = _scope_loans(
+            pay_q.join(PlatformLoan, PlatformLoanPayment.loan_id == PlatformLoan.id), f
+        )
+    collected = {m: int(v) for m, v in pay_q.group_by(pay_m).all()}
     due_m = func.to_char(func.date_trunc("month", PlatformLoanScheduleItem.due_date), "YYYY-MM")
-    due = {
-        m: int(v) for m, v in db.query(due_m, func.coalesce(func.sum(PlatformLoanScheduleItem.total_cents), 0))
-        .filter(PlatformLoanScheduleItem.due_date >= start_month).group_by(due_m).all()
-    }
+    due_q = (
+        db.query(due_m, func.coalesce(func.sum(PlatformLoanScheduleItem.total_cents), 0))
+        .filter(PlatformLoanScheduleItem.due_date >= start_month)
+    )
+    if f.needs_app_join:
+        due_q = _scope_loans(
+            due_q.join(PlatformLoan, PlatformLoanScheduleItem.loan_id == PlatformLoan.id), f
+        )
+    due = {m: int(v) for m, v in due_q.group_by(due_m).all()}
 
     out = []
     for m in sorted(set(collected) | set(due)):
@@ -645,8 +677,8 @@ def report_operational(f: ReportFilters = Depends(), db: Session = Depends(get_d
         .join(PlatformCreditApplication, PlatformLoan.application_id == PlatformCreditApplication.id)
         .filter(PlatformLoan.status.in_(_FUNDED))
     )
-    if f.vendor_id is not None:
-        q = q.filter(PlatformCreditApplication.vendor_id == f.vendor_id)
+    if f.vendor_scope is not None:
+        q = q.filter(PlatformCreditApplication.vendor_id.in_(f.vendor_scope))
     if f.province is not None:
         q = q.join(Vendor, PlatformCreditApplication.vendor_id == Vendor.id).filter(
             Vendor.province == f.province)
@@ -891,8 +923,8 @@ def report_underwriting(f: ReportFilters = Depends(), db: Session = Depends(get_
                   PlatformLoan.application_id == PlatformCreditApplication.id)
             .filter(cond)
         )
-        if f.vendor_id is not None:
-            loan_q = loan_q.filter(PlatformCreditApplication.vendor_id == f.vendor_id)
+        if f.vendor_scope is not None:
+            loan_q = loan_q.filter(PlatformCreditApplication.vendor_id.in_(f.vendor_scope))
         if f.province is not None:
             loan_q = loan_q.join(Vendor, PlatformCreditApplication.vendor_id == Vendor.id).filter(
                 Vendor.province == f.province)

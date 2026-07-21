@@ -5,17 +5,34 @@ from app.core.config import settings
 from app.api.v1.endpoints import (
     admin_actions,
     admin_analytics,
+    admin_analytics_depth,
     admin_applications,
+    admin_archive,
     admin_audit,
+    admin_blacklist,
+    admin_bureau_reporting,
+    admin_borrower_security,
     admin_collections,
+    admin_communications,
+    admin_collections_work,
     admin_config,
+    admin_crm_customers,
+    admin_crm_vendors,
     admin_dashboard,
     admin_decision_reasons,
+    admin_document_templates,
+    admin_flags,
     admin_hardship,
     admin_import,
+    admin_loan_documents,
     admin_loans,
     admin_messages,
+    admin_offers,
+    admin_originations,
+    admin_report_builder,
     admin_report_exports,
+    admin_scorecards,
+    admin_settings,
     admin_system,
     admin_vendor_changes,
     auth,
@@ -40,31 +57,91 @@ api_router.include_router(
 # Whole-book reads, admin/staff gated (audit is admin-only). Mounted under /admin/*.
 api_router.include_router(admin_dashboard.router, prefix="/admin/dashboard", tags=["admin-cockpit"])
 api_router.include_router(admin_applications.router, prefix="/admin/applications", tags=["admin-cockpit"])
+# WS-E originations-admin depth: field-level editing w/ change log, staff offer
+# editing (PricingConfig bounds), header + profile photo, co-borrower linking.
+api_router.include_router(
+    admin_originations.router, prefix="/admin/applications", tags=["admin-originations"]
+)
+# WS-E customer/loan flags: directory CRUD + raise/clear; suppress-notifications
+# flags gate the notification processor's vendor sends.
+api_router.include_router(admin_flags.router, prefix="/admin", tags=["admin-flags"])
 api_router.include_router(admin_loans.router, prefix="/admin/loans", tags=["admin-cockpit"])
 # WS-J — Hardship v1 (deferment / due-date change; e-sign gated). Deliberately
 # NOT plain-staff: requires the dedicated hardship/create permission (admin
 # implicitly allowed) — Dave's "user-defined availability" mandate.
 api_router.include_router(admin_hardship.router, prefix="/admin/loans", tags=["admin-hardship"])
+# WS-B — per-loan generated documents (agreement/PAD/schedules/statements) +
+# versioned system-document templates w/ merge-field engine (Turnkey parity).
+api_router.include_router(admin_loan_documents.router, prefix="/admin/loans", tags=["admin-documents"])
+api_router.include_router(
+    admin_document_templates.router, prefix="/admin/document-templates", tags=["admin-documents"]
+)
 api_router.include_router(admin_collections.router, prefix="/admin/collections", tags=["admin-cockpit"])
+# WS-C — collections work-surface: collector assignment (bulk + tiers), action
+# plans, promise-to-pay, header math, segregated insolvency portfolio.
+api_router.include_router(
+    admin_collections_work.router, prefix="/admin/collections", tags=["admin-collections"]
+)
+api_router.include_router(
+    admin_collections_work.admin_router,
+    prefix="/admin/collections",
+    tags=["admin-collections"],
+)
 # Vendor⇄PaySpyre application messaging (in-app Slack replacement), whole-book.
 api_router.include_router(admin_messages.router, prefix="/admin", tags=["admin-messages"])
+# WS-A — communications hub: append-only legal comms log (full message bodies,
+# Dave mandate #4) + staff templated email/SMS send + offline contact log.
+api_router.include_router(
+    admin_communications.router,
+    prefix="/admin/communications",
+    tags=["admin-communications"],
+)
 api_router.include_router(admin_audit.router, prefix="/admin/audit", tags=["admin-cockpit"])
+api_router.include_router(admin_archive.router, prefix="/admin/archive", tags=["admin-archive"])
+api_router.include_router(admin_blacklist.router, prefix="/admin/blacklist", tags=["admin-blacklist"])
+api_router.include_router(
+    admin_bureau_reporting.router, prefix="/admin/bureau-reporting", tags=["admin-bureau-reporting"]
+)
 # Phase 2 — write actions (decision/payment/payoff) + maker-checker (charge-off/disburse).
 api_router.include_router(admin_actions.router, prefix="/admin", tags=["admin-actions"])
 # Turnkey cutover import (P0 WS-D) — CSV upload -> preview -> confirm, admin-only.
 api_router.include_router(admin_import.router, prefix="/admin/import", tags=["admin-import"])
 # Phase 4 — advanced portfolio analytics (vintage / originations / CEI). Read-only.
 api_router.include_router(admin_analytics.router, prefix="/admin/analytics", tags=["admin-analytics"])
+# WS-H reports depth — profit split / buckets+debt-roll / overrides / AI-decisioning / geo.
+api_router.include_router(admin_analytics_depth.router, prefix="/admin/analytics", tags=["admin-analytics"])
 # Turnkey-parity XLSX report downloads (Dave's TL Smart Marker templates). Read-only.
 api_router.include_router(admin_report_exports.router, prefix="/admin/reports", tags=["admin-reports"])
+# WS-H — Excel report builder v1 + scheduled reports engine (definitions / schedules).
+api_router.include_router(admin_report_builder.router, prefix="/admin/reports", tags=["admin-reports"])
 # Phase 3 — config surfaces (RBAC visibility). Products reuse /credit-products. Read-only, admin.
 api_router.include_router(admin_config.router, prefix="/admin/config", tags=["admin-config"])
+# WS-F — settings suite (decision rules / company info / business calendar /
+# notification matrix). Admin-only, audited writes.
+api_router.include_router(admin_settings.router, prefix="/admin/settings", tags=["admin-settings"])
 # WS-E — reject/cancel decision-reason directory (admin CRUD, soft-deactivate only).
 api_router.include_router(
     admin_decision_reasons.router, prefix="/admin/decision-reasons", tags=["admin-config"]
 )
+# WS-D — multi-offer approvals ("Create Loan Offers") + AI bank-statement analysis.
+# Books NO loan on create; the borrower's acceptance (applicant API) books it.
+api_router.include_router(admin_offers.router, prefix="/admin", tags=["admin-offers"])
+# WS-D — editable 5-band verified-data scorecards + per-vendor assignment (mandate #3).
+api_router.include_router(admin_scorecards.router, prefix="/admin/scorecards", tags=["admin-scorecards"])
 # System mode (Simulation vs Live) — read-only, admin/staff, for the cockpit banner.
 api_router.include_router(admin_system.router, prefix="/admin/system", tags=["admin-system"])
+# WS-G — Vendor + Customer CRM. Vendor CRM: industry categories, contacts, bank
+# accounts (masked), MSA docs w/ expiry alerts, onboarding, 9-role matrix,
+# chain + portfolio. Customer CRM: cross-loan view, lock/block, changelog.
+api_router.include_router(admin_crm_vendors.router, prefix="/admin/crm", tags=["admin-crm-vendors"])
+api_router.include_router(
+    admin_crm_customers.router, prefix="/admin/crm/customers", tags=["admin-crm-customers"]
+)
+# WS-J borrower-portal depth, staff-only halves: audited ID-document reads,
+# bank-account add/remove, per-patient 2FA enforcement, payout-request queue.
+api_router.include_router(
+    admin_borrower_security.router, prefix="/admin", tags=["admin-borrower-security"]
+)
 # Embedded pre-qual widget intake (server-to-server, X-Widget-Key gated; inert until
 # WIDGET_API_KEY is set). Turns the widget's pre-qual into a real application.
 from app.api.v1.endpoints import widget_intake  # noqa: E402

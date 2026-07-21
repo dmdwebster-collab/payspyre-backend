@@ -272,6 +272,30 @@ def mark_cancelled(application: PlatformCreditApplication) -> None:
     application.status_updated_at = datetime.now(timezone.utc)
 
 
+def mark_approved(application: PlatformCreditApplication) -> None:
+    """Approve the application — the multi-offer approval path (WS-D).
+
+    Status transitions are owned by this module (see the note above); the
+    multi-offer create/accept flow calls this instead of assigning
+    ``application.status`` itself. Intentionally unconditional (the caller guards
+    the source state), matching the single-decision approve path: it may
+    re-affirm an already-``approved`` file when an offer is accepted.
+    """
+    application.status = "approved"
+    application.status_updated_at = datetime.now(timezone.utc)
+
+
+def mark_offers_expired(application: PlatformCreditApplication) -> None:
+    """Expire the application after all its outstanding offers lapsed (WS-D).
+
+    The offer-expiry sweep owns the surrounding guard (no booked loan, all
+    offers past their 30-day window); this only performs the status write so it
+    stays within the orchestrator's ownership of ``application.status``.
+    """
+    application.status = "expired"
+    application.status_updated_at = datetime.now(timezone.utc)
+
+
 class FlowOrchestrator:
     def __init__(
         self,
@@ -902,6 +926,14 @@ class FlowOrchestrator:
 
         product = self._get_product(application.credit_product_id)
         decision_product = self._decision_product_view(application, product)
+        # WS-F decision-rules directory overlay: admin-edited WIRED rules
+        # (bureau score band / bankruptcy discharge years) override the snapshot
+        # thresholds. NO-OP unless an admin edited a wired rule — returns the
+        # same object otherwise (pinned by tests); any directory failure falls
+        # back to the snapshot.
+        from app.services import decision_rules as _decision_rules
+
+        decision_product = _decision_rules.apply_overlay(self.db, decision_product)
         patient = (
             self.db.query(PlatformPatient)
             .filter(PlatformPatient.id == application.patient_id)
@@ -923,22 +955,72 @@ class FlowOrchestrator:
         # (never an auto-approve). Derived here so the engine stays pure
         # (flag in, decision out). Set by the vendor-origination path (WS-I).
         vendor_override = bool((application.flow_state or {}).get("vendor_override"))
+        # WS-D: resolve the governing 5-band scorecard (vendor assignment →
+        # platform default → None). None = the legacy 680/600 path, unchanged —
+        # a fresh install has no scorecard rows, so default decisions are
+        # identical to before. Inputs come from the SAME stored verification
+        # results the replay adapters use (verified data only, never
+        # self-reported). A malformed scorecard row must never block a decision:
+        # fall back to the legacy path and log.
+        from app.services import scorecards as scorecards_svc
+
+        scorecard_ref = None
+        scorecard_inputs = None
+        try:
+            scorecard_ref = scorecards_svc.resolve_for_application(self.db, application)
+        except Exception as exc:  # noqa: BLE001 — decision integrity over scorecard config
+            logger.error(
+                "scorecard_resolution_failed",
+                application_id=str(application.id),
+                error=str(exc),
+            )
+        if scorecard_ref is not None:
+            scorecard_inputs = scorecards_svc.build_verified_inputs(stored)
         flow_decision: FlowDecision = asyncio.run(
             run_flow(
                 application, decision_product, profile, adapters,
                 vendor_override=vendor_override,
+                scorecard=scorecard_ref,
+                scorecard_inputs=scorecard_inputs,
             )
         )
 
+        # WS-I blacklist screen (Tools → Blacklists parity). Policy (pure,
+        # pinned in blacklists.apply_screen): a match on a suspicious
+        # phone/email/name/etc. FLAGS the file — an auto-APPROVE is downgraded
+        # to manual review so a human looks first; a match NEVER auto-declines
+        # and never worsens a non-approve outcome. Local import (flow_orchestrator
+        # module-import idiom for optional/late deps).
+        from app.services import blacklists
+
+        blacklist_matches = blacklists.screen_application(
+            self.db, application, patient=patient
+        )
+        screen = blacklists.apply_screen(
+            flow_decision.decision,
+            flow_decision.next_state,
+            list(flow_decision.decision_reasons),
+            blacklist_matches,
+        )
+        if screen.flagged:
+            blacklists.emit_match_event(
+                self.db, application, blacklist_matches, downgraded=screen.downgraded
+            )
+
         before_status = application.status
         decision_summary = {
-            "decision": flow_decision.decision,
-            "decision_reasons": flow_decision.decision_reasons,
+            "decision": screen.decision,
+            "decision_reasons": list(screen.decision_reasons),
             "verifications_performed": flow_decision.verifications_performed,
-            "next_state": flow_decision.next_state,
+            "next_state": screen.next_state,
         }
+        # WS-D: persist the scorecard band + per-band limit/rate on the decision
+        # record so underwriters see WHY (and offer creation can honor the
+        # band's limit/rate). Absent on the legacy path — payload unchanged.
+        if flow_decision.scorecard_result is not None:
+            decision_summary["scorecard"] = flow_decision.scorecard_result
         # next_state is the valid status enum value (manual_review → under_review).
-        application.status = flow_decision.next_state
+        application.status = screen.next_state
         application.status_updated_at = datetime.now(timezone.utc)
         application.decision = decision_summary
         application.decision_at = datetime.now(timezone.utc)
@@ -959,13 +1041,13 @@ class FlowOrchestrator:
             actor_id="system",
             application=application,
             before={"status": before_status},
-            after={"status": application.status, "decision": flow_decision.decision},
+            after={"status": application.status, "decision": screen.decision},
             rich_payload={"flow_decision": flow_decision.to_dict()},
         )
         self.db.flush()
         from app.services.metrics.platform_metrics import record_decision
 
-        record_decision(product.code, flow_decision.decision)
+        record_decision(product.code, screen.decision)
         # P9.x — LMS hand-off: when approved, book the loan now (DB, in-txn) but DEFER
         # the e-sign invite. book_loan persists the loan + amortization schedule with
         # the decision, so it stays inside this unit-of-work; it never makes a vendor
@@ -1010,7 +1092,7 @@ class FlowOrchestrator:
         logger.info(
             "decision_made",
             application_id=str(application.id),
-            decision=flow_decision.decision,
+            decision=screen.decision,
             status=application.status,
         )
         return decision_summary

@@ -150,6 +150,13 @@ class Vendor(Base):
     license_number = Column(String(100), nullable=True)
     license_expiry = Column(DateTime, nullable=True)
 
+    # CRM (WS-G, migration 061): industry-category directory link.
+    industry_category_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("platform_industry_categories.id"),
+        nullable=True,
+    )
+
     # Status
     status = Column(
         Enum("pending", "active", "suspended", "terminated", name="vendor_status"),

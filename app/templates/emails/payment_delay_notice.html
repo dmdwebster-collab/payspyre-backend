@@ -1,0 +1,31 @@
+{% extends "_base.html" %}
+{# WS-F business calendar: the borrower's due date lands on a statutory holiday
+   (or admin-configured closure), so banks may process the electronic payment on
+   the next business day. Proactive notice so a delayed pull is never mistaken
+   for a missed payment (Dave's manual workflow, automated).
+   Context (app/services/business_calendar.py::queue_payment_delay_notices):
+   borrower_name, loan_id, payment_amount, due_date, holiday_name,
+   processing_date, payment_url, account_url. #}
+{% block title %}Payment Processing Notice{% endblock %}
+{% block header_title %}Payment Processing Notice{% endblock %}
+{% block header_subtitle %}<p>Your due date falls on a bank holiday</p>{% endblock %}
+{% block content %}
+    <div class="info-box">
+        <p><strong>Loan ID:</strong> {{ loan_id }}</p>
+    </div>
+
+    <p>Hi {{ borrower_name }},</p>
+
+    <p>Your scheduled payment of <b>{{ payment_amount }}</b> is due on
+    <b>{{ due_date }}</b>, which falls on <b>{{ holiday_name }}</b>. Banks do
+    not process electronic payments on statutory holidays, so your payment may
+    be processed on the next business day, <b>{{ processing_date }}</b>.</p>
+
+    <p><b>No action is required</b> — your payment is not late, and this delay
+    will not affect your account standing or payment schedule.</p>
+
+    <p>You can view your repayment schedule any time on your
+    <a href="{{ dashboard_url }}">dashboard</a>.</p>
+
+    <a href="{{ account_url }}" class="button">View your dashboard</a>
+{% endblock %}

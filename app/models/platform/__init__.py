@@ -33,12 +33,60 @@ from app.models.platform.profile_change_request import (
 from app.models.platform.notification_outbox import PlatformNotificationOutbox
 from app.models.platform.notification_cursor import PlatformNotificationCursor
 from app.models.platform.notification_rule import PlatformNotificationRule
+from app.models.platform.decision_rule import PlatformDecisionRule
+from app.models.platform.company_info import PlatformCompanyInfo
+from app.models.platform.business_calendar import PlatformBusinessCalendarOverride
 from app.models.platform.decision_reason import PlatformDecisionReason
 from app.models.platform.import_batch import PlatformImportBatch
 from app.models.platform.hardship import PlatformHardshipRequest
 from app.models.platform.message import (
     PlatformApplicationMessage,
     PlatformApplicationMessageRead,
+)
+from app.models.platform.communication import PlatformCommunicationLog
+from app.models.platform.document_template import (
+    PlatformDocumentTemplate,
+    PlatformLoanDocument,
+)
+from app.models.platform.collections_work import (
+    PlatformCollectorAssignment,
+    PlatformCollectionActionType,
+    PlatformCollectionAction,
+    PlatformPromiseToPay,
+    PlatformInsolvencyMaintenanceFee,
+)
+from app.models.platform.loan_offer import PlatformLoanOffer
+from app.models.platform.scorecard import (
+    PlatformScorecard,
+    PlatformVendorScorecard,
+)
+from app.models.platform.flag import (
+    PlatformFlagAssignment,
+    PlatformFlagDefinition,
+)
+from app.models.platform.crm import (
+    PlatformClinicRole,
+    PlatformCustomerBlock,
+    PlatformCustomerBlockReason,
+    PlatformIndustryCategory,
+    PlatformVendorBankAccount,
+    PlatformVendorContact,
+    PlatformVendorDocument,
+    PlatformVendorDocumentExpiryAlert,
+    PlatformVendorOnboarding,
+)
+from app.models.platform.report_schedule import (
+    PlatformReportDefinition,
+    PlatformReportSchedule,
+    PlatformReportScheduleRun,
+)
+from app.models.platform.blacklist import PlatformBlacklistEntry
+from app.models.platform.bureau_batch import PlatformBureauBatch
+from app.models.platform.borrower_portal import (
+    PlatformPatientSecondFactor,
+    PlatformPatientBankAccount,
+    PlatformPatientIdDocument,
+    PlatformPayoutRequest,
 )
 
 __all__ = [
@@ -69,9 +117,43 @@ __all__ = [
     "PlatformNotificationOutbox",
     "PlatformNotificationCursor",
     "PlatformNotificationRule",
+    "PlatformDecisionRule",
+    "PlatformCompanyInfo",
+    "PlatformBusinessCalendarOverride",
     "PlatformDecisionReason",
     "PlatformImportBatch",
     "PlatformHardshipRequest",
     "PlatformApplicationMessage",
     "PlatformApplicationMessageRead",
+    "PlatformCommunicationLog",
+    "PlatformDocumentTemplate",
+    "PlatformLoanDocument",
+    "PlatformCollectorAssignment",
+    "PlatformCollectionActionType",
+    "PlatformCollectionAction",
+    "PlatformPromiseToPay",
+    "PlatformInsolvencyMaintenanceFee",
+    "PlatformLoanOffer",
+    "PlatformScorecard",
+    "PlatformVendorScorecard",
+    "PlatformFlagAssignment",
+    "PlatformFlagDefinition",
+    "PlatformClinicRole",
+    "PlatformCustomerBlock",
+    "PlatformCustomerBlockReason",
+    "PlatformIndustryCategory",
+    "PlatformVendorBankAccount",
+    "PlatformVendorContact",
+    "PlatformVendorDocument",
+    "PlatformVendorDocumentExpiryAlert",
+    "PlatformVendorOnboarding",
+    "PlatformReportDefinition",
+    "PlatformReportSchedule",
+    "PlatformReportScheduleRun",
+    "PlatformBlacklistEntry",
+    "PlatformBureauBatch",
+    "PlatformPatientSecondFactor",
+    "PlatformPatientBankAccount",
+    "PlatformPatientIdDocument",
+    "PlatformPayoutRequest",
 ]

@@ -24,13 +24,20 @@ from pydantic import BaseModel, model_validator
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.core.auth import require_roles
+from app.api.v1.endpoints.admin_originations import require_assignment_or_override
+from app.core.auth import (
+    require_roles,
+    user_has_permission,
+    user_has_permission_or_admin,
+    user_is_admin,
+)
+from app.core.config import settings as app_settings
 from app.db.base import get_db
 from app.models.platform.credit_application import PlatformCreditApplication
 from app.models.platform.event import PlatformEvent
 from app.models.platform.loan import PlatformLoan, PlatformLoanPayment
 from app.models.user import User
-from app.services import decision_reasons, loan_lifecycle, loan_servicing
+from app.services import decision_reasons, loan_ledger, loan_lifecycle, loan_servicing
 from app.services.adverse_action import send_adverse_action_notice
 from app.services.flow_orchestrator import (
     _TERMINAL_STATUSES,
@@ -46,6 +53,45 @@ _MAKER_CHECKER_ACTIONS = ("charge_off", "disburse")
 
 def _actor_id(user) -> str:
     return str(getattr(user, "id", "") or "unknown")
+
+
+def backdate_days(received_at: datetime, now: datetime) -> int:
+    """How many days in the past ``received_at`` is (UTC date arithmetic;
+    naive datetimes are treated as UTC). <= 0 means today/future. Pure —
+    pinned by the WS-F settings-suite tests."""
+    ra = received_at if received_at.tzinfo is not None else received_at.replace(tzinfo=timezone.utc)
+    return (now.astimezone(timezone.utc).date() - ra.astimezone(timezone.utc).date()).days
+
+
+def check_backdate_allowed(
+    received_at: Optional[datetime], now: datetime, *, window_days: int,
+    has_backdate_grant: bool,
+) -> Optional[tuple[int, str]]:
+    """WS-F transactions/backdate policy — pure. Returns None when allowed, or
+    (http_status, detail).
+
+    * today/future received_at → allowed for anyone (not a backdate);
+    * past received_at → requires the transactions/backdate grant (or admin);
+    * older than ``window_days`` → 422 for EVERYONE (admins included): postings
+      that old need a data-migration path, not a servicing write.
+    """
+    if received_at is None:
+        return None
+    days_back = backdate_days(received_at, now)
+    if days_back <= 0:
+        return None
+    if days_back > window_days:
+        return (
+            422,
+            f"received_at is {days_back} days in the past — beyond the "
+            f"{window_days}-day backdate window",
+        )
+    if not has_backdate_grant:
+        return (
+            403,
+            "backdating a transaction requires the transactions/backdate permission",
+        )
+    return None
 
 
 def _audit(db: Session, *, event_type: str, actor: str, payload: dict,
@@ -100,10 +146,26 @@ def decide(
     )
     if app is None:
         raise HTTPException(status_code=404, detail="Application not found")
+    # WS-E assignment gate: working a file's decision requires being its
+    # assignee or an override (the admin role — implicitly allowed, keeping
+    # this admin-only endpoint's existing behavior — or the explicit
+    # applications/assignment_override permission). Override use is audited.
+    assignment_override_used = require_assignment_or_override(app, user)
     if app.status in ("approved", "declined") and not body.override:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Application already {app.status}; pass override=true to re-decide.",
+        )
+
+    # WS-F granular permissions: overriding an existing decision requires the
+    # decisions/override grant (or admin). Router currently admits admins only,
+    # so this is defense-in-depth for when the route widens to staff.
+    if body.override and not (
+        user_is_admin(user) or user_has_permission(user, "decisions", "override")
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="overriding an existing decision requires the decisions/override permission",
         )
 
     # Orphan-loan guard: overriding an APPROVED app away from "approved" would leave
@@ -156,6 +218,9 @@ def decide(
     app.decision_by = actor
     app.decision_at = datetime.now(timezone.utc)
     app.status = new_status
+    # WS-E waiting-time anchor: stamp the transition like the orchestrator does
+    # so the pipeline's time-in-status column resets on a staff decision too.
+    app.status_updated_at = datetime.now(timezone.utc)
     # WS-I: a staff decision resolves any pending vendor reprocessing request,
     # so the admin queue's reprocessing lane only shows unhandled requests.
     app.vendor_reprocessing_requested = False
@@ -179,7 +244,8 @@ def decide(
     _audit(
         db, event_type="admin_application_decision", actor=actor, application_id=app.id,
         payload={"outcome": body.outcome, "reasons": body.reason_codes, "note": body.note,
-                 "override": body.override, "loan_id": loan_id},
+                 "override": body.override, "loan_id": loan_id,
+                 "assignment_override_used": assignment_override_used},
     )
     db.commit()
     return {"application_id": str(app.id), "status": app.status, "loan_id": loan_id}
@@ -216,6 +282,8 @@ def cancel_application(
     )
     if app is None:
         raise HTTPException(status_code=404, detail="Application not found")
+    # WS-E assignment gate (see decide) — cancel is a decision action too.
+    assignment_override_used = require_assignment_or_override(app, user)
     if app.status in _TERMINAL_STATUSES:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -256,6 +324,7 @@ def cancel_application(
             "reason_code": body.reason_code,
             "borrower_facing_text": reason.borrower_facing_text,
             "note": body.note,
+            "assignment_override_used": assignment_override_used,
         },
     )
     db.add(ev)
@@ -281,7 +350,14 @@ def assign_application(
     db: Session = Depends(get_db),
     user=Depends(require_roles("admin", "staff")),
 ):
-    """Assign an application to a staff user (default: self-assign). Audited."""
+    """Assign an application to a staff user (default: self-assign). Audited.
+
+    WS-E: plain staff may PICK UP work — self-assign an unassigned file or one
+    already theirs. REASSIGNING (assigning someone else, or taking a file off
+    another user) requires an override: the admin role or the explicit
+    ``applications``/``assignment_override`` permission."""
+    from app.services import originations_admin
+
     app = (
         db.query(PlatformCreditApplication)
         .filter(PlatformCreditApplication.id == application_id)
@@ -300,6 +376,24 @@ def assign_application(
             raise HTTPException(
                 status_code=422,
                 detail="Cannot self-assign without a resolvable user id; pass user_id.",
+            )
+
+    is_reassignment = (str(target_id) != actor) or (
+        app.assigned_to_user_id is not None and str(app.assigned_to_user_id) != actor
+    )
+    if is_reassignment:
+        user_roles = {ur.role.name for ur in getattr(user, "roles", [])}
+        user_perms = {
+            (rp.permission.resource, rp.permission.action)
+            for ur in getattr(user, "roles", [])
+            for rp in getattr(ur.role, "permissions", [])
+        }
+        if not originations_admin.has_assignment_override(user_roles, user_perms):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Reassigning requires the admin role or the "
+                       "applications/assignment_override permission; staff may only "
+                       "self-assign unassigned files.",
             )
     target = (
         db.query(User)
@@ -330,7 +424,10 @@ def unassign_application(
     db: Session = Depends(get_db),
     user=Depends(require_roles("admin", "staff")),
 ):
-    """Clear an application's assignment (audited)."""
+    """Clear an application's assignment (audited). Staff may drop their OWN
+    assignment; clearing another user's requires an override (WS-E)."""
+    from app.services import originations_admin
+
     app = (
         db.query(PlatformCreditApplication)
         .filter(PlatformCreditApplication.id == application_id)
@@ -338,6 +435,21 @@ def unassign_application(
     )
     if app is None:
         raise HTTPException(status_code=404, detail="Application not found")
+
+    actor = _actor_id(user)
+    if app.assigned_to_user_id is not None and str(app.assigned_to_user_id) != actor:
+        user_roles = {ur.role.name for ur in getattr(user, "roles", [])}
+        user_perms = {
+            (rp.permission.resource, rp.permission.action)
+            for ur in getattr(user, "roles", [])
+            for rp in getattr(ur.role, "permissions", [])
+        }
+        if not originations_admin.has_assignment_override(user_roles, user_perms):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Clearing another user's assignment requires the admin role "
+                       "or the applications/assignment_override permission.",
+            )
 
     previous = str(app.assigned_to_user_id) if app.assigned_to_user_id else None
     app.assigned_to_user_id = None
@@ -359,6 +471,16 @@ class PaymentBody(BaseModel):
     received_at: Optional[datetime] = None
     external_ref: Optional[str] = None
     note: Optional[str] = None
+    # WS-I reconciliation dimension: cash / check / eft / credit_card /
+    # adjustment. Optional — when omitted it is derived from ``method``.
+    payment_type: Optional[Literal["cash", "check", "eft", "credit_card", "adjustment"]] = None
+    # WS-I permission-bounded BACKDATING: an ``effective_date`` earlier than
+    # the received date requires the ``ledger.backdate`` permission (admin
+    # implicitly allowed), is bounded to loan_ledger.BACKDATE_WINDOW_DAYS days
+    # back, and makes ``note`` MANDATORY. The processing date stays the
+    # received date, so the backdate is permanently visible in the dual-date
+    # ledger row and the audit event.
+    effective_date: Optional[date] = None
     # WS-F repayment modes (Turnkey "Submit repayment" — Dave's spec):
     #   regular — accrued interest → principal → fees (default)
     #   add_on  — pays the non-accruing add-on bucket only (≤ add-on balance)
@@ -389,6 +511,19 @@ def record_payment(
     loan = _get_loan(db, loan_id)
     if body.amount_cents <= 0:
         raise HTTPException(status_code=422, detail="amount_cents must be positive")
+    # WS-F granular permissions: a past-dated received_at is a BACKDATED posting —
+    # requires the transactions/backdate grant (or admin) and is bounded by the
+    # configured window even for admins.
+    violation = check_backdate_allowed(
+        body.received_at,
+        datetime.now(timezone.utc),
+        window_days=app_settings.TRANSACTION_BACKDATE_WINDOW_DAYS,
+        has_backdate_grant=(
+            user_is_admin(user) or user_has_permission(user, "transactions", "backdate")
+        ),
+    )
+    if violation is not None:
+        raise HTTPException(status_code=violation[0], detail=violation[1])
     # SPECIAL is permission-gated beyond the router's admin gate (Dave: 100%
     # principal, bypassing interest — a write-down lever). Explicit role check
     # so the gate survives if this endpoint is ever widened to staff.
@@ -398,6 +533,23 @@ def record_payment(
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="special payments require the admin role",
+            )
+    # WS-I permissioned BACKDATING: an effective_date earlier than the received
+    # date needs the ledger.backdate permission (admin implicitly allowed).
+    # The bounded window (BACKDATE_WINDOW_DAYS) + mandatory comment are
+    # enforced again inside record_payment (defense-in-depth); forward-dating
+    # is always rejected there. Same-day effective_date is not a backdate.
+    received_at = body.received_at or datetime.now(timezone.utc)
+    if body.effective_date is not None and body.effective_date != received_at.date():
+        if not user_has_permission_or_admin(user, "ledger", "backdate"):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="backdating a transaction requires the ledger.backdate permission",
+            )
+        if not (body.note or "").strip():
+            raise HTTPException(
+                status_code=422,
+                detail="a note (comment) is required for every backdated transaction",
             )
     # Idempotency: when the caller supplies an external_ref, a retry / double-submit
     # must NOT post the payment (and reduce the balance) twice. Return the existing
@@ -417,24 +569,40 @@ def record_payment(
                     "idempotent_replay": True}
     try:
         payment = loan_servicing.record_payment(
-            db, loan, body.amount_cents, body.received_at or datetime.now(timezone.utc),
+            db, loan, body.amount_cents, received_at,
             body.method, body.external_ref,
             created_by=_actor_id(user), comment=body.note,
             repayment_mode=body.repayment_mode,
+            effective_date=body.effective_date,
+            payment_type=body.payment_type,
         )
     except ValueError as exc:
-        # Mode-rule violation (add-on/special amount caps, payoff exact-match).
-        # Nothing was committed; the message carries the expected figure so the
-        # client can re-confirm (e.g. a stale payoff quote).
+        # Mode-rule violation (add-on/special amount caps, payoff exact-match)
+        # or a backdate-window violation. Nothing was committed; the message
+        # carries the expected figure so the client can re-confirm (e.g. a
+        # stale payoff quote).
         raise HTTPException(status_code=422, detail=str(exc))
     _audit(db, event_type="admin_loan_payment", actor=_actor_id(user),
            payload={"loan_id": str(loan_id), "amount_cents": body.amount_cents,
                     "method": body.method, "repayment_mode": body.repayment_mode,
+                    "payment_type": body.payment_type,
+                    "effective_date": (
+                        body.effective_date.isoformat() if body.effective_date else None
+                    ),
+                    "backdated": bool(
+                        body.effective_date
+                        and body.effective_date != received_at.date()
+                    ),
                     "note": body.note})
     db.commit()
     return {"payment_id": str(payment.id), "loan_status": loan.status,
             "principal_balance_cents": loan.principal_balance_cents,
             "repayment_mode": body.repayment_mode}
+
+
+# Staff payout calculator (WS-I): a quote may be FORWARD-DATED at most this
+# many days (Turnkey parity — payoff quote for any date up to 30 days out).
+PAYOFF_QUOTE_MAX_FORWARD_DAYS = 30
 
 
 @router.get("/loans/{loan_id}/payoff-quote")
@@ -444,18 +612,71 @@ def payoff_quote(
     db: Session = Depends(get_db),
     _user=Depends(require_roles("admin", "staff")),
 ):
-    """Payoff quote from the ACTUALS engine (WS-A): 100% outstanding principal
-    + daily simple interest accrued to date + fees due + add-on balance, and 0%
-    future interest. The four buckets sum exactly to ``payoff_cents``."""
+    """Staff payout calculator — payoff quote from the ACTUALS engine (WS-A):
+    100% outstanding principal + daily simple interest accrued to ``as_of`` +
+    fees due + add-on balance, and 0% future interest. The four buckets sum
+    exactly to ``payoff_cents``.
+
+    FORWARD-DATED (WS-I): ``as_of`` may be any date up to
+    ``PAYOFF_QUOTE_MAX_FORWARD_DAYS`` (30) days in the future — the per-diem
+    projection simply accrues interest to that date (422 beyond the window).
+    Past dates remain allowed as a historical read.
+
+    THE RULE (Turnkey parity, documented + pinned by tests): requesting a
+    payoff quote is a PURE READ — it does NOT suspend, park, or alter any
+    scheduled payment. Auto-collection and the amortization plan run
+    unchanged unless/until the payoff payment is actually recorded
+    (``repayment_mode='payoff'``). The response carries
+    ``scheduled_payments_suspended: false`` to make that contract explicit.
+    """
+    today = date.today()
+    as_of = as_of or today
+    if (as_of - today).days > PAYOFF_QUOTE_MAX_FORWARD_DAYS:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"as_of may be at most {PAYOFF_QUOTE_MAX_FORWARD_DAYS} days in "
+                f"the future (got {as_of.isoformat()})"
+            ),
+        )
     loan = _get_loan(db, loan_id)
-    quote = loan_servicing.compute_payoff(db, loan, as_of or date.today())
+    quote = loan_servicing.compute_payoff(db, loan, as_of)
+
+    # Itemized fee detail: the immutable fee-charge rows (NSF fees etc.), with
+    # the aggregate fees-due/add-on balances they roll into. Fee PAYMENTS
+    # reduce the aggregate buckets, so per-row "remaining" is not a ledger
+    # concept — the charge rows + the two aggregates are the honest itemization.
+    fee_rows = [
+        {
+            "reference": t.reference,
+            "effective_date": t.effective_date.isoformat(),
+            "fees_cents": t.fees_cents or 0,
+            "add_on_cents": t.add_on_cents or 0,
+            "comment": t.comment,
+        }
+        for t in loan_ledger.sorted_transactions(loan)
+        if t.txn_type == "fee"
+    ]
+
+    # Per-diem transparency: the daily simple-interest accrual the projection
+    # uses (annual rate on the CURRENT outstanding principal, actual/365).
+    per_diem_cents = round(
+        quote.principal_cents * (loan.annual_rate_bps / 10_000.0) / 365.0
+    )
+
     return {
         "as_of": quote.as_of.isoformat(),
+        "quote_date": today.isoformat(),
+        "days_forward": max(0, (as_of - today).days),
         "principal_cents": quote.principal_cents,
         "accrued_interest_cents": quote.accrued_interest_cents,
         "fees_due_cents": quote.fees_due_cents,
         "add_on_balance_cents": quote.add_on_balance_cents,
         "payoff_cents": quote.payoff_cents,
+        "per_diem_interest_cents": per_diem_cents,
+        "fee_detail": fee_rows,
+        # The contract: a payoff INQUIRY never suspends scheduled payments.
+        "scheduled_payments_suspended": False,
     }
 
 
