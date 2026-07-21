@@ -6,12 +6,14 @@ from app.api.v1.endpoints import (
     admin_actions,
     admin_analytics,
     admin_analytics_depth,
+    admin_application_process,
     admin_applications,
     admin_archive,
     admin_audit,
     admin_blacklist,
     admin_bureau_reporting,
     admin_borrower_security,
+    admin_province_compliance,
     admin_collections,
     admin_communications,
     admin_collections_work,
@@ -35,6 +37,7 @@ from app.api.v1.endpoints import (
     admin_settings,
     admin_system,
     admin_vendor_changes,
+    admin_vendor_disbursements,
     auth,
     credit_products,
     health,
@@ -100,6 +103,11 @@ api_router.include_router(admin_audit.router, prefix="/admin/audit", tags=["admi
 api_router.include_router(admin_archive.router, prefix="/admin/archive", tags=["admin-archive"])
 api_router.include_router(admin_blacklist.router, prefix="/admin/blacklist", tags=["admin-blacklist"])
 api_router.include_router(
+    admin_province_compliance.router,
+    prefix="/admin/compliance",
+    tags=["admin-province-compliance"],
+)
+api_router.include_router(
     admin_bureau_reporting.router, prefix="/admin/bureau-reporting", tags=["admin-bureau-reporting"]
 )
 # Phase 2 — write actions (decision/payment/payoff) + maker-checker (charge-off/disburse).
@@ -119,6 +127,11 @@ api_router.include_router(admin_config.router, prefix="/admin/config", tags=["ad
 # WS-F — settings suite (decision rules / company info / business calendar /
 # notification matrix). Admin-only, audited writes.
 api_router.include_router(admin_settings.router, prefix="/admin/settings", tags=["admin-settings"])
+# Application-process config (WS W2-APPCONFIG): flow/offer/dictionaries/disclaimer/
+# co-applicant + per-product policy read.
+api_router.include_router(
+    admin_application_process.router, prefix="/admin/settings", tags=["admin-settings"]
+)
 # WS-E — reject/cancel decision-reason directory (admin CRUD, soft-deactivate only).
 api_router.include_router(
     admin_decision_reasons.router, prefix="/admin/decision-reasons", tags=["admin-config"]
@@ -141,6 +154,13 @@ api_router.include_router(
 # bank-account add/remove, per-patient 2FA enforcement, payout-request queue.
 api_router.include_router(
     admin_borrower_security.router, prefix="/admin", tags=["admin-borrower-security"]
+)
+# W2-DISB vendor self-serve disbursements oversight: any vendor's derived wallet,
+# the cross-vendor payout ledger, and the (flag-gated) monthly-sweep trigger.
+api_router.include_router(
+    admin_vendor_disbursements.router,
+    prefix="/admin/disbursements",
+    tags=["admin-disbursements"],
 )
 # Embedded pre-qual widget intake (server-to-server, X-Widget-Key gated; inert until
 # WIDGET_API_KEY is set). Turns the widget's pre-qual into a real application.

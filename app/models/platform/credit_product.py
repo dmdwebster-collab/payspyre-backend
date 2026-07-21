@@ -29,6 +29,12 @@ class PlatformCreditProduct(Base):
     max_amount_cents = Column(BigInteger, nullable=False)
     currency = Column(String, nullable=False, default="CAD")
 
+    # Provinces this product is offered in (list of ISO 3166-2:CA subdivision
+    # codes, e.g. ["ON", "BC"]). Feeds the per-province compliance engine at
+    # create/update. NULL/empty => offered wherever PaySpyre operates, so the
+    # config must clear EVERY enabled province's cap (the lowest cap wins).
+    provinces = Column(JSONB, nullable=True)
+
     # The verification matrix: per amount bracket, which verifications run
     verification_matrix = Column(JSONB, nullable=False)
 
@@ -37,6 +43,12 @@ class PlatformCreditProduct(Base):
 
     # Pricing configuration
     pricing_config = Column(JSONB, nullable=False)
+
+    # Product-policy configuration (grace period / due dates / due-date seasons /
+    # payoff / disbursement / approval / repayment modes). Nullable — NULL means
+    # the ProductPolicyConfig defaults apply (current engine behaviour). See
+    # app/schemas/product_policy_config.py.
+    policy_config = Column(JSONB, nullable=True)
 
     # Funding model
     funding_source = Column(

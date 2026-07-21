@@ -96,6 +96,15 @@ class FakeSession:
         pass
 
     def query(self, model):
+        # W2-COMPLIANCE reads province rules during product create/update; with
+        # none configured the compliance engine imposes no constraint, which is
+        # exactly this contract test's world (it exercises pricing, not caps).
+        from app.models.platform.province_compliance import (
+            PlatformProvinceComplianceRule,
+        )
+
+        if model is PlatformProvinceComplianceRule:
+            return _FakeQuery([])
         assert model is PlatformCreditProduct
         return _FakeQuery(self.products)
 

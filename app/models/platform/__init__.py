@@ -12,6 +12,7 @@ from app.models.platform.consent import PlatformConsent
 from app.models.platform.application_document import PlatformApplicationDocument
 from app.models.platform.event import PlatformEvent
 from app.models.platform.integration_settings import PlatformIntegrationSettings
+from app.models.platform.vendor_disbursement import PlatformVendorDisbursement
 from app.models.platform.loan import (
     PlatformLoan,
     PlatformLoanCustomTransaction,
@@ -82,11 +83,15 @@ from app.models.platform.report_schedule import (
 )
 from app.models.platform.blacklist import PlatformBlacklistEntry
 from app.models.platform.bureau_batch import PlatformBureauBatch
+from app.models.platform.province_compliance import PlatformProvinceComplianceRule
 from app.models.platform.borrower_portal import (
     PlatformPatientSecondFactor,
     PlatformPatientBankAccount,
     PlatformPatientIdDocument,
     PlatformPayoutRequest,
+)
+from app.models.platform.application_process_config import (
+    PlatformApplicationProcessConfig,
 )
 
 __all__ = [
@@ -102,6 +107,7 @@ __all__ = [
     "PlatformApplicationDocument",
     "PlatformEvent",
     "PlatformIntegrationSettings",
+    "PlatformVendorDisbursement",
     "PlatformLoan",
     "PlatformLoanCustomTransaction",
     "PlatformLoanDelinquencySnapshot",
@@ -156,4 +162,6 @@ __all__ = [
     "PlatformPatientBankAccount",
     "PlatformPatientIdDocument",
     "PlatformPayoutRequest",
+    "PlatformProvinceComplianceRule",
+    "PlatformApplicationProcessConfig",
 ]

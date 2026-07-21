@@ -189,6 +189,25 @@ EXPECTED_MODEL_FIELDS: dict[str, list[str]] = {
     "VendorBillingEntry": [
         "charge_trigger", "lead_charge_cents", "lead_charged_at", "listing_id",
     ],
+    # W2-DISB vendor self-serve disbursements (video 10). Reviewed against the
+    # 10__Vendor_Access.md §2 never-list: these expose only the vendor's OWN
+    # money position (MTD collected/due/available/held-back) and its own payout
+    # history — no risk score, bureau, bank-statement, or cross-vendor data.
+    "WalletResponse": [
+        "as_of", "available_cents", "cleared_collected_cents",
+        "disbursed_in_flight_cents", "disbursed_settled_cents",
+        "due_to_vendor_cents", "held_back_cents", "holdback_business_days",
+        "holdback_cutoff", "mtd_collected_cents", "share_bps",
+        "total_collected_cents", "vendor_id",
+    ],
+    "DisbursementRow": [
+        "amount_cents", "completed_at", "created_at", "external_ref",
+        "fee_cents", "holdback_cutoff", "id", "kind", "period_month",
+        "period_year", "requested_by", "return_code", "status", "vendor_id",
+    ],
+    "ExtraPayoutResponse": [
+        "amount_cents", "disbursement_id", "fee_cents", "status",
+    ],
 }
 
 

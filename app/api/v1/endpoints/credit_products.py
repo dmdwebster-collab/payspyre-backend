@@ -15,7 +15,6 @@ enforced by the service layer; this endpoint only forwards data.
 """
 from __future__ import annotations
 
-from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -30,26 +29,61 @@ from app.api.schemas.credit_products import (
 from app.core.auth import get_current_user, require_roles
 from app.db.base import get_db
 from app.schemas.pricing_config import PricingConfigError
+from app.schemas.product_policy_config import (
+    ProductPolicyConfigError,
+    parse_product_policy_config,
+)
 from app.services import credit_products as service
 from app.services import loan_quote
+from app.services import province_compliance
 
 router = APIRouter()
 
 
+def _validate_policy_or_422(policy_config: dict | None) -> dict | None:
+    """Validate policy_config against the typed schema + payoff engine-
+    consistency guard. Returns the normalized shape to persist (or None when the
+    product carries no policy config — legacy rows stay NULL).
+    """
+    if policy_config is None:
+        return None
+    try:
+        cfg = parse_product_policy_config(policy_config)
+    except ProductPolicyConfigError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"policy_config invalid: {exc}",
+        ) from exc
+    return cfg.model_dump(mode="json")
+
+
 def _validate_pricing_or_422(
-    pricing_config: dict, min_amount_cents: int, max_amount_cents: int
+    db: Session,
+    pricing_config: dict,
+    min_amount_cents: int,
+    max_amount_cents: int,
+    provinces: Optional[list[str]] = None,
 ) -> dict:
     """Validate pricing_config against the typed schema plus the per-frequency
     APR compliance gates (Criminal Code s.347 at every enabled frequency /
-    boundary amount / boundary term / rate-band top, and the province-cap
-    hook). Fail-closed at configuration, not just at booking.
+    boundary amount / boundary term / rate-band top, PLUS the per-province
+    compliance engine — APR caps and high-cost-credit licensing thresholds for
+    every province the product targets). Fail-closed at configuration, not just
+    at booking.
 
-    Returns the NORMALIZED typed shape to persist, so the DB converges on the
-    schema (legacy-shape submissions are upgraded on write; existing rows are
-    still readable through the tolerant loader)."""
+    ``provinces`` is resolved to the product's declared provinces, or — when the
+    product declares none — every province PaySpyre operates in, so an "offered
+    everywhere" product must clear the lowest cap. Returns the NORMALIZED typed
+    shape to persist, so the DB converges on the schema."""
+    effective_provinces = province_compliance.resolve_effective_provinces(db, provinces)
+    province_check = province_compliance.make_pricing_province_check(db)
     try:
         cfg = loan_quote.validate_pricing_config(
-            pricing_config, min_amount_cents, max_amount_cents
+            pricing_config,
+            min_amount_cents,
+            max_amount_cents,
+            provinces=effective_provinces,
+            province_check=province_check,
         )
     except PricingConfigError as exc:
         raise HTTPException(
@@ -75,8 +109,13 @@ async def create_credit_product(
     db: Session = Depends(get_db),
 ):
     data.pricing_config = _validate_pricing_or_422(
-        data.pricing_config, data.min_amount_cents, data.max_amount_cents
+        db,
+        data.pricing_config,
+        data.min_amount_cents,
+        data.max_amount_cents,
+        provinces=data.provinces,
     )
+    data.policy_config = _validate_policy_or_422(data.policy_config)
     try:
         product = service.create_credit_product(db, data)
     except JsonSchemaValidationError as exc:
@@ -154,22 +193,29 @@ async def update_credit_product(
     db: Session = Depends(get_db),
 ):
     # Re-validate the EFFECTIVE (merged) pricing when a patch touches the
-    # pricing config or either amount bound (schema + s.347 per frequency).
+    # pricing config, either amount bound, or the province set (schema + s.347
+    # per frequency + per-province compliance caps).
     if (
         data.pricing_config is not None
         or data.min_amount_cents is not None
         or data.max_amount_cents is not None
+        or data.provinces is not None
     ):
         existing = service.get_credit_product(db, product_id)
         if existing is not None:
             eff_min = data.min_amount_cents if data.min_amount_cents is not None else existing.min_amount_cents
             eff_max = data.max_amount_cents if data.max_amount_cents is not None else existing.max_amount_cents
             eff_pricing = data.pricing_config if data.pricing_config is not None else existing.pricing_config
-            normalized = _validate_pricing_or_422(eff_pricing, eff_min, eff_max)
+            eff_provinces = data.provinces if data.provinces is not None else existing.provinces
+            normalized = _validate_pricing_or_422(
+                db, eff_pricing, eff_min, eff_max, provinces=eff_provinces
+            )
             if data.pricing_config is not None:
                 # Persist the normalized typed shape (only when the patch itself
                 # carries pricing — unrelated patches never rewrite stored config).
                 data.pricing_config = normalized
+    if data.policy_config is not None:
+        data.policy_config = _validate_policy_or_422(data.policy_config)
     try:
         product = service.update_credit_product(db, product_id, data)
     except JsonSchemaValidationError as exc:
