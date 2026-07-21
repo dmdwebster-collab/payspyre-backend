@@ -26,7 +26,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.api.clinic.v1.endpoints.dashboard_loanbook import (
@@ -276,6 +276,90 @@ class VendorUserOut(BaseModel):
 class RolesBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     roles: list[str]
+
+
+# Vendor lifecycle states (mirrors the ``vendor_status`` enum on ``vendors``).
+VENDOR_STATUSES = ("pending", "active", "suspended", "terminated")
+
+
+class VendorDirectoryItem(BaseModel):
+    id: UUID
+    business_name: str
+    dba_name: Optional[str] = None
+    status: str
+
+
+class VendorDirectoryOut(BaseModel):
+    vendors: list[VendorDirectoryItem]
+    count: int  # total matching the filter (ignores limit/offset — for paging)
+    limit: int
+    offset: int
+
+
+# ---------------------------------------------------------------------------
+# Vendor directory (searchable list — the entry point into every workspace)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/vendors", response_model=VendorDirectoryOut)
+def list_vendors(
+    q: Optional[str] = Query(
+        None,
+        max_length=255,
+        description="Case-insensitive substring match on business / operating (DBA) name.",
+    ),
+    status_filter: Optional[str] = Query(None, alias="status"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+):
+    """Searchable vendor directory — replaces "paste a UUID" in the CRM UI.
+
+    Admin/staff read (router-level ``require_roles``). Returns a page of vendors
+    plus ``count`` (the total matching the filter, so the UI can paginate).
+    Ordered by business name. The ``q`` filter is a parameter-bound ILIKE over
+    ``business_name`` and ``dba_name`` (SQLAlchemy binds the pattern — static
+    SQL, no interpolation; bandit B608-safe).
+    """
+    query = db.query(Vendor)
+
+    if q is not None and q.strip():
+        pattern = f"%{q.strip()}%"
+        query = query.filter(
+            or_(
+                Vendor.business_name.ilike(pattern),
+                Vendor.dba_name.ilike(pattern),
+            )
+        )
+    if status_filter is not None:
+        if status_filter not in VENDOR_STATUSES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"status must be one of {', '.join(VENDOR_STATUSES)}",
+            )
+        query = query.filter(Vendor.status == status_filter)
+
+    count = query.count()
+    rows = (
+        query.order_by(Vendor.business_name, Vendor.created_at)
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    return VendorDirectoryOut(
+        vendors=[
+            VendorDirectoryItem(
+                id=r.id,
+                business_name=r.business_name,
+                dba_name=r.dba_name,
+                status=r.status,
+            )
+            for r in rows
+        ],
+        count=count,
+        limit=limit,
+        offset=offset,
+    )
 
 
 # ---------------------------------------------------------------------------
