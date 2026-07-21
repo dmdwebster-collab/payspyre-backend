@@ -163,8 +163,15 @@ def run_demo_application(
                           "detail": f"{_dollars(schedule[0].total_cents)} applied; "
                                     f"balance {_dollars(loan.principal_balance_cents)}"})
 
+            # Window end is tomorrow, not today: the payment above is posted at
+            # datetime.now() (later "today"), so a window ending at date.today()
+            # (midnight) excludes it — the payment would count as "after window"
+            # and closing_balance would reflect the PRE-payment balance. Ending
+            # at today+1 keeps the same-day payment inside the statement, so
+            # closing_balance == the loan's current principal_balance regardless
+            # of the run's time-of-day.
             statement = loan_servicing.generate_statement(
-                db, loan, (date.today() - timedelta(days=30), date.today())
+                db, loan, (date.today() - timedelta(days=30), date.today() + timedelta(days=1))
             )
             trace["statement"] = {
                 "opening_balance_cents": statement.opening_balance_cents,

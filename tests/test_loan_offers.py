@@ -174,6 +174,12 @@ class FakeSession:
         # PlatformLoanOffer.status column select (list of (status,))
         return [(o.status,) for o in self.offers]
 
+    def get(self, *args, **kwargs):
+        # W2-APPCONFIG reads the application-process config via Session.get.
+        # No row → shipped defaults (offer expiry/max == settings.OFFER_*),
+        # which is exactly this test's pre-config world.
+        return None
+
     def add(self, obj):
         self.added.append(obj)
 
