@@ -103,9 +103,49 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Forward-only. Postgres cannot drop an enum value, and the two conversions
-    # are not reversible without a per-row audit of which 'origination' rows were
-    # previously 'pre_qualified'. Rolling back the enum would require recreating
-    # the type and rewriting every dependent column; the values are additive and
-    # harmless if left in place.
-    pass
+    """Return every row to a status the pre-068 code understands.
+
+    The enum VALUES stay: Postgres cannot drop an enum label, and rebuilding the
+    type would mean rewriting every dependent column. They are inert once no row
+    uses them, so the downgrade's job is to vacate them.
+
+    ``credit_report`` maps cleanly back to its legacy equivalent
+    ``awaiting_hard_pull`` (same meaning: submitted, credit report outstanding).
+    The other new states have no pre-068 equivalent, so they fall back to the
+    nearest legacy status the old code handles:
+
+      bank_verification / application_verification -> verifying
+      offer_acceptance / agreement_signature       -> approved
+          (both are post-approval waiting states; the pre-068 model expressed
+           them as 'approved', which is where those files sat before this PR)
+      active + the six closed states               -> approved
+          (activation and closure live on ``loans.status`` in the pre-068 model,
+           which is untouched by this migration — no loan data is lost)
+
+    ``pre_qualified`` is NOT restored: nothing records which 'origination' rows
+    were converted, and ``pre_qualified`` was already a read-only legacy value no
+    code wrote. It stays 'origination', which the pre-068 code handles.
+    """
+    op.execute(
+        """
+        UPDATE platform_credit_applications
+           SET status = 'awaiting_hard_pull'
+         WHERE status = 'credit_report'
+        """
+    )
+    op.execute(
+        """
+        UPDATE platform_credit_applications
+           SET status = 'verifying'
+         WHERE status IN ('bank_verification', 'application_verification')
+        """
+    )
+    op.execute(
+        """
+        UPDATE platform_credit_applications
+           SET status = 'approved'
+         WHERE status IN ('offer_acceptance', 'agreement_signature', 'active',
+                          'repaid', 'renewed', 'refinanced', 'transferred',
+                          'settlement', 'written_off')
+        """
+    )
