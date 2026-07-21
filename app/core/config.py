@@ -181,6 +181,42 @@ class Settings(BaseSettings):
     # is governed by integration_settings, not this flag.
     AUTO_COLLECTION_ENABLED: bool = False
 
+    # Vendor self-serve disbursements (W2-DISB, Turnkey parity video 10) —
+    # MONEY-PATH MASTER FLAG. When False (the default), BOTH the monthly
+    # auto-payout job (app/jobs/vendor_disbursements.py) AND the on-demand
+    # extra-payout endpoint are strict no-ops: no Zumrails push, zero money-out
+    # rows written. Wallet READS (MTD collected / due / available) stay live so
+    # the dashboard renders, but no cent can move. Flip on ONLY once (a) Dave
+    # signs off the vendor revenue-share + extra-payout fee + holdback defaults
+    # below, and (b) the ``zumrails`` integration_settings row points at real
+    # (or deliberately sandbox) credentials AND every payee vendor has a resolved
+    # disbursement recipient — the engine pushes through whatever adapter that
+    # row builds, so "real adapters on" is governed by integration_settings, not
+    # this flag. Mirrors AUTO_COLLECTION_ENABLED exactly.
+    VENDOR_DISBURSEMENTS_ENABLED: bool = False
+    # Clearing holdback: payments collected within the last N BUSINESS days
+    # (WS-F business calendar: weekends + statutory holidays + admin closures)
+    # are NOT yet releasable to the vendor — protects against returned/NSF'd
+    # payments so PaySpyre never has to claw funds back from a vendor. Dave: "4
+    # business days". Config-driven so the window can tune without a code change.
+    VENDOR_DISBURSEMENT_HOLDBACK_BUSINESS_DAYS: int = 4
+    # Vendor's share of what is COLLECTED on their portfolio, in basis points
+    # (10000 = 100%). This is the "amount due to the vendor" multiplier applied
+    # to cleared collections. PLACEHOLDER DEFAULT (10000) FLAGGED FOR DAVE: the
+    # real split is PaySpyre's funding/revenue-share model (interest income,
+    # origination fee retention, etc.) and MUST be set before the flag is
+    # flipped. 10000 means "remit 100% of cleared collections" — safe while the
+    # money flag is OFF, but semantically wrong for a live split, so activation
+    # review must confirm this value. Distinct from the reporting-only
+    # PROFIT_SPLIT_VENDOR_SHARE_BPS (which never moves money).
+    VENDOR_DISBURSEMENT_SHARE_BPS: int = 10000
+    # Per-transaction cost charged to the vendor for an EXTRA (intra-month,
+    # non-free) disbursement. The monthly auto-payout is always free (fee 0).
+    # Dave: "the one time monthly is free, but additional disbursements in the
+    # month would be an additional cost." PLACEHOLDER DEFAULT (0) FLAGGED FOR
+    # DAVE — set the real per-extra-payout fee before activation. Integer cents.
+    VENDOR_DISBURSEMENT_EXTRA_FEE_CENTS: int = 0
+
     # Collections / delinquency policy — vendor-dashboard KPIs (spec §4).
     # Grace window in days: an overdue installment is "late" while
     # 1 <= days_past_due <= GRACE_DAYS, and "delinquent" (bureau-reportable,
