@@ -6,6 +6,7 @@ from app.api.v1.endpoints import (
     admin_actions,
     admin_analytics,
     admin_analytics_depth,
+    admin_application_process,
     admin_applications,
     admin_archive,
     admin_audit,
@@ -119,6 +120,11 @@ api_router.include_router(admin_config.router, prefix="/admin/config", tags=["ad
 # WS-F — settings suite (decision rules / company info / business calendar /
 # notification matrix). Admin-only, audited writes.
 api_router.include_router(admin_settings.router, prefix="/admin/settings", tags=["admin-settings"])
+# Application-process config (WS W2-APPCONFIG): flow/offer/dictionaries/disclaimer/
+# co-applicant + per-product policy read.
+api_router.include_router(
+    admin_application_process.router, prefix="/admin/settings", tags=["admin-settings"]
+)
 # WS-E — reject/cancel decision-reason directory (admin CRUD, soft-deactivate only).
 api_router.include_router(
     admin_decision_reasons.router, prefix="/admin/decision-reasons", tags=["admin-config"]

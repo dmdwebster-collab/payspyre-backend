@@ -88,6 +88,9 @@ from app.models.platform.borrower_portal import (
     PlatformPatientIdDocument,
     PlatformPayoutRequest,
 )
+from app.models.platform.application_process_config import (
+    PlatformApplicationProcessConfig,
+)
 
 __all__ = [
     "PlatformPatient",
@@ -156,4 +159,5 @@ __all__ = [
     "PlatformPatientBankAccount",
     "PlatformPatientIdDocument",
     "PlatformPayoutRequest",
+    "PlatformApplicationProcessConfig",
 ]

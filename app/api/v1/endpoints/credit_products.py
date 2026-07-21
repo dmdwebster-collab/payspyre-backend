@@ -15,7 +15,6 @@ enforced by the service layer; this endpoint only forwards data.
 """
 from __future__ import annotations
 
-from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -30,10 +29,31 @@ from app.api.schemas.credit_products import (
 from app.core.auth import get_current_user, require_roles
 from app.db.base import get_db
 from app.schemas.pricing_config import PricingConfigError
+from app.schemas.product_policy_config import (
+    ProductPolicyConfigError,
+    parse_product_policy_config,
+)
 from app.services import credit_products as service
 from app.services import loan_quote
 
 router = APIRouter()
+
+
+def _validate_policy_or_422(policy_config: dict | None) -> dict | None:
+    """Validate policy_config against the typed schema + payoff engine-
+    consistency guard. Returns the normalized shape to persist (or None when the
+    product carries no policy config — legacy rows stay NULL).
+    """
+    if policy_config is None:
+        return None
+    try:
+        cfg = parse_product_policy_config(policy_config)
+    except ProductPolicyConfigError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"policy_config invalid: {exc}",
+        ) from exc
+    return cfg.model_dump(mode="json")
 
 
 def _validate_pricing_or_422(
@@ -77,6 +97,7 @@ async def create_credit_product(
     data.pricing_config = _validate_pricing_or_422(
         data.pricing_config, data.min_amount_cents, data.max_amount_cents
     )
+    data.policy_config = _validate_policy_or_422(data.policy_config)
     try:
         product = service.create_credit_product(db, data)
     except JsonSchemaValidationError as exc:
@@ -170,6 +191,8 @@ async def update_credit_product(
                 # Persist the normalized typed shape (only when the patch itself
                 # carries pricing — unrelated patches never rewrite stored config).
                 data.pricing_config = normalized
+    if data.policy_config is not None:
+        data.policy_config = _validate_policy_or_422(data.policy_config)
     try:
         product = service.update_credit_product(db, product_id, data)
     except JsonSchemaValidationError as exc:

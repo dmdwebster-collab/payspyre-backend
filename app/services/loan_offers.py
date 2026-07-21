@@ -27,7 +27,6 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
 from app.core.logging import get_logger
 from app.models.platform.credit_application import PlatformCreditApplication
 from app.models.platform.event import PlatformEvent
@@ -240,8 +239,14 @@ def create_offers(
     Caller commits (endpoint owns the transaction).
     """
     now = now or datetime.now(timezone.utc)
-    max_offers = settings.OFFER_MAX_PER_APPLICATION
-    expiry_days = settings.OFFER_EXPIRY_DAYS
+    # Offer expiry / max-offers are admin-configurable via the application-process
+    # config (WS W2-APPCONFIG). The config defaults equal settings.OFFER_* so an
+    # unconfigured platform behaves exactly as before this workstream.
+    from app.services.application_process_config import effective_offer_policy
+
+    offer_policy = effective_offer_policy(db)
+    max_offers = offer_policy.max_offers
+    expiry_days = offer_policy.expiry_days
 
     if application.status not in OFFERABLE_STATUSES:
         raise OfferError(

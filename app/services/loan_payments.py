@@ -112,13 +112,46 @@ def payment_options(db: Session, loan: PlatformLoan, *, as_of=None) -> dict:
     if balances.add_on_balance_cents > 0:
         modes.append("add_on")
     modes.append("payoff")
-    return {
+    options = {
         "as_of": as_of.isoformat(),
         "modes": modes,
         "outstanding_cents": outstanding_cents(db, loan),
         "add_on_balance_cents": balances.add_on_balance_cents,
         "payoff_cents": balances.payoff_cents,
     }
+    # Config-DRIVEN (not math-changing): attach the product's payoff policy
+    # descriptor when the product has one configured (WS W2-APPCONFIG). The
+    # payoff AMOUNT is unchanged (server-computed BalanceView.payoff_cents); this
+    # only surfaces what the payoff collects. Omitted entirely for legacy
+    # products (no policy_config) → response is byte-identical to before.
+    descriptor = _payoff_policy_descriptor(db, loan)
+    if descriptor is not None:
+        options["payoff_policy"] = descriptor
+    return options
+
+
+def _payoff_policy_descriptor(db: Session, loan: PlatformLoan) -> Optional[dict]:
+    """Resolve the loan's product payoff-policy descriptor (or None). Never
+    raises — a lookup failure degrades to no descriptor."""
+    try:
+        from app.models.platform.credit_product import PlatformCreditProduct
+        from app.services import product_policy
+
+        application = (
+            db.query(PlatformCreditApplication)
+            .filter(PlatformCreditApplication.id == loan.application_id)
+            .first()
+        )
+        if application is None or application.credit_product_id is None:
+            return None
+        product = (
+            db.query(PlatformCreditProduct)
+            .filter(PlatformCreditProduct.id == application.credit_product_id)
+            .first()
+        )
+        return product_policy.payoff_descriptor_for_product(product)
+    except Exception:  # pragma: no cover - defensive; never break Pay-Now
+        return None
 
 
 def initiate_payment(
