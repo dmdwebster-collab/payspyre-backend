@@ -51,6 +51,7 @@ def create_credit_product(db: Session, data: CreditProductCreate) -> PlatformCre
         decision_ruleset=data.decision_ruleset,
         pricing_config=data.pricing_config,
         funding_source=data.funding_source,
+        provinces=data.provinces,
         created_by=data.created_by,
     )
     db.add(product)

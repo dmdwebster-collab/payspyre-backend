@@ -12,6 +12,7 @@ from app.api.v1.endpoints import (
     admin_blacklist,
     admin_bureau_reporting,
     admin_borrower_security,
+    admin_province_compliance,
     admin_collections,
     admin_communications,
     admin_collections_work,
@@ -100,6 +101,11 @@ api_router.include_router(
 api_router.include_router(admin_audit.router, prefix="/admin/audit", tags=["admin-cockpit"])
 api_router.include_router(admin_archive.router, prefix="/admin/archive", tags=["admin-archive"])
 api_router.include_router(admin_blacklist.router, prefix="/admin/blacklist", tags=["admin-blacklist"])
+api_router.include_router(
+    admin_province_compliance.router,
+    prefix="/admin/compliance",
+    tags=["admin-province-compliance"],
+)
 api_router.include_router(
     admin_bureau_reporting.router, prefix="/admin/bureau-reporting", tags=["admin-bureau-reporting"]
 )
