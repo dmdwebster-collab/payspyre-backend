@@ -30,6 +30,7 @@ from app.api.clinic.v1.endpoints import (
     messages,
     products,
     report_exports,
+    vendor_disbursements,
     vendor_origination,
 )
 from app.core.config import settings
@@ -52,6 +53,9 @@ clinic_router.include_router(dashboard_marketplace.router)
 clinic_router.include_router(account.router)
 # Turnkey-parity XLSX report downloads, hard-scoped to the caller's vendor.
 clinic_router.include_router(report_exports.router)
+# Vendor self-serve disbursements (W2-DISB) — wallet reads + extra-payout
+# request, hard-scoped to the caller's vendor. Money-out is flag-gated OFF.
+clinic_router.include_router(vendor_disbursements.router)
 
 # UNAUTHENTICATED dev helper: seed a clinic (vendor + staff user + membership + JWT).
 # Auto-on in development/test; elsewhere requires an EXPLICIT ENABLE_DEV_TOOLS (e.g.

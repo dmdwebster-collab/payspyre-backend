@@ -12,6 +12,7 @@ from app.models.platform.consent import PlatformConsent
 from app.models.platform.application_document import PlatformApplicationDocument
 from app.models.platform.event import PlatformEvent
 from app.models.platform.integration_settings import PlatformIntegrationSettings
+from app.models.platform.vendor_disbursement import PlatformVendorDisbursement
 from app.models.platform.loan import (
     PlatformLoan,
     PlatformLoanCustomTransaction,
@@ -102,6 +103,7 @@ __all__ = [
     "PlatformApplicationDocument",
     "PlatformEvent",
     "PlatformIntegrationSettings",
+    "PlatformVendorDisbursement",
     "PlatformLoan",
     "PlatformLoanCustomTransaction",
     "PlatformLoanDelinquencySnapshot",

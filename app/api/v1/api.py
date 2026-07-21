@@ -35,6 +35,7 @@ from app.api.v1.endpoints import (
     admin_settings,
     admin_system,
     admin_vendor_changes,
+    admin_vendor_disbursements,
     auth,
     credit_products,
     health,
@@ -141,6 +142,13 @@ api_router.include_router(
 # bank-account add/remove, per-patient 2FA enforcement, payout-request queue.
 api_router.include_router(
     admin_borrower_security.router, prefix="/admin", tags=["admin-borrower-security"]
+)
+# W2-DISB vendor self-serve disbursements oversight: any vendor's derived wallet,
+# the cross-vendor payout ledger, and the (flag-gated) monthly-sweep trigger.
+api_router.include_router(
+    admin_vendor_disbursements.router,
+    prefix="/admin/disbursements",
+    tags=["admin-disbursements"],
 )
 # Embedded pre-qual widget intake (server-to-server, X-Widget-Key gated; inert until
 # WIDGET_API_KEY is set). Turns the widget's pre-qual into a real application.
