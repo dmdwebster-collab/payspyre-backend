@@ -19,6 +19,10 @@ class CreditProductBase(BaseModel):
     # (+ per-frequency s.347 APR gates) and persist the normalized typed shape.
     pricing_config: dict[str, Any]
     funding_source: Literal["payspyre_capital", "partner_lender", "hybrid", "clinic_self"]
+    # Provinces (ISO 3166-2:CA codes) this product is offered in; drives the
+    # per-province compliance gate. None/empty => must clear every enabled
+    # province's cap.
+    provinces: Optional[list[str]] = None
     created_by: Optional[UUID] = None
 
     class Config:
@@ -42,6 +46,7 @@ class CreditProductUpdate(BaseModel):
     decision_ruleset: Optional[str] = Field(default=None, min_length=1, max_length=200)
     pricing_config: Optional[dict[str, Any]] = None
     funding_source: Optional[Literal["payspyre_capital", "partner_lender", "hybrid", "clinic_self"]] = None
+    provinces: Optional[list[str]] = None
 
     class Config:
         from_attributes = True

@@ -36,7 +36,7 @@ known worked example before go-live.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Callable, Optional
 
 from app.schemas.pricing_config import (
     FREQUENCY_LABELS,
@@ -343,6 +343,7 @@ def validate_pricing_config(
     min_amount_cents: int,
     max_amount_cents: int,
     provinces: Optional[list[str]] = None,
+    province_check: Optional[Callable[[str, int], Optional[str]]] = None,
 ) -> PricingConfig:
     """Validate + normalize a product's pricing_config (create/PATCH gate).
 
@@ -354,8 +355,18 @@ def validate_pricing_config(
     3. Computes the Canadian regulatory APR for EVERY enabled payment frequency
        at the boundary amounts/terms and the top of the rate band, and refuses
        any configuration that can reach the Criminal Code s.347 cap.
-    4. Runs each boundary APR through :func:`province_cap_hook` (stub — future
-       per-province compliance engine seam).
+    4. Runs each boundary APR through the per-province compliance engine. Pass
+       ``province_check`` — a callable ``(province_code, apr_bps) -> block reason
+       or None`` (built by ``app.services.province_compliance
+       .make_pricing_province_check``) — to enforce province APR caps /
+       high-cost-credit licensing thresholds; a returned string BLOCKS the
+       config. When ``province_check`` is None the legacy :func:`province_cap_hook`
+       stub is used (always ok), so callers without a DB session are unaffected.
+       Multi-province products clear the LOWEST cap automatically because every
+       targeted province is checked independently.
+
+    This function stays DB-free: the DB-backed rule lookup happens inside the
+    injected ``province_check`` closure, keeping the pricing math pure/testable.
 
     Returns the normalized :class:`PricingConfig`; callers should persist
     ``.model_dump(mode="json", exclude_none=True)`` so the DB converges on the
@@ -390,7 +401,16 @@ def validate_pricing_config(
                             "Lower the interest rate or fees, or disable that payment frequency."
                         )
                     for province in provinces or [None]:
-                        if not province_cap_hook(province, apr):
+                        if province is not None and province_check is not None:
+                            breach = province_check(province, apr)
+                            if breach:
+                                raise PricingConfigError(
+                                    f"{breach} (produced at {FREQUENCY_LABELS[freq]}, "
+                                    f"${amount / 100:,.2f} over {term} months at "
+                                    f"{rate / 100:.2f}%). Lower the rate or fees, drop "
+                                    "that province, or disable that payment frequency."
+                                )
+                        elif not province_cap_hook(province, apr):
                             raise PricingConfigError(
                                 f"APR {apr / 100:.2f}% ({FREQUENCY_LABELS[freq]}) exceeds "
                                 f"the provincial cap for {province}."

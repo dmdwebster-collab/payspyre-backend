@@ -82,6 +82,7 @@ from app.models.platform.report_schedule import (
 )
 from app.models.platform.blacklist import PlatformBlacklistEntry
 from app.models.platform.bureau_batch import PlatformBureauBatch
+from app.models.platform.province_compliance import PlatformProvinceComplianceRule
 from app.models.platform.borrower_portal import (
     PlatformPatientSecondFactor,
     PlatformPatientBankAccount,
@@ -156,4 +157,5 @@ __all__ = [
     "PlatformPatientBankAccount",
     "PlatformPatientIdDocument",
     "PlatformPayoutRequest",
+    "PlatformProvinceComplianceRule",
 ]
