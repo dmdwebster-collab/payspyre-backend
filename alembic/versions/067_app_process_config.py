@@ -32,7 +32,7 @@ from sqlalchemy.dialects import postgresql
 
 
 revision: str = "067_app_process_config"
-down_revision: Union[str, None] = "064_borrower_depth"
+down_revision: Union[str, None] = "066_province_compliance"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
