@@ -44,6 +44,12 @@ class PlatformCreditProduct(Base):
     # Pricing configuration
     pricing_config = Column(JSONB, nullable=False)
 
+    # Product-policy configuration (grace period / due dates / due-date seasons /
+    # payoff / disbursement / approval / repayment modes). Nullable — NULL means
+    # the ProductPolicyConfig defaults apply (current engine behaviour). See
+    # app/schemas/product_policy_config.py.
+    policy_config = Column(JSONB, nullable=True)
+
     # Funding model
     funding_source = Column(
         ENUM("payspyre_capital", "partner_lender", "hybrid", "clinic_self",

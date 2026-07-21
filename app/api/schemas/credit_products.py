@@ -18,6 +18,10 @@ class CreditProductBase(BaseModel):
     # create/PATCH validate it against app.schemas.pricing_config.PricingConfig
     # (+ per-frequency s.347 APR gates) and persist the normalized typed shape.
     pricing_config: dict[str, Any]
+    # Optional product-policy tabs (grace period / due dates / payoff / …).
+    # None = the ProductPolicyConfig defaults apply (current engine behaviour).
+    # Validated against app.schemas.product_policy_config on create/PATCH.
+    policy_config: Optional[dict[str, Any]] = None
     funding_source: Literal["payspyre_capital", "partner_lender", "hybrid", "clinic_self"]
     # Provinces (ISO 3166-2:CA codes) this product is offered in; drives the
     # per-province compliance gate. None/empty => must clear every enabled
@@ -45,6 +49,7 @@ class CreditProductUpdate(BaseModel):
     verification_matrix: Optional[dict[str, Any]] = None
     decision_ruleset: Optional[str] = Field(default=None, min_length=1, max_length=200)
     pricing_config: Optional[dict[str, Any]] = None
+    policy_config: Optional[dict[str, Any]] = None
     funding_source: Optional[Literal["payspyre_capital", "partner_lender", "hybrid", "clinic_self"]] = None
     provinces: Optional[list[str]] = None
 
