@@ -54,10 +54,46 @@ _APPLICATION_BANNERS: dict[str, tuple[str, str]] = {
         "Your application has been submitted for approval. An account representative may "
         "contact you to clarify some information if necessary. Thank you for your patience.",
     ),
+    # --- Dave's Status Flow v1.00 (migration 068) --------------------------
+    "credit_report": (
+        "verifying",
+        "We are verifying your information. You will be notified when verification completes.",
+    ),
+    "bank_verification": (
+        "verifying",
+        "We are verifying your information. You will be notified when verification completes.",
+    ),
+    "application_verification": (
+        "verifying",
+        "We are verifying your information. You will be notified when verification completes.",
+    ),
+    "offer_acceptance": (
+        "approved",
+        "Your application has been approved. Please review and accept your offer to continue.",
+    ),
+    "agreement_signature": (
+        "approved",
+        "Your application has been approved. Please review and sign your loan agreement to "
+        "complete the process.",
+    ),
     "approved": (
         "approved",
         "Your application has been approved. We are preparing your loan agreement and funding.",
     ),
+    "active": (
+        "active",
+        "Thank you for using our services! Please make timely payments as per your loan "
+        "agreement and get in touch in case you have any questions.",
+    ),
+    "repaid": ("paid_off", "Congratulations — this loan is paid in full. Thank you for "
+                           "choosing PaySpyre."),
+    "renewed": ("closed", "This loan has been closed and renewed."),
+    "refinanced": ("closed", "This loan has been closed and refinanced."),
+    "transferred": ("closed", "This loan has been transferred."),
+    "settlement": ("closed", "This account is closed. Please contact us if you have any "
+                             "questions."),
+    "written_off": ("closed", "This account is closed. Please contact us if you have any "
+                              "questions."),
     "declined": (
         "declined",
         "We were unable to approve your application at this time. Please contact us if you "

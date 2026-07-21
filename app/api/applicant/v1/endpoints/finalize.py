@@ -102,6 +102,9 @@ _COLLECTION_FIELDS = ("secondary_incomes", "address_history", "employment_histor
 # underwriting). A finalize must NEVER reopen a terminal decision.
 _FINALIZABLE = (
     "started", "origination", "verifying", "underwriting", "under_review",
+    # Dave's Status Flow v1.00 gates (migration 068) are pre-decision too: a file
+    # parked on a verification gate must still be re-finalizable.
+    "credit_report", "bank_verification", "application_verification",
 )
 
 

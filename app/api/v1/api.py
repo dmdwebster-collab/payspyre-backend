@@ -35,6 +35,7 @@ from app.api.v1.endpoints import (
     admin_report_exports,
     admin_scorecards,
     admin_settings,
+    admin_status_model,
     admin_system,
     admin_vendor_changes,
     admin_vendor_disbursements,
@@ -141,6 +142,9 @@ api_router.include_router(
 api_router.include_router(admin_offers.router, prefix="/admin", tags=["admin-offers"])
 # WS-D — editable 5-band verified-data scorecards + per-vendor assignment (mandate #3).
 api_router.include_router(admin_scorecards.router, prefix="/admin/scorecards", tags=["admin-scorecards"])
+# Dave's Application Status Flow v1.00 registry (2026-07-21 review §A) — the
+# data the UI renders workplace queues + per-status action buttons from.
+api_router.include_router(admin_status_model.router, prefix="/admin", tags=["admin-config"])
 # System mode (Simulation vs Live) — read-only, admin/staff, for the cockpit banner.
 api_router.include_router(admin_system.router, prefix="/admin/system", tags=["admin-system"])
 # WS-G — Vendor + Customer CRM. Vendor CRM: industry categories, contacts, bank

@@ -25,9 +25,27 @@ _CLINIC_STATUS: dict[str, str] = {
     "verifying": "started",
     "pre_qualified": "started",
     "awaiting_hard_pull": "started",
+    # Dave's Status Flow v1.00 (migration 068). The three parallel verification
+    # gates are still "the file is in flight" from the practice's POV; the two
+    # post-underwriting steps are a human/applicant action away from a decision,
+    # so they read as manual_review rather than a premature "approved".
+    "credit_report": "started",
+    "bank_verification": "started",
+    "application_verification": "started",
     "underwriting": "manual_review",  # migration 043 — adjudication in progress
     "under_review": "manual_review",
+    "offer_acceptance": "manual_review",
+    "agreement_signature": "manual_review",
     "approved": "approved",
+    # An activated (and later closed) loan was approved — the practice's question
+    # is "did this patient get financing?", and the answer stays yes.
+    "active": "approved",
+    "repaid": "approved",
+    "renewed": "approved",
+    "refinanced": "approved",
+    "transferred": "approved",
+    "settlement": "approved",
+    "written_off": "approved",
     "declined": "declined",
     "withdrawn": "declined",
     "expired": "declined",
