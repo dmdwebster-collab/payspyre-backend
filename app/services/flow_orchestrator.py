@@ -204,8 +204,23 @@ def mark_manual_review(application: PlatformCreditApplication) -> None:
 # terminal application, which is the one invariant we do enforce.
 # ---------------------------------------------------------------------------
 
+# The six closed states hanging off ``Active`` (Dave's Status Flow v1.00).
+CLOSED_STATUSES = (
+    "repaid", "renewed", "refinanced", "transferred", "settlement", "written_off",
+)
+
+# Dave's three PARALLEL verification gates. A single status column cannot hold
+# three simultaneous states, so the value records the gate the file is *waiting
+# on*; ``application_status.VERIFICATION_GATES`` documents the band.
+VERIFICATION_GATE_STATUSES = ("credit_report", "bank_verification", "application_verification")
+
 # Terminal states that must never be re-opened by a workflow transition.
-_TERMINAL_STATUSES = ("approved", "declined", "withdrawn", "expired")
+# ``active`` + the six closed states are included: an activated loan is out of
+# the origination/underwriting state machine's reach (it moves only through the
+# servicing transitions below).
+_TERMINAL_STATUSES = (
+    "approved", "declined", "withdrawn", "expired", "active", *CLOSED_STATUSES,
+)
 
 
 def _assert_not_terminal(application: PlatformCreditApplication, target: str) -> None:
@@ -294,6 +309,168 @@ def mark_offers_expired(application: PlatformCreditApplication) -> None:
     """
     application.status = "expired"
     application.status_updated_at = datetime.now(timezone.utc)
+
+
+# ---------------------------------------------------------------------------
+# Dave's Application Status Flow v1.00 transitions (2026-07-21 review §A).
+#
+# The registry (``app/services/application_status.py``) is the DATA — per status:
+# preconditions, owning workplace(s), permitted actions, external API. These are
+# the WRITES for the statuses that had no transition before. Everything above
+# stays exactly as it was: the automated decision path (verifying → decide →
+# approved / declined / under_review) is untouched, so current behaviour and the
+# existing suite are preserved.
+# ---------------------------------------------------------------------------
+
+
+def _set_status(application: PlatformCreditApplication, target: str) -> None:
+    application.status = target
+    application.status_updated_at = datetime.now(timezone.utc)
+
+
+def mark_verification_gate(application: PlatformCreditApplication, gate: str) -> None:
+    """Park the application on one of Dave's three parallel verification gates.
+
+    ``gate`` ∈ ``VERIFICATION_GATE_STATUSES``:
+      * ``credit_report``            — waiting on the Equifax Canada pull
+      * ``bank_verification``        — waiting on the Flinks bank verification
+      * ``application_verification`` — waiting on KYC / manual info verification
+
+    The gates are parallel in Dave's diagram; the status records the gate the
+    file is currently *waiting on*. Permissive about the source state (the
+    gating rules are a business decision owned by the calling layer) except that
+    a terminal file is never re-opened.
+    """
+    if gate not in VERIFICATION_GATE_STATUSES:
+        raise InvalidStateTransition(
+            f"'{gate}' is not a verification gate "
+            f"(allowed: {', '.join(VERIFICATION_GATE_STATUSES)})"
+        )
+    _assert_not_terminal(application, gate)
+    _set_status(application, gate)
+
+
+def mark_credit_report_pending(application: PlatformCreditApplication) -> None:
+    """Gate 1 — a credit report is required and has not been received (Equifax)."""
+    mark_verification_gate(application, "credit_report")
+
+
+def mark_bank_verification_pending(application: PlatformCreditApplication) -> None:
+    """Gate 2 — bank account verification is required and incomplete (Flinks)."""
+    mark_verification_gate(application, "bank_verification")
+
+
+def mark_application_verification_pending(application: PlatformCreditApplication) -> None:
+    """Gate 3 — application-information / KYC verification is incomplete."""
+    mark_verification_gate(application, "application_verification")
+
+
+def mark_offer_acceptance(application: PlatformCreditApplication) -> None:
+    """Offer(s) issued, waiting on the applicant to accept (Dave: Offer Acceptance).
+
+    Reachable once the file is approved by the system or an underwriter. The
+    caller owns creating the offers; this owns only the status.
+    """
+    _assert_not_terminal(application, "offer_acceptance")
+    _set_status(application, "offer_acceptance")
+
+
+def mark_offer_accepted(application: PlatformCreditApplication) -> None:
+    """Applicant accepted an offer → the agreement goes out for signature.
+
+    Covers BOTH of Dave's acceptance routes: the applicant accepting online and
+    an underwriter using "Manually register offer acceptance in the system".
+    """
+    if application.status != "offer_acceptance":
+        raise InvalidStateTransition(
+            f"Cannot register offer acceptance from status '{application.status}' "
+            "(expected 'offer_acceptance')"
+        )
+    _set_status(application, "agreement_signature")
+
+
+def mark_agreement_signature(application: PlatformCreditApplication) -> None:
+    """The loan agreement has been sent to the applicant(s) for signature."""
+    _assert_not_terminal(application, "agreement_signature")
+    _set_status(application, "agreement_signature")
+
+
+def mark_agreement_signed(application: PlatformCreditApplication) -> None:
+    """All applicants signed → Approved (awaiting activation, still cancellable)."""
+    if application.status != "agreement_signature":
+        raise InvalidStateTransition(
+            f"Cannot record agreement signature from status '{application.status}' "
+            "(expected 'agreement_signature')"
+        )
+    _set_status(application, "approved")
+
+
+def mark_active(application: PlatformCreditApplication) -> None:
+    """Servicing "Activate Loan" — the loan is activated and payments scheduled.
+
+    Only ``approved`` may activate: Dave's precondition is an agreement signed by
+    all applicants with the loan not yet activated. Idempotent re-activation is
+    NOT allowed (``active`` is not a legal source) so a double-click cannot
+    re-stamp ``status_updated_at`` on a serviced loan.
+    """
+    if application.status != "approved":
+        raise InvalidStateTransition(
+            f"Cannot activate an application in status '{application.status}' "
+            "(expected 'approved')"
+        )
+    _set_status(application, "active")
+
+
+def mark_closed(application: PlatformCreditApplication, closed_status: str) -> None:
+    """Set an ACTIVE loan to one of Dave's six closed states.
+
+    ``closed_status`` ∈ ``CLOSED_STATUSES`` (repaid · renewed · refinanced ·
+    transferred · settlement · written_off). Only ``active`` may close — a file
+    that never activated closes through cancel/decline/expiry instead.
+    """
+    if closed_status not in CLOSED_STATUSES:
+        raise InvalidStateTransition(
+            f"'{closed_status}' is not a closed status "
+            f"(allowed: {', '.join(CLOSED_STATUSES)})"
+        )
+    if application.status != "active":
+        raise InvalidStateTransition(
+            f"Cannot close an application in status '{application.status}' "
+            "(expected 'active')"
+        )
+    _set_status(application, closed_status)
+
+
+# Dave lists "Return for reprocessing" on Credit Report, Bank Account
+# Verification, Application Verification, Credit Underwriting and Offer
+# Acceptance. The legacy engine values that resolve to those canonical statuses
+# are included so a file parked on the band-level ``verifying`` (or the
+# automated core's ``under_review`` sink) can also be sent back.
+_RETURNABLE_STATUSES = (
+    *VERIFICATION_GATE_STATUSES,
+    "verifying",
+    "awaiting_hard_pull",
+    "underwriting",
+    "under_review",
+    "offer_acceptance",
+)
+
+
+def mark_returned_for_reprocessing(application: PlatformCreditApplication) -> None:
+    """Staff "Return for reprocessing" — send the file back to Origination for rework.
+
+    Distinct from ``mark_vendor_reprocessing`` (WS-I), which is the VENDOR's
+    single lever and routes a file to a human underwriter (``under_review``).
+    This is the underwriter's action from Dave's table: the file goes back to the
+    Origination workplace so the missing/incorrect information can be corrected
+    and re-submitted.
+    """
+    if application.status not in _RETURNABLE_STATUSES:
+        raise InvalidStateTransition(
+            f"Cannot return application for reprocessing from status "
+            f"'{application.status}' (allowed: {', '.join(_RETURNABLE_STATUSES)})"
+        )
+    _set_status(application, "origination")
 
 
 class FlowOrchestrator:

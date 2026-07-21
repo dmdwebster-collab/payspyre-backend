@@ -78,20 +78,32 @@ class PlatformCreditApplication(Base):
     # admin queue filters on it; cleared when staff record a decision.
     vendor_reprocessing_requested = Column(Boolean, nullable=False, default=False)
 
-    # State — Dave's canonical status workflow maps onto this enum as:
-    #   pre-origination -> started
-    #   origination     -> origination   (application is being filled out / originated)
-    #   verification    -> verifying
-    #   underwriting     -> underwriting  (human/automated adjudication in progress)
-    #   approved/rejected-> approved / declined
-    # The original nine values are retained (additive-only, migration 043) so no
-    # existing row or code path breaks. ``origination`` and ``underwriting`` are
-    # the two new named states. ``under_review`` remains as the automated-core's
-    # manual-review sink (flow_engine DECISION_TO_STATE) and is kept distinct from
-    # the explicit ``underwriting`` workflow state.
+    # State — the ENGINE status. Dave's canonical Application Status Flow v1.00
+    # (2026-07-21 review §A) maps onto it in ``app/services/application_status.py``
+    # (``LEGACY_TO_CANONICAL``); that registry is the single source of truth for
+    # per-status preconditions / workplaces / actions / external API:
+    #   Pre-Origination           -> started
+    #   Origination               -> origination (+ legacy pre_qualified)
+    #   Credit Report             -> credit_report (+ legacy awaiting_hard_pull)
+    #   Bank Account Verification -> bank_verification
+    #   Application Verification  -> application_verification (+ legacy verifying)
+    #   Credit Underwriting       -> underwriting | under_review
+    #   Offer Acceptance          -> offer_acceptance
+    #   Agreement Signature       -> agreement_signature
+    #   Approved / Active         -> approved / active
+    #   closed off Active         -> repaid | renewed | refinanced | transferred |
+    #                                settlement | written_off
+    #   off-model terminals       -> declined | withdrawn (cancelled) | expired
+    # Additive-only (migrations 043, 068): every prior value is retained, so no
+    # existing row or code path breaks. ``under_review`` (the automated core's
+    # manual-review sink, flow_engine DECISION_TO_STATE) stays distinct from the
+    # explicit ``underwriting`` workflow state — see the registry docstring.
     status = Column(
         ENUM("started", "origination", "verifying", "pre_qualified", "awaiting_hard_pull",
              "underwriting", "under_review",
+             "credit_report", "bank_verification", "application_verification",
+             "offer_acceptance", "agreement_signature", "active",
+             "repaid", "renewed", "refinanced", "transferred", "settlement", "written_off",
              "approved", "declined", "withdrawn", "expired",
              name="platform_application_status", create_type=False),
         nullable=False,

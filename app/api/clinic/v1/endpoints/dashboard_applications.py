@@ -49,7 +49,22 @@ Granularity = Literal["day", "week", "month"]
 # and counted in neither a positive bucket nor in_review (they still count toward
 # ``total``).
 _IN_REVIEW_STATUSES = frozenset(
-    {"verifying", "pre_qualified", "awaiting_hard_pull", "under_review"}
+    {
+        "verifying", "pre_qualified", "awaiting_hard_pull", "under_review",
+        # Dave's Status Flow v1.00 (migration 068): the three parallel gates and
+        # the two post-underwriting steps are all "a review is in flight".
+        "credit_report", "bank_verification", "application_verification",
+        "underwriting", "offer_acceptance", "agreement_signature",
+    }
+)
+
+# An application that reached Active (or one of the six closed states off Active)
+# WAS approved — the funnel must keep counting it as such (migration 068).
+_APPROVED_STATUSES = frozenset(
+    {
+        "approved", "active",
+        "repaid", "renewed", "refinanced", "transferred", "settlement", "written_off",
+    }
 )
 
 
@@ -172,7 +187,7 @@ def _outcome_bucket(status: str, decision_by: Optional[str] = None) -> Optional[
     vendor surface — it buckets as ``in_review`` until a human confirms
     (``decision_by`` becomes the human actor).
     """
-    if status == "approved":
+    if status in _APPROVED_STATUSES:
         return "approved"
     if status == "declined":
         return "in_review" if decision_by == "auto" else "declined"
