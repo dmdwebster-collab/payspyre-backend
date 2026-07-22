@@ -1,13 +1,13 @@
 """Risk-score persistence model — immutable, versioned score snapshots
 
 Revision ID: 073_risk_score_model
-Revises: 071_customer_profile
+Revises: 072_settings_backend_gaps
 Create Date: 2026-07-22
 
-MERGE ORDER (coordinated): main is at ``071_customer_profile``. A sibling
-branch (``feat/p1-settings-backend-gaps``) is taking ``072``; this revision
-deliberately claims **073** and chains from ``071``. Whichever of the two lands
-second must re-chain its ``down_revision`` onto the other — noted in the PR.
+MERGE ORDER (coordinated): this originally chained from ``071_customer_profile``
+alongside its sibling ``072_settings_backend_gaps`` (PR #203). That sibling
+landed on main first, so this revision was RE-CHAINED onto ``072`` — main keeps
+a single linear head at ``073``, and ``alembic heads`` must never report two.
 
 Creates ``platform_application_risk_scores``: one APPEND-ONLY row per scoring
 event on an application. It records what the decision engine computed and then
@@ -37,7 +37,7 @@ from sqlalchemy.dialects import postgresql
 
 
 revision: str = "073_risk_score_model"
-down_revision: Union[str, None] = "071_customer_profile"
+down_revision: Union[str, None] = "072_settings_backend_gaps"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

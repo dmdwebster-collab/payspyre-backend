@@ -496,6 +496,62 @@ def test_deriving_the_score_record_is_side_effect_free(
     assert decision.decision == expected
 
 
+# ---------------------------------------------------------------------------
+# Migration chain pin (re-chain guard)
+# ---------------------------------------------------------------------------
+
+
+def _load_migration(name: str):
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "alembic" / "versions" / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_migration_073_chain_pin():
+    """073 chains onto 072, and the alembic history stays a SINGLE head.
+
+    This migration was originally cut against ``071_customer_profile`` alongside
+    its sibling ``072_settings_backend_gaps``; that sibling landed on main
+    first, so 073 was re-chained onto it. If the merge train re-chains again,
+    update BOTH the migration's ``down_revision`` and this pin together — a
+    silent fork would split the alembic head and break ``upgrade head``.
+    """
+    mod = _load_migration("073_risk_score_model")
+    assert mod.revision == "073_risk_score_model"
+    assert mod.down_revision == "072_settings_backend_gaps"
+
+
+def test_alembic_history_has_a_single_head():
+    """No two revisions may share a ``down_revision``, and exactly one revision
+    may be un-referenced (the head). Pure: parses the version files, no DB."""
+    import re
+    from pathlib import Path
+
+    versions = Path(__file__).resolve().parents[1] / "alembic" / "versions"
+    revisions: dict = {}
+    for path in sorted(versions.glob("*.py")):
+        text = path.read_text()
+        rev = re.search(r'^revision(?:\s*:\s*str)?\s*=\s*"([^"]+)"', text, re.M)
+        down = re.search(
+            r'^down_revision(?:\s*:[^=]*)?\s*=\s*(?:"([^"]+)"|None)', text, re.M
+        )
+        if rev is None:
+            continue
+        revisions[rev.group(1)] = down.group(1) if down and down.group(1) else None
+
+    parents = [d for d in revisions.values() if d is not None]
+    duplicated = {p for p in parents if parents.count(p) > 1}
+    assert not duplicated, f"forked alembic chain — shared down_revision(s): {duplicated}"
+
+    heads = [r for r in revisions if r not in set(parents)]
+    assert heads == ["073_risk_score_model"], f"expected a single head at 073, got {heads}"
+
+
 def test_no_scorecard_means_no_fabricated_score():
     """The legacy path must record NULLs, not a synthesised score."""
     decision = asyncio.run(
