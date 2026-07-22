@@ -130,6 +130,91 @@ SECRET_KEYS: dict[str, tuple[str, ...]] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Consumer map — the anti-decorative-config contract
+#
+# THE RULE: every field a provider block renders as editable must either change
+# behaviour, or be declared informational here so the UI renders it read-only.
+# "Editable, persisted, ignored" is not a permitted third state. Adding a field
+# to a provider schema without adding it here fails
+# ``test_config_consumers.py::test_every_typed_field_is_declared``.
+# ---------------------------------------------------------------------------
+
+#: field -> the dotted path of the code that reads it.
+CONFIG_CONSUMERS: dict[str, dict[str, str]] = {
+    "flinks": {
+        "when_to_verify": "app.services.integration_behaviour.bank_verification_policy",
+        "allow_customer_skip": "app.services.integration_behaviour.bank_verification_policy",
+        "verification_expiry_days": "app.services.integration_behaviour.bank_verification_policy",
+        "verification_reminder_days": "app.services.integration_behaviour.bank_verification_policy",
+        "transaction_depth_days": "app.services.bank.transaction_analysis.analyze_accounts",
+        "test_mode": "app.services.verifications.dispatcher.VerificationDispatcher",
+        "log_response": "app.services.webhooks.translators.translate_flinks_payload",
+        "customer_id": "app.services.verifications.dispatcher.VerificationDispatcher",
+        "service_url": "app.services.verifications.dispatcher.VerificationDispatcher",
+        "iframe_url": "app.services.verifications.dispatcher.VerificationDispatcher",
+    },
+    "equifax": {
+        "member_number": "app.services.credit_bureau.EquifaxClient",
+        "customer_code": "app.services.credit_bureau.EquifaxClient",
+        "environment": "app.services.credit_bureau.EquifaxClient",
+        "log_request": "app.services.credit_bureau.CreditBureauClient",
+        "log_response": "app.services.credit_bureau.CreditBureauClient",
+    },
+}
+
+#: field -> why it has no consumer. These MUST be rendered read-only.
+CONFIG_INFORMATIONAL: dict[str, dict[str, str]] = {
+    "flinks": {
+        "score_provided_data": (
+            "Flinks-side scoring of applicant-declared data. PaySpyre scores "
+            "from its own decision rules on the derived bank metrics; there is "
+            "no Flinks scoring call to switch on or off."
+        ),
+        "use_attributes": (
+            "Flinks Enrich/Attributes API. Deliberately not used — we derive "
+            "income / NSF / account age from the raw transactions ourselves "
+            "(app/services/bank/transaction_analysis.py). Informational until "
+            "an Attributes path is built."
+        ),
+        "currency": (
+            "Flinks reports the account's own currency; nothing in the pipeline "
+            "converts or filters on a configured currency. CAD-only today."
+        ),
+    },
+    "equifax": {
+        "automatic_request": (
+            "There is no automatic bureau-pull trigger: every pull is initiated "
+            "explicitly (applicant consent flow or the staff Hard/Soft Pull "
+            "action). Informational until an auto-pull step exists."
+        ),
+    },
+}
+
+
+def provider_config_field_metadata(provider: str) -> dict[str, dict]:
+    """Per-field editability for a provider's typed behaviour config.
+
+    Returns ``{field: {"informational": bool, "consumed_by": str|None,
+    "reason": str|None}}``. Providers with no typed schema return ``{}`` (their
+    free-form config is unmanaged and always has been).
+    """
+    model = PROVIDER_CONFIG_SCHEMAS.get(provider)
+    if model is None:
+        return {}
+    consumers = CONFIG_CONSUMERS.get(provider, {})
+    informational = CONFIG_INFORMATIONAL.get(provider, {})
+    out: dict[str, dict] = {}
+    for name in model.model_fields:
+        reason = informational.get(name)
+        out[name] = {
+            "informational": reason is not None,
+            "consumed_by": consumers.get(name),
+            "reason": reason,
+        }
+    return out
+
+
 def validate_provider_config(provider: str, config: Optional[dict]) -> dict:
     """Validate + default a provider's `config` on write.
 

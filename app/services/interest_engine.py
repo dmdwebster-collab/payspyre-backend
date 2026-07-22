@@ -223,26 +223,107 @@ class PaymentAllocation:
         )
 
 
-def allocate_regular_payment(
-    amount_cents: int, balances: BalanceView
-) -> PaymentAllocation:
-    """Turnkey "Regular" repayment mode: accrued interest → principal → fees.
+# ---------------------------------------------------------------------------
+# Regular-payment allocation ordering (MONEY PATH, product-configurable)
+#
+# The categories a repayment ordering may name, and the order the allocator
+# resolves them in when a product supplies none. These MUST stay identical to
+# ``app.schemas.product_policy_config.ALLOCATION_CATEGORIES`` /
+# ``DEFAULT_REPAYMENT_PRIORITY``; they are duplicated rather than imported so
+# this module stays dependency-free (pure core), and a test asserts equality.
+# ---------------------------------------------------------------------------
 
-    Add-on balance is NOT touched by a regular payment (it is targeted only by
-    the Add-on repayment mode). Anything left after fees is recorded as
-    principal (overpayment; see ``PaymentAllocation``).
+ALLOCATION_CATEGORIES = ("interest", "principal", "origination", "administration", "nsf")
+
+DEFAULT_REPAYMENT_PRIORITY = (
+    "interest",
+    "principal",
+    "origination",
+    "administration",
+    "nsf",
+)
+
+#: ``origination`` and ``administration`` are both scheduled fees and share the
+#: engine's single ``fees_due`` bucket. Their order relative to each other is
+#: therefore unobservable — whichever comes first drains the bucket.
+_SCHEDULED_FEE_CATEGORIES = frozenset({"origination", "administration"})
+
+
+def _resolved_repayment_priority(
+    priority: Optional[Sequence[str]],
+) -> tuple[str, ...]:
+    """Normalise a configured repayment ordering, or fall back to the default.
+
+    ``None`` / empty → :data:`DEFAULT_REPAYMENT_PRIORITY` (the behaviour every
+    loan has today; a product with ``policy_config = NULL`` lands here). Any
+    other value MUST be a permutation of :data:`ALLOCATION_CATEGORIES` — a
+    partial order would leave some dollars' destination undefined.
+    """
+    if not priority:
+        return DEFAULT_REPAYMENT_PRIORITY
+    order = tuple(priority)
+    if sorted(order) != sorted(ALLOCATION_CATEGORIES):
+        raise ValueError(
+            f"repayment priority {list(order)} must be a permutation of "
+            f"{list(ALLOCATION_CATEGORIES)}"
+        )
+    return order
+
+
+def allocate_regular_payment(
+    amount_cents: int,
+    balances: BalanceView,
+    priority: Optional[Sequence[str]] = None,
+) -> PaymentAllocation:
+    """Turnkey "Regular" repayment mode, allocated in the CONFIGURED order.
+
+    ``priority`` is the product's
+    ``policy_config.allocation_priority.repayment`` list (see
+    :mod:`app.schemas.product_policy_config`). ``None`` — the case for every
+    product whose ``policy_config`` is NULL — uses
+    :data:`DEFAULT_REPAYMENT_PRIORITY`, which reproduces the historical
+    hard-coded waterfall exactly: accrued interest → principal → scheduled
+    fees.
+
+    Bucket mapping:
+      * ``interest``      → ``interest_due_cents``
+      * ``principal``     → ``outstanding_principal_cents``
+      * ``origination`` / ``administration`` → the single ``fees_due_cents``
+        bucket; whichever appears first drains it, the second is then a no-op.
+      * ``nsf``           → the add-on bucket, which a regular payment NEVER
+        touches by construction (it is targeted only by the Add-on repayment
+        mode). Its position is therefore inert — the ordering schema pins it
+        last so a product cannot advertise otherwise.
+
+    Anything left after every reachable bucket is recorded as principal
+    (overpayment; see :class:`PaymentAllocation`), unchanged.
     """
     if amount_cents <= 0:
         raise ValueError("amount_cents must be positive")
 
-    interest = min(amount_cents, balances.interest_due_cents)
-    remaining = amount_cents - interest
+    order = _resolved_repayment_priority(priority)
 
-    principal = min(remaining, balances.outstanding_principal_cents)
-    remaining -= principal
+    interest = 0
+    principal = 0
+    fees = 0
+    fees_capacity = balances.fees_due_cents
+    remaining = amount_cents
 
-    fees = min(remaining, balances.fees_due_cents)
-    remaining -= fees
+    for category in order:
+        if remaining <= 0:
+            break
+        if category == "interest":
+            interest = min(remaining, balances.interest_due_cents)
+            remaining -= interest
+        elif category == "principal":
+            principal = min(remaining, balances.outstanding_principal_cents)
+            remaining -= principal
+        elif category in _SCHEDULED_FEE_CATEGORIES:
+            take = min(remaining, fees_capacity)
+            fees += take
+            fees_capacity -= take
+            remaining -= take
+        # "nsf": unreachable from a regular payment — no-op by construction.
 
     # Residual cash: keep it on the row as principal so the ledger row ties out
     # to the cash received; the engine clamps outstanding principal at zero.
@@ -347,9 +428,17 @@ _ALLOCATORS = {
 
 
 def allocate_payment(
-    mode: str, amount_cents: int, balances: BalanceView
+    mode: str,
+    amount_cents: int,
+    balances: BalanceView,
+    repayment_priority: Optional[Sequence[str]] = None,
 ) -> PaymentAllocation:
     """Dispatch one payment to its repayment-mode allocator (pure).
+
+    ``repayment_priority`` (the product's configured allocation ordering) is
+    meaningful only for the ``regular`` mode — the other three modes target a
+    single named bucket each (add-on / principal / everything) and have no
+    waterfall to order. Passing it for those modes is accepted and ignored.
 
     Every allocator preserves the BalanceView invariant: applying the returned
     allocation as a LedgerEvent moves the payoff down by exactly
@@ -357,6 +446,8 @@ def allocate_payment(
     tests/test_repayment_modes.py). Raises ``ValueError`` for an unknown mode
     or a mode-rule violation (amount caps / payoff exact-match).
     """
+    if mode == "regular":
+        return allocate_regular_payment(amount_cents, balances, repayment_priority)
     allocator = _ALLOCATORS.get(mode)
     if allocator is None:
         raise ValueError(

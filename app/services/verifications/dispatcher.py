@@ -45,6 +45,18 @@ class DispatchResult:
 class VerificationDispatcher:
     def __init__(self, db=None) -> None:
         self._use_real = settings.USE_REAL_ADAPTERS
+        # W2-APPCONFIG follow-up: the Flinks *behaviour* block (typed in
+        # app/schemas/integration_config.FlinksConfig) is now consumed here.
+        # ``test_mode`` routes bank_link back through the simulator even with
+        # USE_REAL_ADAPTERS on — but only when an admin has actually saved a
+        # Flinks row, so an unconfigured tenant behaves exactly as before.
+        from app.services import integration_behaviour
+
+        self._flinks_behaviour = integration_behaviour.resolve_flinks(db)
+        self._flinks_test_mode = (
+            self._flinks_behaviour.has_row
+            and bool(self._flinks_behaviour.config.test_mode)
+        )
         # Mock is always constructed — it's the flag-off path AND the bureau path.
         self._mock = MockVerificationDispatcher()
         if self._use_real:
@@ -66,10 +78,19 @@ class VerificationDispatcher:
                 api_base_url=d["api_base_url"],
                 workflow_id=d["workflow_id"],
             )
+            # NOTE the legacy key names alongside the typed-schema ones.
+            # ``FlinksConfig`` names the JSON API origin ``service_url`` and the
+            # Connect origin ``iframe_url``; this builder previously read only
+            # ``api_base_url`` / ``iframe_base``, so the two typed knobs the
+            # admin UI renders had NO consumer. Both spellings are accepted, the
+            # typed name winning, then the legacy key, then env.
             f = resolve(
                 db, "flinks",
                 secret_keys=["api_key"],
-                config_keys=["api_base_url", "customer_id", "iframe_base", "redirect_url_base"],
+                config_keys=[
+                    "service_url", "iframe_url",
+                    "api_base_url", "customer_id", "iframe_base", "redirect_url_base",
+                ],
                 env={
                     "api_key": "FLINKS_API_KEY",
                     "api_base_url": "FLINKS_API_BASE_URL",
@@ -80,9 +101,9 @@ class VerificationDispatcher:
             )
             self._flinks = FlinksBankAdapter(
                 api_key=f["api_key"],
-                api_base_url=f["api_base_url"],
+                api_base_url=f["service_url"] or f["api_base_url"],
                 customer_id=f["customer_id"],
-                iframe_base=f["iframe_base"],
+                iframe_base=f["iframe_url"] or f["iframe_base"],
                 redirect_url_base=f["redirect_url_base"],
             )
 
@@ -96,6 +117,12 @@ class VerificationDispatcher:
         """Route to the real or mock adapter and return a uniform DispatchResult."""
         # Flag off, or any verification_type without a real adapter wired
         # (bureau_soft / bureau_hard always mock; any unknown type also mock).
+        # Flinks "Test mode" (settings area) keeps bank_link on the simulator
+        # regardless of the global real-adapter flag.
+        if verification_type == "bank_link" and self._flinks_test_mode:
+            m = self._mock.initiate(verification_type, application_id, patient_id, payload)
+            return DispatchResult(vendor=m.vendor, vendor_session_ref=m.vendor_session_ref)
+
         if not self._use_real or verification_type not in ("kyc_id", "bank_link"):
             m = self._mock.initiate(verification_type, application_id, patient_id, payload)
             return DispatchResult(vendor=m.vendor, vendor_session_ref=m.vendor_session_ref)

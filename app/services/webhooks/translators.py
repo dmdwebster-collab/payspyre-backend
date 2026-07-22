@@ -25,6 +25,7 @@ we don't care about.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal, Optional
@@ -32,6 +33,8 @@ from uuid import UUID
 
 from app.api.webhooks.v1.schemas import DiditWebhookPayload, FlinksWebhookPayload
 from app.services.bank.transaction_analysis import analyze_accounts
+
+logger = logging.getLogger(__name__)
 
 
 class TranslatorError(Exception):
@@ -149,13 +152,23 @@ def translate_didit_payload(payload: DiditWebhookPayload) -> TranslateResult:
 # ---------------------------------------------------------------------------
 
 
-def translate_flinks_payload(payload: FlinksWebhookPayload) -> TranslateResult:
+def translate_flinks_payload(
+    payload: FlinksWebhookPayload,
+    *,
+    transaction_depth_days: Optional[int] = None,
+    log_response: bool = False,
+) -> TranslateResult:
     """Map a parsed Flinks Connect webhook to the orchestrator handoff.
 
     Only ``ResponseType == "GetAccountsDetail"`` produces a terminal result.
     The ``"KYC"`` payload (delivered first, holders-only) is acknowledged and
     skipped — bank_link is decided once the account data arrives. Other
     response types are skipped the same way.
+
+    ``transaction_depth_days`` / ``log_response`` come from the Flinks
+    settings-area behaviour block (``FlinksConfig.transaction_depth_days`` /
+    ``.log_response``), resolved by the webhook endpoint. ``None``/``False``
+    reproduce the previous hard-coded behaviour exactly.
     """
     if payload.Tag is None:
         raise TranslatorError(
@@ -191,7 +204,22 @@ def translate_flinks_payload(payload: FlinksWebhookPayload) -> TranslateResult:
     is_ok = payload.HttpStatusCode == 200 and len(accounts) > 0
     result: Literal["passed", "failed"] = "passed" if is_ok else "failed"
 
-    derived = _derive_bank_metrics(accounts) if is_ok else _empty_bank_metrics()
+    derived = (
+        _derive_bank_metrics(accounts, transaction_depth_days)
+        if is_ok
+        else _empty_bank_metrics()
+    )
+
+    # Flinks "Log response" knob: emit the non-PII response envelope for
+    # support/diagnostics. Off by default — and it never logs Accounts[] /
+    # transaction descriptions (Hard Rule #6).
+    if log_response:
+        logger.info(
+            "flinks_webhook_response response_type=%s request_id=%s http_status=%s "
+            "accounts=%d result=%s",
+            payload.ResponseType, payload.RequestId, payload.HttpStatusCode,
+            len(accounts), result,
+        )
 
     # WS-D — AI bank-statement analysis v1: income/expense categorization +
     # micro-lender risk flag + human-visible summary, computed HERE because the
@@ -256,7 +284,9 @@ def _empty_bank_metrics() -> dict[str, int]:
     }
 
 
-def _derive_bank_metrics(accounts: list[dict[str, Any]]) -> dict[str, int]:
+def _derive_bank_metrics(
+    accounts: list[dict[str, Any]], transaction_depth_days: Optional[int] = None
+) -> dict[str, int]:
     """Derive underwriting metrics from raw Flinks ``Accounts[].Transactions[]``.
 
     Delegates to the transaction-analysis engine (P8.x), which detects RECURRING
@@ -266,7 +296,7 @@ def _derive_bank_metrics(accounts: list[dict[str, Any]]) -> dict[str, int]:
     contract: ``monthly_income_cents``, ``nsf_count_90d``, ``account_age_months``,
     ``avg_balance_cents``.
     """
-    return analyze_accounts(accounts)
+    return analyze_accounts(accounts, lookback_days=transaction_depth_days)
 
 
 def _parse_flinks_date(value: Any) -> Optional[Any]:

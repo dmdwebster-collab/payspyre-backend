@@ -280,15 +280,25 @@ def test_swapping_the_two_shared_bucket_fees_is_allowed():
     assert cfg.allocation_priority.repayment[2] == "administration"
 
 
-def test_accrual_order_is_descriptive_and_unconstrained_by_the_engine():
-    cfg = parse_product_policy_config(
-        {
-            "allocation_priority": {
-                "accrual": ["nsf", "principal", "interest", "administration", "origination"]
+def test_accrual_order_is_read_only_and_a_deviation_is_refused():
+    """UPDATED (config-consumers PR): accrual priority has no engine consumer —
+    accruals are generated per-category by the schedule builder and the per-diem
+    walk, which have no orderable step. Rather than accept-and-ignore a custom
+    order (the "editable, persisted, ignored" anti-pattern), it is REFUSED and
+    the schema advertises the field as read-only."""
+    with pytest.raises(ProductPolicyConfigError, match="read-only"):
+        parse_product_policy_config(
+            {
+                "allocation_priority": {
+                    "accrual": ["nsf", "principal", "interest", "administration", "origination"]
+                }
             }
-        }
+        )
+    # The default value is of course still accepted.
+    cfg = parse_product_policy_config(
+        {"allocation_priority": {"accrual": list(DEFAULT_ACCRUAL_PRIORITY)}}
     )
-    assert cfg.allocation_priority.accrual[0] == "nsf"
+    assert tuple(cfg.allocation_priority.accrual) == DEFAULT_ACCRUAL_PRIORITY
 
 
 def test_annuity_loan_type_is_declared_but_not_selectable():
