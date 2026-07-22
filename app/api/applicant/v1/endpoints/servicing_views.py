@@ -41,6 +41,9 @@ class ScheduleViewRow(BaseModel):
     due_date: str
     principal_cents: int
     interest_cents: int
+    # total - principal - interest. One figure: the schedule layer has no
+    # per-row fee itemization (see borrower_portal.schedule_fee_cents).
+    fee_cents: int
     total_cents: int
     status: str
     paid_cents: int

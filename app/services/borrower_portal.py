@@ -4,6 +4,8 @@
   updates as their applications or accounts go through different stages").
 * Initial-vs-current schedule shaping + closed-payments toggle + next-payment
   widget math.
+* Transactions-tab shaping (video 11 §1.10's eight columns) read STRAIGHT off
+  the immutable ledger — allocations are never recomputed or re-derived here.
 * Payout-request date-window validation (≤30 days ahead, never in the past).
 * New-loan (re-origination) prefill: which canonical application fields carry
   over from the borrower's latest verified application file.
@@ -160,6 +162,19 @@ def banner_for(application_status: Optional[str], loan_status: Optional[str]) ->
 CLOSED_STATUSES = ("paid", "waived")
 
 
+def schedule_fee_cents(item) -> int:
+    """The fee component of one installment.
+
+    ``platform_loan_schedule`` stores principal / interest / total only, so the
+    fee IS ``total - principal - interest`` by construction. Floored at 0 so a
+    rounding artefact can never present as a negative fee to a borrower.
+    """
+    return max(
+        0,
+        (item.total_cents or 0) - (item.principal_cents or 0) - (item.interest_cents or 0),
+    )
+
+
 def shape_schedule_rows(
     schedule_items: Iterable,
     view: str,
@@ -173,6 +188,15 @@ def shape_schedule_rows(
     * ``current`` — the actuals-adjusted live view: per-row status, paid and
       remaining amounts; ``include_closed=False`` hides paid/waived rows
       (TL's "Show closed payments" toggle).
+
+    ``fee_cents`` is the installment's fee component — the arithmetic remainder
+    ``total - principal - interest`` (the schedule model stores exactly three
+    money columns, so this is an identity, not an allocation guess). It is a
+    SINGLE figure: the schedule layer does NOT itemize fees into buckets
+    (origination / administration / late / …), so TL's per-row fee-breakdown
+    dropdown has no data behind it here. Computing it server-side removes the
+    frontend's own subtraction + footnote; the bucket split needs the
+    fee-bucket work already owed to report exports.
     """
     rows = sorted(schedule_items, key=lambda s: s.installment_number)
     out: list[dict] = []
@@ -184,6 +208,7 @@ def shape_schedule_rows(
                     "due_date": r.due_date.isoformat(),
                     "principal_cents": r.principal_cents,
                     "interest_cents": r.interest_cents,
+                    "fee_cents": schedule_fee_cents(r),
                     "total_cents": r.total_cents,
                     "status": "scheduled",
                     "paid_cents": 0,
@@ -199,6 +224,7 @@ def shape_schedule_rows(
                 "due_date": r.due_date.isoformat(),
                 "principal_cents": r.principal_cents,
                 "interest_cents": r.interest_cents,
+                "fee_cents": schedule_fee_cents(r),
                 "total_cents": r.total_cents,
                 "status": r.status,
                 "paid_cents": r.paid_cents,
@@ -231,6 +257,194 @@ def next_payment_widget(schedule_items: Iterable, as_of: date) -> Optional[dict]
         "overdue": days_until < 0,
         "installment_number": nxt.installment_number,
     }
+
+
+# ---------------------------------------------------------------------------
+# Transactions tab (video 11 §1.10 — eight columns)
+# ---------------------------------------------------------------------------
+#
+# Status | Date | Total | Principal | Interest | Fee | Repayment mode |
+# Repayment method
+#
+# SOURCE OF TRUTH: ``platform_loan_transactions`` — the immutable ledger. The
+# allocation figures below are the POSTED allocations as written by
+# ``loan_servicing.record_payment`` (the actuals engine). Nothing here
+# recomputes or re-derives an allocation: a borrower must see the same split
+# staff and the reports see.
+
+# The ledger's ``created_by`` provenance value written by the auto-collection
+# settlement path. It is what distinguishes TL's "Automatic payment" from a
+# borrower-initiated "Regular payment" — the two are the SAME repayment mode.
+AUTOMATIC_ACTOR = "auto_collection"
+# Written by the borrower Pay-Now settlement path.
+BORROWER_ACTOR = "borrower"
+
+# Ledger row types that belong on a borrower's transactions tab: cash applied
+# (payment), staff money corrections (adjustment) and the compensating rows
+# that undo them (reversal). ``disbursement`` and ``fee`` are charges, not
+# repayments, and stay off this tab.
+TRANSACTION_TXN_TYPES = ("payment", "adjustment", "reversal")
+
+# Ledger repayment_mode → borrower-facing label.
+REPAYMENT_MODE_LABELS = {
+    "regular": "Regular payment",
+    "add_on": "Add-on payment",
+    "special": "Special payment",
+    "payoff": "Payoff",
+}
+AUTOMATIC_MODE_LABEL = "Automatic payment"
+
+# Ledger payment_type → borrower-facing label (TL's "Direct bank transfer").
+REPAYMENT_METHOD_LABELS = {
+    "cash": "Cash",
+    "check": "Cheque",
+    "eft": "Direct bank transfer",
+    "credit_card": "Card",
+    "adjustment": "Adjustment",
+}
+
+
+def _mode_label(repayment_mode: Optional[str], is_automatic: bool) -> str:
+    if is_automatic:
+        return AUTOMATIC_MODE_LABEL
+    return REPAYMENT_MODE_LABELS.get(repayment_mode or "", "Payment")
+
+
+def _method_label(payment_type: Optional[str]) -> str:
+    return REPAYMENT_METHOD_LABELS.get(payment_type or "", "")
+
+
+def _ledger_transaction_row(row, original, reversed_on) -> dict:
+    """Shape one ledger row for the borrower's transactions tab.
+
+    ``original`` is the row a ``reversal`` compensates (None otherwise);
+    ``reversed_on`` is the effective date of the reversal that undid THIS row
+    (None when it still stands).
+
+    A reversal row is presented with the ORIGINAL's money — the same reading
+    ``loan_ledger._event_for_row`` and the Reversed-payments report take: the
+    compensating row's job is to undo exactly that payment, so that is what the
+    borrower is shown, flagged by ``status="reversal"``.
+    """
+    money = original if row.txn_type == "reversal" and original is not None else row
+    is_automatic = (row.created_by or "") == AUTOMATIC_ACTOR
+    if row.txn_type == "reversal":
+        status = "reversal"
+    elif reversed_on is not None:
+        status = "reversed"
+    else:
+        status = "posted"
+    fees_cents = money.fees_cents or 0
+    add_on_cents = money.add_on_cents or 0
+    return {
+        # --- pre-existing PaymentRow contract (unchanged meaning) ----------
+        "amount_cents": money.amount_cents,
+        "received_at": row.created_at,
+        "method": _method_label(money.payment_type) or (money.payment_type or ""),
+        # --- Dave's eight columns ------------------------------------------
+        "status": status,
+        "effective_date": row.effective_date,
+        "principal_cents": money.principal_cents or 0,
+        "interest_cents": money.interest_cents or 0,
+        "fees_cents": fees_cents,
+        "add_on_cents": add_on_cents,
+        # Dave's single "Fee" column = loan fees + non-accruing add-on (NSF and
+        # friends live in the add-on bucket). The two components are exposed
+        # above so the split stays visible; the ledger has ONE fee bucket, so
+        # there is no origination/admin/late itemization behind this number.
+        "fee_total_cents": fees_cents + add_on_cents,
+        "repayment_mode": money.repayment_mode,
+        "repayment_mode_label": _mode_label(money.repayment_mode, is_automatic),
+        "is_automatic": is_automatic,
+        "repayment_method": money.payment_type,
+        "repayment_method_label": _method_label(money.payment_type),
+        # --- provenance -----------------------------------------------------
+        "txn_type": row.txn_type,
+        "reference": row.reference,
+        "reverses_reference": original.reference if original is not None else None,
+        "reversed_on": reversed_on,
+        "allocation_source": "ledger",
+    }
+
+
+def _receipt_transaction_row(payment, is_automatic: bool) -> dict:
+    """Fallback row for a PRE-LEDGER loan: a cash receipt with no ledger row.
+
+    Allocations are ``None`` — NOT zero, and NOT a replayed guess. There is no
+    posted allocation for this money, and inventing one on a borrower-facing
+    screen would be fiction.
+    """
+    return {
+        "amount_cents": payment.amount_cents,
+        "received_at": payment.received_at,
+        "method": payment.method,
+        "status": "posted",
+        "effective_date": payment.received_at.date() if payment.received_at else None,
+        "principal_cents": None,
+        "interest_cents": None,
+        "fees_cents": None,
+        "add_on_cents": None,
+        "fee_total_cents": None,
+        "repayment_mode": None,
+        "repayment_mode_label": AUTOMATIC_MODE_LABEL if is_automatic else "Payment",
+        "is_automatic": is_automatic,
+        "repayment_method": None,
+        "repayment_method_label": "",
+        "txn_type": "receipt",
+        "reference": None,
+        "reverses_reference": None,
+        "reversed_on": None,
+        "allocation_source": "unallocated",
+    }
+
+
+def shape_transaction_rows(
+    ledger_rows: Iterable,
+    payments: Iterable,
+    automatic_payment_ids: Optional[set] = None,
+) -> list[dict]:
+    """The borrower transactions tab, most-recent first.
+
+    LEDGER FIRST (the money truth). When the loan has ledger rows they are the
+    only source: payment / adjustment rows, plus any reversal rows, ordered by
+    (effective_date, seq) descending. Reversed originals are NOT dropped — they
+    are returned with ``status="reversed"`` and the reversal that undid them is
+    returned as its own ``status="reversal"`` row, so the borrower can see both
+    halves of the correction.
+
+    FALLBACK (pre-ledger book, migration 049 predates it): the cash receipts in
+    ``platform_loan_payments`` with null allocations. ``automatic_payment_ids``
+    marks which of those receipts came from an auto-collection attempt.
+    """
+    ledger = sorted(
+        [r for r in (ledger_rows or [])], key=lambda t: (t.effective_date, t.seq)
+    )
+    if not ledger:
+        auto_ids = automatic_payment_ids or set()
+        receipts = sorted(
+            list(payments or []), key=lambda p: p.received_at, reverse=True
+        )
+        return [_receipt_transaction_row(p, p.id in auto_ids) for p in receipts]
+
+    by_id = {r.id: r for r in ledger}
+    reversed_on: dict = {}
+    for row in ledger:
+        if row.txn_type == "reversal" and row.reverses_transaction_id is not None:
+            # First reversal wins (a row is only ever undone once).
+            reversed_on.setdefault(row.reverses_transaction_id, row.effective_date)
+
+    out: list[dict] = []
+    for row in ledger:
+        if row.txn_type not in TRANSACTION_TXN_TYPES:
+            continue
+        original = (
+            by_id.get(row.reverses_transaction_id)
+            if row.txn_type == "reversal"
+            else None
+        )
+        out.append(_ledger_transaction_row(row, original, reversed_on.get(row.id)))
+    out.reverse()  # most-recent first
+    return out
 
 
 # ---------------------------------------------------------------------------
