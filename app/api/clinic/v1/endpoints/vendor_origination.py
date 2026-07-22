@@ -49,6 +49,7 @@ from sqlalchemy.orm import Session
 # patient-originated one uses (consent-first; PaySpyre decides).
 from app.api.applicant.v1.deps import get_patient_auth_service
 from app.api.clinic.v1.deps import ClinicPrincipal, get_current_clinic_user, get_orchestrator
+from app.services.clinic_permissions import require_clinic_permission
 from app.api.clinic.v1.endpoints.financing_links import (
     _build_patient_flow_url,
     _find_or_create_patient,
@@ -361,7 +362,12 @@ def _emit_vendor_event(
 # ---------------------------------------------------------------------------
 
 
-@router.post("", response_model=VendorApplicationCreated, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=VendorApplicationCreated,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_clinic_permission("loan_origination"))],
+)
 def create_vendor_application(
     body: VendorApplicationIntakeBody,
     db: Session = Depends(get_db),
@@ -480,7 +486,11 @@ def create_vendor_application(
     )
 
 
-@router.post("/preview", response_model=VendorPaymentPreview)
+@router.post(
+    "/preview",
+    response_model=VendorPaymentPreview,
+    dependencies=[Depends(require_clinic_permission("loan_origination"))],
+)
 def preview_payment(
     body: PreviewRequestBody,
     db: Session = Depends(get_db),
@@ -551,7 +561,9 @@ def preview_payment(
 
 
 @router.post(
-    "/{application_id}/request-reprocessing", response_model=VendorReprocessingResult
+    "/{application_id}/request-reprocessing",
+    response_model=VendorReprocessingResult,
+    dependencies=[Depends(require_clinic_permission("loan_origination"))],
 )
 def request_reprocessing(
     application_id: UUID,

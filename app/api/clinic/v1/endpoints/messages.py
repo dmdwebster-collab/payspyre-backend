@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.api.clinic.v1.deps import ClinicPrincipal, get_current_clinic_user
+from app.services.clinic_permissions import require_clinic_permission
 from app.db.base import get_db
 from app.models.platform.message import SENDER_KIND_VENDOR
 from app.schemas.messaging import (
@@ -31,6 +32,12 @@ router = APIRouter(tags=["clinic-messages"])
 
 _VIEWER_SIDE = SENDER_KIND_VENDOR
 
+# WS-G role matrix: the vendor⇄PaySpyre thread is the ONLY sanctioned vendor
+# communication channel (video 10 R12 — "all vendor communication goes through
+# the comments tab"), so every role that works a file may use it. Back-office
+# roles that never touch a live file (``export``, ``archive``) may not.
+MESSAGE_ROLES = ("loan_origination", "loan_servicing", "collection", "monitoring")
+
 
 def _application_or_404(db: Session, application_id: UUID, principal: ClinicPrincipal):
     application = application_messages.get_application(
@@ -44,7 +51,9 @@ def _application_or_404(db: Session, application_id: UUID, principal: ClinicPrin
 
 
 @router.get(
-    "/applications/{application_id}/messages", response_model=list[MessageOut]
+    "/applications/{application_id}/messages",
+    response_model=list[MessageOut],
+    dependencies=[Depends(require_clinic_permission(*MESSAGE_ROLES))],
 )
 def list_messages(
     application_id: UUID,
@@ -59,6 +68,7 @@ def list_messages(
     "/applications/{application_id}/messages",
     response_model=MessageOut,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_clinic_permission(*MESSAGE_ROLES))],
 )
 def post_message(
     application_id: UUID,
@@ -85,7 +95,9 @@ def post_message(
 
 
 @router.post(
-    "/applications/{application_id}/messages/read", response_model=MarkReadOut
+    "/applications/{application_id}/messages/read",
+    response_model=MarkReadOut,
+    dependencies=[Depends(require_clinic_permission(*MESSAGE_ROLES))],
 )
 def mark_thread_read(
     application_id: UUID,
@@ -100,7 +112,11 @@ def mark_thread_read(
     return MarkReadOut(application_id=application.id, unread_count=0)
 
 
-@router.get("/messages/unread-count", response_model=UnreadCountOut)
+@router.get(
+    "/messages/unread-count",
+    response_model=UnreadCountOut,
+    dependencies=[Depends(require_clinic_permission(*MESSAGE_ROLES))],
+)
 def unread_count(
     db: Session = Depends(get_db),
     principal: ClinicPrincipal = Depends(get_current_clinic_user),
@@ -114,7 +130,11 @@ def unread_count(
     return UnreadCountOut(unread_count=n)
 
 
-@router.get("/messages/threads", response_model=list[ThreadSummary])
+@router.get(
+    "/messages/threads",
+    response_model=list[ThreadSummary],
+    dependencies=[Depends(require_clinic_permission(*MESSAGE_ROLES))],
+)
 def list_threads(
     db: Session = Depends(get_db),
     principal: ClinicPrincipal = Depends(get_current_clinic_user),

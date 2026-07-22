@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.clinic.v1.deps import ClinicPrincipal, get_current_clinic_user
+from app.services.clinic_permissions import require_clinic_permission
 from app.api.marketplace_schemas import VendorBillingEntry
 from app.db.base import get_db
 from app.services.marketplace import listings as listings_service
@@ -26,7 +27,10 @@ from app.services.marketplace import listings as listings_service
 router = APIRouter(prefix="/marketplace", tags=["clinic-marketplace"])
 
 
-@router.get("/leads")
+@router.get(
+    "/leads",
+    dependencies=[Depends(require_clinic_permission("loan_origination"))],
+)
 def list_leads(
     treatment_category: Optional[str] = None,
     max_distance_km: Optional[int] = None,
@@ -50,7 +54,11 @@ def list_leads(
     )
 
 
-@router.post("/leads/{listing_id}/express_interest", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/leads/{listing_id}/express_interest",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_clinic_permission("loan_origination"))],
+)
 def express_interest(
     listing_id: UUID,
     db: Session = Depends(get_db),
@@ -71,7 +79,10 @@ def express_interest(
     }
 
 
-@router.get("/listings/{listing_id}")
+@router.get(
+    "/listings/{listing_id}",
+    dependencies=[Depends(require_clinic_permission("loan_origination"))],
+)
 def get_listing(
     listing_id: UUID,
     db: Session = Depends(get_db),
@@ -91,7 +102,11 @@ def get_listing(
     return view
 
 
-@router.post("/listings/{listing_id}/book_appointment", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/listings/{listing_id}/book_appointment",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_clinic_permission("loan_origination"))],
+)
 def book_appointment(
     listing_id: UUID,
     db: Session = Depends(get_db),
@@ -116,7 +131,11 @@ def book_appointment(
     }
 
 
-@router.get("/billing/leads", response_model=list[VendorBillingEntry])
+@router.get(
+    "/billing/leads",
+    response_model=list[VendorBillingEntry],
+    dependencies=[Depends(require_clinic_permission("vendor_management", "export"))],
+)
 def billing_leads(
     db: Session = Depends(get_db),
     principal: ClinicPrincipal = Depends(get_current_clinic_user),

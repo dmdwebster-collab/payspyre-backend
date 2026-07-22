@@ -22,6 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.api.clinic.v1.deps import ClinicPrincipal, get_current_clinic_user, get_orchestrator
+from app.services.clinic_permissions import require_clinic_permission
 from app.api.clinic.v1.schemas import ClinicFinancingLink, CreateFinancingLinkBody
 from app.core.config import settings
 from app.db.base import get_db
@@ -98,7 +99,12 @@ def _build_patient_flow_url(application_id, credit_product_id, amount_cents) -> 
     return f"{origin}/?{query}"
 
 
-@router.post("", response_model=ClinicFinancingLink, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=ClinicFinancingLink,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_clinic_permission("loan_origination"))],
+)
 def create_financing_link(
     body: CreateFinancingLinkBody,
     db: Session = Depends(get_db),
