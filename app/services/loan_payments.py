@@ -39,7 +39,7 @@ from app.models.platform.credit_application import PlatformCreditApplication
 from app.models.platform.event import PlatformEvent
 from app.models.platform.loan import PlatformLoan, PlatformLoanScheduleItem
 from app.models.platform.patient import PlatformPatient
-from app.services import loan_ledger, loan_servicing
+from app.services import borrower_portal, loan_ledger, loan_servicing
 from app.services.payments.zumrails_adapter import TransactionStatus
 
 logger = get_logger(__name__)
@@ -329,6 +329,17 @@ def on_collection_complete(db: Session, transaction_id: str) -> bool:
             }
             mode = "regular"
 
+    # Ledger PROVENANCE: an auto-collection pull and a borrower's own Pay Now
+    # settle through this same function with the same repayment_mode, so the
+    # mode cannot tell them apart. The initiating event says which it was
+    # (auto_collection stamps ``source``) — record it on the ledger row so the
+    # borrower's transactions tab can show TL's "Automatic payment" vs
+    # "Regular payment" without re-deriving anything downstream.
+    created_by = (
+        borrower_portal.AUTOMATIC_ACTOR
+        if (init.get("source") or "") == "auto_collection"
+        else borrower_portal.BORROWER_ACTOR
+    )
     loan_servicing.record_payment(
         db,
         loan,
@@ -337,6 +348,7 @@ def on_collection_complete(db: Session, transaction_id: str) -> bool:
         method="zumrails_collection",
         external_ref=transaction_id,  # (loan_id, external_ref) unique → replay-safe
         repayment_mode=mode,
+        created_by=created_by,
     )
     extra = {
         "transaction_id": transaction_id,
