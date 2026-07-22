@@ -569,7 +569,7 @@ def charge_off_loan(
         raise ValueError(f"cannot charge off a loan in status '{loan.status}'")
 
     loan.status = "charged_off"
-    # Real close timestamp (migration 069): the Archive sorts and pages on Close
+    # Real close timestamp (migration 070): the Archive sorts and pages on Close
     # date, which used to be the drifting ``updated_at`` proxy.
     archive.stamp_loan_closed(loan)
     _record_loan_event(

@@ -59,7 +59,7 @@ The decision snapshot is frozen AS OF the credit decision (application row:
 the decision"; it never updates with later applications.
 
 Close DATE: applications use ``status_updated_at`` (stamped on every terminal
-transition). Loans carry a real ``closed_at`` since migration 069, stamped by
+transition). Loans carry a real ``closed_at`` since migration 070, stamped by
 ``stamp_loan_closed`` from the path that closes them and backfilled for older
 rows; ``updated_at`` remains the fallback for anything the backfill could not
 reach. Every row reports its provenance in ``closed_at_source``.
@@ -267,7 +267,7 @@ def _apply_assignee_filter(q, assignee_id: Optional[Any]):
     return q.filter(PlatformCreditApplication.assigned_to_user_id == assignee_id)
 
 
-#: The loan's close timestamp: the real column, falling back to the pre-069
+#: The loan's close timestamp: the real column, falling back to the pre-070
 #: proxy for rows the backfill could not reach.
 _LOAN_CLOSED_AT = func.coalesce(PlatformLoan.closed_at, PlatformLoan.updated_at)
 
@@ -483,7 +483,7 @@ def list_archive(
                     "status": loan.status,
                     "closed_at": closed_at.isoformat() if closed_at else None,
                     # 'transition' / 'backfill_*' when real; 'updated_at' when
-                    # we are still falling back to the pre-069 proxy.
+                    # we are still falling back to the pre-070 proxy.
                     "closed_at_source": (
                         loan.closed_at_source
                         if loan.closed_at is not None
@@ -612,8 +612,8 @@ def loan_archive_detail(db: Session, loan_id: UUID, *, as_of: Optional[date] = N
         "record_type": "loan",
         "detail_kind": "servicing",
         "close_reason": close_reason_for_loan(loan.status, application_status),
-        # 'transition' / 'backfill_*' once migration 069 has a value; 'updated_at'
-        # while we are still falling back to the pre-069 proxy.
+        # 'transition' / 'backfill_*' once migration 070 has a value; 'updated_at'
+        # while we are still falling back to the pre-070 proxy.
         "closed_at_source": (
             loan.closed_at_source if loan.closed_at is not None else "updated_at"
         ),

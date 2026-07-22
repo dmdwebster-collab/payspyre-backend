@@ -633,22 +633,26 @@ def test_migration_063_chain_pin():
 
 
 # ===========================================================================
-# migration 069 chain pin (merge-train convention)
+# migration 070 chain pin (merge-train convention)
 # ===========================================================================
 
 
-def test_migration_069_chain_pin():
-    """069_loan_closed_at adds the Archive's real close timestamp. Sibling P0
-    branches may also claim 069 — this pin makes a silent fork fail loudly so
-    the merge train re-chains deliberately."""
+def test_migration_070_chain_pin():
+    """070_loan_closed_at adds the Archive's real close timestamp.
+
+    Re-chained from 069 once the sibling P0 branch ``069_dead_button_backends``
+    (PR #199) landed on main: two revisions off ``068_dave_status_model`` would
+    split the alembic head. This pin makes a silent fork fail loudly so the
+    merge train re-chains deliberately rather than discovering it in deploy.
+    """
     path = (
         Path(__file__).resolve().parent.parent
         / "alembic"
         / "versions"
-        / "069_loan_closed_at.py"
+        / "070_loan_closed_at.py"
     )
-    spec = importlib.util.spec_from_file_location("m069", path)
+    spec = importlib.util.spec_from_file_location("m070", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    assert mod.revision == "069_loan_closed_at"
-    assert mod.down_revision == "068_dave_status_model"
+    assert mod.revision == "070_loan_closed_at"
+    assert mod.down_revision == "069_dead_button_backends"

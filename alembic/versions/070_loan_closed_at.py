@@ -1,8 +1,15 @@
 """Real ``closed_at`` on platform_loans (Archive parity — video 06 gap 6)
 
-Revision ID: 069_loan_closed_at
-Revises: 068_dave_status_model
+Revision ID: 070_loan_closed_at
+Revises: 069_dead_button_backends
 Create Date: 2026-07-22
+
+RE-CHAINED: this started life as ``069_loan_closed_at`` off ``068_dave_status_model``.
+The sibling P0 branch ``069_dead_button_backends`` (PR #199) landed on main first,
+so this moved to 070 behind it — two revisions chained to 068 would have split the
+alembic head and broken ``alembic upgrade head``. Only the revision identifiers
+changed; the schema change below is independent of #199 (which touched
+``platform_patient_bank_accounts`` and added ``platform_credit_report_pulls``).
 
 ``PlatformLoan`` has never carried a close timestamp. The Archive workplace has
 been reporting ``updated_at`` as a proxy and flagging the dishonesty in the
@@ -55,8 +62,8 @@ from typing import Sequence, Union
 from alembic import op
 
 
-revision: str = "069_loan_closed_at"
-down_revision: Union[str, None] = "068_dave_status_model"
+revision: str = "070_loan_closed_at"
+down_revision: Union[str, None] = "069_dead_button_backends"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

@@ -674,7 +674,7 @@ def record_payment(
             if item.status not in ("paid", "waived"):
                 item.status = "waived"
         loan.status = "paid_off"
-        # Real close timestamp (migration 069) — the Archive's Close date column
+        # Real close timestamp (migration 070) — the Archive's Close date column
         # used to read ``updated_at``, which moves on every later write.
         stamp_loan_closed(loan)
     elif all(s.status in ("paid", "waived") for s in schedule) and schedule:
