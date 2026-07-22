@@ -42,6 +42,7 @@ from app.models.platform.patient import PlatformPatient
 from app.models.user import User
 
 _ADMIN = "/api/v1/admin"
+_CLINIC = "/api/clinic/v1"
 
 
 # --- seeding ---------------------------------------------------------------
@@ -148,6 +149,27 @@ def app(db_session: Session):
     application.dependency_overrides[get_db] = lambda: db_session
     yield application
     application.dependency_overrides.clear()
+
+
+@pytest.fixture(scope="module")
+def served_routes() -> dict[str, set[str]]:
+    """``{path: {http methods}}`` for everything the API actually SERVES.
+
+    Read from the generated OpenAPI document rather than by walking
+    ``router.routes``: FastAPI 0.139 made ``include_router`` lazy, so a parent
+    router's ``.routes`` holds wrapper objects with no ``path`` and a naive
+    walk finds NOTHING — passing locally on an older pin while proving nothing
+    in CI (the identical trap documented at length in
+    ``tests/test_vendor_visibility_fence.py``; this file hit it too, on the
+    first CI run). The OpenAPI schema is generated from fully-materialized
+    routes, so it reads the same under every FastAPI version, and
+    ``test_the_comment_routes_are_discoverable_at_all`` fails loudly if it ever
+    comes back empty.
+    """
+    served = FastAPI()
+    served.include_router(api_router, prefix="/api/v1")
+    served.include_router(clinic_router, prefix="/api/clinic/v1")
+    return {path: set(ops) for path, ops in served.openapi()["paths"].items()}
 
 
 @pytest.fixture
@@ -257,12 +279,17 @@ class TestStaffComments:
                 PlatformEvent.application_id == application.id,
                 PlatformEvent.event_type == "staff_comment.posted",
             )
+            # Explicit ordering: an unordered query returns rows in whatever
+            # order the planner likes, which differs between a freshly seeded
+            # local DB and CI's.
+            .order_by(PlatformEvent.id.asc())
             .all()
         )
         assert len(events) == 2
-        assert events[0].patient_id == application.patient_id
-        assert events[0].payload["subject"] == "application"
+        assert {e.patient_id for e in events} == {application.patient_id}
+        assert [e.payload["subject"] for e in events] == ["application", "application"]
         assert events[0].payload["comment_id"] == posted["id"]
+        assert events[0].payload["body_preview"].startswith("Stips outstanding")
 
     def test_loan_thread_is_separate_and_can_replay_the_application(
         self, admin_client, db_session
@@ -318,16 +345,17 @@ class TestStaffComments:
 
 class TestAppendOnly:
     """No route can mutate or remove a posted comment — the property that makes
-    the tab usable as evidence. Asserted against the route table, so adding a
-    PATCH/DELETE later fails here and forces the decision to be re-made."""
+    the tab usable as evidence. Asserted against the SERVED route table, so
+    adding a PATCH/DELETE later fails here and forces the decision to be
+    consciously re-made."""
 
-    def test_no_mutating_routes_on_comment_paths(self):
-        offenders = [
-            (path, sorted(methods))
-            for path, methods in _all_routes(api_router)
-            if path.endswith("/comments") and methods - {"GET", "POST", "HEAD"}
-        ]
-        assert offenders == [], f"comments must be append-only, found: {offenders}"
+    def test_no_mutating_routes_on_comment_paths(self, served_routes):
+        offenders = {
+            path: sorted(methods)
+            for path, methods in served_routes.items()
+            if path.endswith("/comments") and methods - {"get", "post", "head"}
+        }
+        assert offenders == {}, f"comments must be append-only, found: {offenders}"
 
     def test_model_has_no_edit_or_delete_columns(self):
         from app.models.platform.staff_comment import PlatformStaffComment
@@ -339,19 +367,25 @@ class TestAppendOnly:
 class TestStaffOnlyFence:
     """Internal only: no vendor and no borrower surface can reach this data."""
 
-    def test_no_clinic_route_exposes_comments(self):
-        paths = _all_paths(clinic_router)
-        assert not [p for p in paths if "comment" in p], paths
+    def test_the_comment_routes_are_discoverable_at_all(self, served_routes):
+        """Guards the three tests below from passing VACUOUSLY on an empty
+        route map — which is exactly how an earlier version of this fence
+        silently proved nothing in CI."""
+        comment_paths = {p for p in served_routes if p.endswith("/comments")}
+        assert comment_paths == {
+            f"{_ADMIN}/applications/{{application_id}}/comments",
+            f"{_ADMIN}/loans/{{loan_id}}/comments",
+        }, sorted(comment_paths)
 
-    def test_no_borrower_portal_route_exposes_comments(self):
-        from app.api.v1.api import api_router as admin_api
+    def test_comment_routes_are_mounted_under_admin_only(self, served_routes):
+        stray = [p for p in served_routes if "comment" in p and not p.startswith(_ADMIN)]
+        assert stray == [], stray
 
-        borrower = [
-            p
-            for p in _all_paths(admin_api)
-            if "comment" in p and not p.startswith("/admin")
+    def test_no_clinic_route_exposes_comments(self, served_routes):
+        clinic = [
+            p for p in served_routes if p.startswith(_CLINIC) and "comment" in p
         ]
-        assert borrower == [], borrower
+        assert clinic == [], clinic
 
     def test_clinic_package_never_imports_the_comment_model(self):
         import importlib
@@ -390,33 +424,3 @@ class TestStaffOnlyFence:
             assert any(
                 "require_roles" in getattr(g, "__qualname__", "") for g in guards
             ), f"{fn.__name__} is not gated by require_roles"
-
-    def test_comment_routes_are_mounted_under_admin_only(self):
-        comment_paths = [p for p in _all_paths(api_router) if p.endswith("/comments")]
-        assert comment_paths, "expected the comment routes to be discoverable"
-        assert all(p.startswith("/admin") for p in comment_paths), comment_paths
-
-
-def _all_routes(router) -> list[tuple[str, set[str]]]:
-    """Flatten a router into ``(path, methods)``, following lazily-included
-    sub-routers.
-
-    FastAPI 0.139 made ``include_router`` lazy, so a parent router's ``.routes``
-    can hold wrapper objects with no ``path``; recurse through them rather than
-    trusting a flat read (the same trap documented at length in
-    ``tests/test_vendor_visibility_fence.py``).
-    """
-    out: list[tuple[str, set[str]]] = []
-    for route in getattr(router, "routes", []):
-        path = getattr(route, "path", None)
-        if isinstance(path, str):
-            out.append((path, set(getattr(route, "methods", set()) or set())))
-        inner = getattr(route, "router", None)
-        if inner is not None and inner is not router:
-            prefix = getattr(route, "prefix", "") or ""
-            out.extend((prefix + p, m) for p, m in _all_routes(inner))
-    return out
-
-
-def _all_paths(router) -> list[str]:
-    return [p for p, _ in _all_routes(router)]
