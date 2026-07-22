@@ -31,6 +31,7 @@ from app.db.base import get_db
 from app.schemas.pricing_config import PricingConfigError
 from app.schemas.product_policy_config import (
     ProductPolicyConfigError,
+    assert_loan_type_change_allowed,
     parse_product_policy_config,
 )
 from app.services import credit_products as service
@@ -40,10 +41,19 @@ from app.services import province_compliance
 router = APIRouter()
 
 
-def _validate_policy_or_422(policy_config: dict | None) -> dict | None:
-    """Validate policy_config against the typed schema + payoff engine-
-    consistency guard. Returns the normalized shape to persist (or None when the
-    product carries no policy config — legacy rows stay NULL).
+def _validate_policy_or_422(
+    policy_config: dict | None,
+    *,
+    existing_policy: dict | None = None,
+    confirm_loan_type_change: bool = False,
+) -> dict | None:
+    """Validate policy_config against the typed schema + the engine-consistency
+    guards (payoff grid, repayment allocation ordering, schedule building).
+    Returns the normalized shape to persist (or None when the product carries no
+    policy config — legacy rows stay NULL).
+
+    On UPDATE, ``existing_policy`` enables TL's destructive-change guard on
+    `Loan type`: switching it is refused with 409 unless the caller confirms.
     """
     if policy_config is None:
         return None
@@ -53,6 +63,14 @@ def _validate_policy_or_422(policy_config: dict | None) -> dict | None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"policy_config invalid: {exc}",
+        ) from exc
+    try:
+        assert_loan_type_change_allowed(
+            existing_policy, cfg, confirm_loan_type_change=confirm_loan_type_change
+        )
+    except ProductPolicyConfigError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
         ) from exc
     return cfg.model_dump(mode="json")
 
@@ -191,6 +209,15 @@ async def update_credit_product(
     product_id: UUID,
     data: CreditProductUpdate,
     db: Session = Depends(get_db),
+    confirm_loan_type_change: bool = Query(
+        default=False,
+        description=(
+            "Confirms Turnkey's destructive `Loan type` change ('All filled data "
+            "will be removed'). Required — and only consulted — when a patch "
+            "changes policy_config.schedule_building.loan_type on a product that "
+            "already has one; otherwise the update is refused with 409."
+        ),
+    ),
 ):
     # Re-validate the EFFECTIVE (merged) pricing when a patch touches the
     # pricing config, either amount bound, or the province set (schema + s.347
@@ -215,7 +242,12 @@ async def update_credit_product(
                 # carries pricing — unrelated patches never rewrite stored config).
                 data.pricing_config = normalized
     if data.policy_config is not None:
-        data.policy_config = _validate_policy_or_422(data.policy_config)
+        current = service.get_credit_product(db, product_id)
+        data.policy_config = _validate_policy_or_422(
+            data.policy_config,
+            existing_policy=(current.policy_config if current is not None else None),
+            confirm_loan_type_change=confirm_loan_type_change,
+        )
     try:
         product = service.update_credit_product(db, product_id, data)
     except JsonSchemaValidationError as exc:

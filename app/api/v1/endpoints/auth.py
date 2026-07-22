@@ -208,6 +208,31 @@ async def reset_password(
     raise HTTPException(status_code=400, detail="Invalid or expired reset token")
 
 
+@router.post("/accept-invite", response_model=MessageResponse)
+async def accept_invite(
+    invite_data: PasswordResetConfirm,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    """Complete an admin-issued staff invite by setting your OWN password.
+
+    Admins create colleagues without a password (Dave: an admin setting someone's
+    initial password "should never be a thing") and hand out a single-use, 7-day
+    invite link. This endpoint only matches a user who has never had a password;
+    ordinary resets stay on ``/reset-password``, unchanged. Accepting also marks
+    the account verified — the token was delivered to the invited address, which
+    is exactly what email verification proves.
+    """
+    await rate_limit(auth_rate_limiter)(request)
+
+    from app.services import staff_accounts
+
+    user = staff_accounts.accept_invite(db, invite_data.token, invite_data.new_password)
+    if user is None:
+        raise HTTPException(status_code=400, detail="Invalid or expired invite token")
+    return MessageResponse(message="Password set successfully — you can now sign in")
+
+
 @router.post("/verify-email", response_model=MessageResponse)
 async def verify_email(
     verification_data: EmailVerificationRequest,

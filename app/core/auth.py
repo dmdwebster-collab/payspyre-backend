@@ -82,6 +82,22 @@ def require_roles(*required_roles: str):
     return role_checker
 
 
+def user_has_direct_grant(user, resource: str, action: str) -> bool:
+    """True if (resource, action) was granted DIRECTLY to this user.
+
+    Direct grants (``user_permissions``, written by the Settings → Accounts →
+    Users permission grid) sit alongside role grants and are purely ADDITIVE —
+    they can only widen access. Every user predating the grid has an empty
+    grant set, so this returns False for them and no existing authorization
+    decision changes.
+    """
+    for grant in getattr(user, "permission_grants", None) or ():
+        perm = getattr(grant, "permission", None)
+        if perm is not None and perm.resource == resource and perm.action == action:
+            return True
+    return False
+
+
 def require_permission(resource: str, action: str):
     def permission_checker(current_user = Depends(get_current_user)):
         for user_role in current_user.roles:
@@ -91,6 +107,9 @@ def require_permission(resource: str, action: str):
                 if perm.resource == resource and perm.action == action:
                     return current_user
 
+        if user_has_direct_grant(current_user, resource, action):
+            return current_user
+
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"User does not have permission: {action} on {resource}",
@@ -99,14 +118,15 @@ def require_permission(resource: str, action: str):
 
 
 def user_has_permission(user, resource: str, action: str) -> bool:
-    """True if any of the user's roles grants (resource, action). Does NOT
-    include the implicit-admin allowance — callers add that where policy says."""
+    """True if any of the user's roles — or a direct per-user grant — carries
+    (resource, action). Does NOT include the implicit-admin allowance; callers
+    add that where policy says."""
     for user_role in getattr(user, "roles", []):
         for role_perm in user_role.role.permissions:
             perm = role_perm.permission
             if perm.resource == resource and perm.action == action:
                 return True
-    return False
+    return user_has_direct_grant(user, resource, action)
 
 
 def user_has_permission_or_admin(user, resource: str, action: str) -> bool:
@@ -122,7 +142,7 @@ def user_has_permission_or_admin(user, resource: str, action: str) -> bool:
             perm = role_perm.permission
             if perm.resource == resource and perm.action == action:
                 return True
-    return False
+    return user_has_direct_grant(user, resource, action)
 
 
 def user_is_admin(user) -> bool:
@@ -169,6 +189,8 @@ def require_permission_or_admin(resource: str, action: str):
                 perm = role_perm.permission
                 if perm.resource == resource and perm.action == action:
                     return current_user
+        if user_has_direct_grant(current_user, resource, action):
+            return current_user
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"User does not have permission: {action} on {resource}",
