@@ -22,6 +22,7 @@ from app.api.v1.endpoints import (
     admin_crm_vendors,
     admin_dashboard,
     admin_decision_reasons,
+    admin_customer_profiles,
     admin_document_templates,
     admin_flags,
     admin_hardship,
@@ -145,6 +146,14 @@ api_router.include_router(admin_scorecards.router, prefix="/admin/scorecards", t
 # Dave's Application Status Flow v1.00 registry (2026-07-21 review §A) — the
 # data the UI renders workplace queues + per-status action buttons from.
 api_router.include_router(admin_status_model.router, prefix="/admin", tags=["admin-config"])
+# Dave's Credit Application v1.0 — the Customer Profile as a first-class entity:
+# the field registry (GET /admin/profile-schema) the manual form + applicant
+# journey render from, profile CRUD (create/edit/lock/soft-delete, versioned),
+# and "create an application from an EXISTING profile" with the profile state
+# frozen onto the application.
+api_router.include_router(
+    admin_customer_profiles.router, prefix="/admin", tags=["admin-customer-profiles"]
+)
 # System mode (Simulation vs Live) — read-only, admin/staff, for the cockpit banner.
 api_router.include_router(admin_system.router, prefix="/admin/system", tags=["admin-system"])
 # WS-G — Vendor + Customer CRM. Vendor CRM: industry categories, contacts, bank

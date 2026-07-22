@@ -1,6 +1,10 @@
 from app.models.platform.patient import PlatformPatient
 from app.models.platform.patient_field import PlatformPatientField
 from app.models.platform.credit_product import PlatformCreditProduct
+from app.models.platform.customer_profile import (
+    PlatformCustomerProfile,
+    PlatformCustomerProfileField,
+)
 from app.models.platform.credit_application import PlatformCreditApplication
 from app.models.platform.secondary_income import PlatformApplicationSecondaryIncome
 from app.models.platform.application_history import (
@@ -98,6 +102,8 @@ __all__ = [
     "PlatformPatient",
     "PlatformPatientField",
     "PlatformCreditProduct",
+    "PlatformCustomerProfile",
+    "PlatformCustomerProfileField",
     "PlatformCreditApplication",
     "PlatformApplicationSecondaryIncome",
     "PlatformApplicationAddressHistory",
