@@ -461,6 +461,8 @@ class RealNotificationDispatcher:
         sent_by: str = "system",
         sent_by_user_id: Optional[UUID] = None,
         comment: Optional[str] = None,
+        subject_override: Optional[str] = None,
+        body_override: Optional[str] = None,
     ) -> int:
         """Render ``notification_type`` against ``context`` and send it (WS1).
 
@@ -482,7 +484,13 @@ class RealNotificationDispatcher:
         recipient = self._resolve_recipient(patient_id, contact_method)
         self._check_suppression(contact_method, recipient)
 
-        if contact_method == "email":
+        if body_override is not None:
+            # Ad-hoc staff compose (P0 T3): body authored in the cockpit (or
+            # template-seeded and then edited). Suppression, vendor send, audit
+            # and comms-log paths below are byte-for-byte the automated ones.
+            subject = subject_override if contact_method == "email" else None
+            body = body_override
+        elif contact_method == "email":
             subject, body = notification_render.render_email(notification_type, context)
         else:
             subject, body = None, notification_render.render_sms(notification_type, context)

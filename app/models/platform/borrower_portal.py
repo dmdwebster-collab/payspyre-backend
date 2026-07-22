@@ -125,6 +125,10 @@ class PlatformPatientBankAccount(Base):
             "verified_via IN ('flinks', 'manual_staff')",
             name="ck_platform_patient_bank_account_verified_via",
         ),
+        CheckConstraint(
+            "source IS NULL OR source IN ('flinks', 'manual')",
+            name="ck_platform_patient_bank_account_source",
+        ),
         Index("ix_platform_patient_bank_accounts_patient", "patient_id"),
         # At most ONE active default per patient.
         Index(
@@ -148,6 +152,19 @@ class PlatformPatientBankAccount(Base):
     # Masked display values only (e.g. "•••77", "••••1000").
     routing_mask = Column(String, nullable=True)
     account_mask = Column(String, nullable=False)
+
+    # Canadian routing identifiers (migration 069, Dave's Add Bank Account
+    # dialog). TEXT — NOT integers — so a leading zero survives: institution
+    # "003" must never round-trip as 3.
+    institution_number = Column(String(3), nullable=True)
+    transit_number = Column(String(5), nullable=True)
+    account_holder = Column(String, nullable=True)
+    # FULL account number, Fernet-encrypted at rest (app.core.secret_crypto).
+    # Never returned by any API — display always uses ``account_mask``. Stored
+    # because a PAD debit cannot be assembled from a mask.
+    account_number_encrypted = Column(String, nullable=True)
+    # Dave's literal "Source" column: 'flinks' | 'manual'.
+    source = Column(String, nullable=True)
 
     # Provenance: 'flinks' (bank-verification flow) or 'manual_staff' (void
     # cheque / PAD form reviewed by a human and added in the back end).

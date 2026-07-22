@@ -154,6 +154,8 @@ class MockNotificationDispatcher:
         sent_by: str = "system",
         sent_by_user_id: UUID | None = None,
         comment: str | None = None,
+        subject_override: str | None = None,
+        body_override: str | None = None,
     ) -> int:
         """Mock parity for ``RealNotificationDispatcher.send_notification`` (WS1).
 
@@ -166,7 +168,15 @@ class MockNotificationDispatcher:
         """
         from app.services import notification_render
 
-        if contact_method == "email":
+        if body_override is not None:
+            # Ad-hoc staff compose (P0 T3 "Send Email"/"Send SMS"): the body is
+            # authored (or template-seeded then edited) in the cockpit, so
+            # there is nothing to render. Everything downstream — audit event,
+            # comms log with the FULL body, suppression semantics — is
+            # unchanged.
+            subject = subject_override if contact_method == "email" else None
+            body = body_override
+        elif contact_method == "email":
             subject, body = notification_render.render_email(notification_type, context)
         else:
             subject, body = None, notification_render.render_sms(notification_type, context)
