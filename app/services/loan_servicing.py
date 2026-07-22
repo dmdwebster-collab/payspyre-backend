@@ -38,6 +38,7 @@ from app.models.platform.loan import (
 )
 from app.schemas.pricing_config import parse_pricing_config, quote_fees_cents
 from app.services import loan_ledger
+from app.services.archive import stamp_loan_closed
 from app.services.interest_engine import REPAYMENT_MODES, allocate_payment
 from app.services.loan_quote import (
     CRIMINAL_RATE_CAP_BPS,
@@ -673,12 +674,16 @@ def record_payment(
             if item.status not in ("paid", "waived"):
                 item.status = "waived"
         loan.status = "paid_off"
+        # Real close timestamp (migration 070) — the Archive's Close date column
+        # used to read ``updated_at``, which moves on every later write.
+        stamp_loan_closed(loan)
     elif all(s.status in ("paid", "waived") for s in schedule) and schedule:
         # The plan is complete → paid_off (existing behaviour). NOTE: the
         # actuals ledger may carry a small residue (per-diem interest vs the
         # schedule's period interest); closure/true-up is the Payoff repayment
         # mode. Flagged for Dave.
         loan.status = "paid_off"
+        stamp_loan_closed(loan)
     elif loan.status == "delinquent":
         # Delinquency cure: a delinquent loan returns to ``active`` once it has no
         # overdue, unpaid installment left — the exact inverse of the condition

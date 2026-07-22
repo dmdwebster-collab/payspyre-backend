@@ -26,22 +26,61 @@ def list_archive(
     close_reason: Optional[str] = Query(
         None,
         description=(
-            "Filter to one archive status: "
-            "rejected / cancelled / expired / bank_verification_expired / "
-            "repaid / written_off"
+            "Filter to one archive status (Dave's 'All statuses' chip). The "
+            "vocabulary is derived from the status registry — see "
+            "``close_reasons`` / ``close_reason_options`` in the response."
         ),
     ),
+    assignee_id: Optional[str] = Query(
+        None,
+        description=(
+            "Dave's 'All assignations' chip: a user id to show only that "
+            "assignee's closed files, or the literal 'unassigned'. Omit for all."
+        ),
+    ),
+    sort: str = Query("closed_at", description="closed_at | id"),
+    order: str = Query("desc", description="asc | desc"),
     limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
     _user=Depends(get_current_user),
 ):
-    """The archive queue: every terminal application + loan, newest close
-    first, with its close reason (the archive 'S' column)."""
+    """The archive queue: every terminal application + loan, server-paginated,
+    with its close reason (the archive 'S' column), assignee ('A' column) and
+    an exact ``total`` for the "N record(s) · page X of Y" footer."""
+    resolved_assignee: Optional[object] = None
+    if assignee_id is not None:
+        if assignee_id == archive.UNASSIGNED:
+            resolved_assignee = archive.UNASSIGNED
+        else:
+            try:
+                resolved_assignee = UUID(assignee_id)
+            except ValueError:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "assignee_id must be a user UUID or the literal "
+                        f"'{archive.UNASSIGNED}'"
+                    ),
+                )
     try:
-        rows = archive.list_archive(db, close_reason=close_reason, limit=limit)
+        page = archive.list_archive(
+            db,
+            close_reason=close_reason,
+            assignee_id=resolved_assignee,
+            sort=sort,
+            order=order,
+            limit=limit,
+            offset=offset,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
-    return {"close_reasons": list(archive.CLOSE_REASONS), "records": rows}
+    return {
+        "close_reasons": list(archive.CLOSE_REASONS),
+        "close_reason_options": [dict(o) for o in archive.CLOSE_REASON_OPTIONS],
+        "sort_fields": list(archive.SORT_FIELDS),
+        **page,
+    }
 
 
 @router.get("/application/{application_id}")

@@ -79,14 +79,77 @@ def test_decision_snapshot_block_is_frozen_fields_only():
 
 
 def test_close_reasons_vocabulary_is_complete():
+    """The vocabulary is Dave's registry (9 closed/terminal statuses) plus the
+    archive-only ``bank_verification_expired`` refinement of ``expired``."""
     assert set(archive.CLOSE_REASONS) == {
-        "rejected",
+        "rejected",  # canonical 'declined' keeps its shipped wire key
         "cancelled",
         "expired",
         "bank_verification_expired",
         "repaid",
+        "renewed",
+        "refinanced",
+        "transferred",
+        "settlement",
         "written_off",
     }
+
+
+def test_close_reason_vocabulary_is_registry_driven():
+    """Every closed/off-model-terminal status in the registry has an archive
+    chip — the guard that stops the two lists drifting again."""
+    from app.services.application_status import (
+        CLOSED_STATUSES,
+        OFF_MODEL_TERMINALS,
+        STATUS_REGISTRY,
+    )
+
+    for status in (*CLOSED_STATUSES, *OFF_MODEL_TERMINALS):
+        assert status in archive._CANONICAL_TO_REASON
+        assert archive._CANONICAL_TO_REASON[status] in archive.CLOSE_REASONS
+    # …and no chip is invented out of thin air.
+    assert len(archive.CLOSE_REASONS) == len(CLOSED_STATUSES) + len(OFF_MODEL_TERMINALS) + 1
+    labels = {o["value"]: o["label"] for o in archive.CLOSE_REASON_OPTIONS}
+    assert labels["settlement"] == STATUS_REGISTRY[CLOSED_STATUSES[4]].label
+    assert labels["bank_verification_expired"] == "Expired (bank verification)"
+
+
+def test_close_reason_for_daves_closed_states():
+    """The four states with no ``platform_loan_status`` value resolve off the
+    APPLICATION status, and the application status wins over the loan's."""
+    for engine, reason in (
+        ("renewed", "renewed"),
+        ("refinanced", "refinanced"),
+        ("transferred", "transferred"),
+        ("settlement", "settlement"),
+        ("repaid", "repaid"),
+        ("written_off", "written_off"),
+    ):
+        assert archive.close_reason_for_loan("active", engine) == reason
+        assert archive.close_reason_for_application(engine, None) == reason
+    # A paid-off loan whose application was settled archives as 'settlement'.
+    assert archive.close_reason_for_loan("paid_off", "settlement") == "settlement"
+    # No application (migrated book) falls back to the loan column.
+    assert archive.close_reason_for_loan("paid_off", None) == "repaid"
+    # A live application never overrides.
+    assert archive.close_reason_for_loan("paid_off", "active") == "repaid"
+
+
+def test_stamp_loan_closed_is_idempotent():
+    from datetime import datetime, timezone
+
+    class _Loan:
+        closed_at = None
+        closed_at_source = None
+
+    loan = _Loan()
+    first = datetime(2026, 3, 1, tzinfo=timezone.utc)
+    archive.stamp_loan_closed(loan, when=first)
+    assert loan.closed_at == first
+    assert loan.closed_at_source == "transition"
+    # A second terminal write must not move the close date.
+    archive.stamp_loan_closed(loan, when=datetime(2026, 7, 1, tzinfo=timezone.utc))
+    assert loan.closed_at == first
 
 
 # ===========================================================================
@@ -578,3 +641,29 @@ def test_migration_063_chain_pin():
     spec.loader.exec_module(mod)
     assert mod.revision == "063_archive_misc"
     assert mod.down_revision == "062_reports_depth"
+
+
+# ===========================================================================
+# migration 070 chain pin (merge-train convention)
+# ===========================================================================
+
+
+def test_migration_070_chain_pin():
+    """070_loan_closed_at adds the Archive's real close timestamp.
+
+    Re-chained from 069 once the sibling P0 branch ``069_dead_button_backends``
+    (PR #199) landed on main: two revisions off ``068_dave_status_model`` would
+    split the alembic head. This pin makes a silent fork fail loudly so the
+    merge train re-chains deliberately rather than discovering it in deploy.
+    """
+    path = (
+        Path(__file__).resolve().parent.parent
+        / "alembic"
+        / "versions"
+        / "070_loan_closed_at.py"
+    )
+    spec = importlib.util.spec_from_file_location("m070", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod.revision == "070_loan_closed_at"
+    assert mod.down_revision == "069_dead_button_backends"
