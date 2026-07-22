@@ -22,11 +22,21 @@ masking``) — never by ad-hoc slicing at a call site. ``read_profile`` masks by
 default; the full value is returned only when the caller passes
 ``include_sensitive=True``, which the API grants to admins only.
 
-Backend PR #198 (branch ``feat/p0-clinic-authz``) introduces shared
-``MaskedValue`` / ``Last4`` types in ``app/api/clinic/v1/masking.py``. That
-module is NOT on main as of this commit, so :func:`mask_value` implements the
-contract locally and returns the same shape (``{"masked", "last", "is_masked"}``)
-so it can be swapped for the shared type in one place once #198 lands.
+:func:`mask_value` builds and validates every masked value with the SHARED
+contract in :mod:`app.api.clinic.v1.masking` (PR #198): ``mask_tail`` produces
+the redacted string and ``validate_masked`` / ``validate_last4`` — the same
+validators behind the ``MaskedValue`` / ``Last4`` types — refuse to let an
+unmasked number through. One masking contract, not two. The response shape stays
+``{"masked", "last", "is_masked"}`` for the frontend.
+
+BANK DETAILS ARE READ-THROUGH
+-----------------------------
+``platform_patient_bank_accounts`` (migration 064, extended by 069) owns borrower
+bank accounts: it Fernet-encrypts the full account number, enforces one default
+payment source per patient and records Flinks-vs-manual provenance. This service
+READS that table to populate the Bank Details block and REJECTS profile writes to
+it, pointing the caller at the owning API — a second copy could not stay in step
+and would put an unencrypted account number in JSONB.
 """
 from __future__ import annotations
 
@@ -36,7 +46,9 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from app.api.clinic.v1.masking import mask_tail, validate_last4, validate_masked
 from app.core.sin_crypto import encrypt_sin
+from app.models.platform.borrower_portal import PlatformPatientBankAccount
 from app.models.platform.credit_application import PlatformCreditApplication
 from app.models.platform.customer_profile import (
     PlatformCustomerProfile,
@@ -54,6 +66,7 @@ from app.services.customer_profile_schema import (
 )
 from app.services.customer_profile_validation import (
     ProfileValidationError,
+    assert_no_read_through_writes,
     assert_valid,
     completeness,
     validate_profile,
@@ -89,20 +102,29 @@ def _now() -> datetime:
 
 
 def mask_value(value: Any, visible_suffix: int) -> dict:
-    """Mask all but the last ``visible_suffix`` characters.
+    """Mask all but the last ``visible_suffix`` digits, via the SHARED contract.
 
-    Shape matches the ``MaskedValue`` contract landing in backend PR #198 so the
-    shared type can replace this function without touching any caller.
+    The redacted string comes from :func:`app.api.clinic.v1.masking.mask_tail`
+    and is then run through ``validate_masked`` / ``validate_last4`` — the same
+    validators that back the ``MaskedValue`` / ``Last4`` types — so an unmasked
+    number cannot escape this function even if a caller passes a silly
+    ``visible_suffix``. The ``{masked, last, is_masked}`` shape is what the
+    frontend consumes.
     """
-    text = "" if value is None else str(value)
-    if not text:
+    if value in (None, ""):
         return {"masked": "", "last": "", "is_masked": True}
-    suffix = text[-visible_suffix:] if visible_suffix > 0 else ""
-    return {
-        "masked": ("•" * max(len(text) - len(suffix), 0)) + suffix,
-        "last": suffix,
-        "is_masked": True,
-    }
+
+    masked = mask_tail(str(value), reveal=visible_suffix)
+    if masked is None:
+        # No digits to reveal (e.g. an alphanumeric account ref): block it whole.
+        return {"masked": "•••", "last": "", "is_masked": True}
+
+    validate_masked(masked)
+    digits = "".join(ch for ch in str(value) if ch.isdigit())
+    suffix = digits[-visible_suffix:] if visible_suffix > 0 else ""
+    if suffix:
+        validate_last4(suffix)
+    return {"masked": masked, "last": suffix, "is_masked": True}
 
 
 def present_value(spec: FieldSpec, value: Any, *, include_sensitive: bool) -> Any:
@@ -158,11 +180,75 @@ def current_fields(db: Session, profile_id: UUID) -> list[PlatformCustomerProfil
     )
 
 
-def profile_values(db: Session, profile_id: UUID) -> dict[str, dict[str, Any]]:
-    """Raw (unmasked) current values, keyed by block instance — the validator's input."""
+#: Bank Details field key -> the ``platform_patient_bank_accounts`` column that
+#: owns it. ``account_number`` is deliberately absent: that table stores the full
+#: number ONLY Fernet-encrypted and exposes ``account_mask`` for display, so the
+#: profile surfaces the mask and never decrypts.
+_BANK_ACCOUNT_COLUMNS: dict[str, str] = {
+    "bank_name": "institution_name",
+    "institution_number": "institution_number",
+    "transit_number": "transit_number",
+    "account_holder_name": "account_holder",
+    "account_type": "account_type",
+}
+
+
+def bank_details_instances(db: Session, patient_id: UUID) -> dict[str, dict[str, Any]]:
+    """Read the Bank Details block THROUGH to ``platform_patient_bank_accounts``.
+
+    That table (064/069) owns borrower bank accounts. Returning its rows here
+    means the Originations "Bank Details" block renders real data without the
+    profile keeping a parallel — and inevitably stale — copy.
+
+    ``account_number`` comes back as the table's stored ``account_mask``: the full
+    number lives there Fernet-encrypted and is never decrypted for display.
+    """
+    rows = (
+        db.query(PlatformPatientBankAccount)
+        .filter(
+            PlatformPatientBankAccount.patient_id == patient_id,
+            PlatformPatientBankAccount.status == "active",
+        )
+        .order_by(
+            PlatformPatientBankAccount.is_default.desc(),
+            PlatformPatientBankAccount.created_at.asc(),
+        )
+        .all()
+    )
+    out: dict[str, dict[str, Any]] = {}
+    for index, row in enumerate(rows):
+        values: dict[str, Any] = {
+            field_key: getattr(row, column, None)
+            for field_key, column in _BANK_ACCOUNT_COLUMNS.items()
+            if getattr(row, column, None) not in (None, "")
+        }
+        if row.account_mask:
+            values["account_number"] = row.account_mask
+        out[instance_key(ProfileBlock.BANK_DETAILS, index)] = values
+    return out
+
+
+def profile_values(
+    db: Session, profile_id: UUID, *, include_read_through: bool = True
+) -> dict[str, dict[str, Any]]:
+    """Raw current values, keyed by block instance — the validator's input.
+
+    ``include_read_through`` pulls the Bank Details block from its owning table.
+    Set it False when validating a WRITE, so a read-through block can never be
+    mistaken for something this service stores.
+    """
     values: dict[str, dict[str, Any]] = {}
     for row in current_fields(db, profile_id):
         values.setdefault(instance_key(row.block, row.block_index), {})[row.field_key] = row.value
+
+    if include_read_through:
+        profile = (
+            db.query(PlatformCustomerProfile)
+            .filter(PlatformCustomerProfile.id == profile_id)
+            .first()
+        )
+        if profile is not None:
+            values.update(bank_details_instances(db, profile.patient_id))
     return values
 
 
@@ -193,9 +279,18 @@ def read_profile(
                     "label": block.label,
                     "index": index,
                     "visible": schema.is_block_visible(block.block, raw, index=index),
+                    "read_through": block.is_read_through,
+                    "owned_by": block.owned_by,
                     "values": {
-                        key: present_value(
-                            by_key[key], value, include_sensitive=include_sensitive
+                        # A read-through block's values already arrive display-safe
+                        # from their owning table (``account_mask`` and friends) —
+                        # masking them again would double-redact.
+                        key: (
+                            value
+                            if block.is_read_through
+                            else present_value(
+                                by_key[key], value, include_sensitive=include_sensitive
+                            )
                         )
                         for key, value in stored.items()
                         if key in by_key
@@ -316,6 +411,7 @@ def create_profile(
         values,
         partial=not require_complete,
         allow_staff_fields=allow_staff_fields,
+        writing=True,
     )
 
     profile = PlatformCustomerProfile(
@@ -365,9 +461,15 @@ def update_profile(
             f"Customer profile {profile_id} is locked; unlock it before editing"
         )
 
+    # Read-through blocks are rejected on their own terms first — merging them
+    # in below would make an owned block look like something we store. Only the
+    # ownership check runs here: a patch in isolation legitimately lacks the
+    # driver fields its own visibility triggers depend on.
+    assert_no_read_through_writes(values)
+
     # Validate the MERGED state, not the patch alone: a visibility trigger may be
     # satisfied by a value the caller is not resending.
-    merged = profile_values(db, profile_id)
+    merged = profile_values(db, profile_id, include_read_through=False)
     for key, supplied in values.items():
         merged.setdefault(key, {}).update({k: _normalize(v) for k, v in supplied.items()})
     assert_valid(merged, partial=True, allow_staff_fields=allow_staff_fields)
@@ -418,7 +520,10 @@ def _write_values(
     for key, supplied in values.items():
         block_name, index = parse_instance_key(key)
         block = schema.block_spec(block_name)
-        if block is None:
+        if block is None or block.is_read_through:
+            # Read-through blocks are owned elsewhere; the validator already
+            # rejected them, this is the belt-and-braces so no code path can
+            # ever create a parallel copy.
             continue
         by_key = block.field_map()
         for field_key, raw_value in (supplied or {}).items():
@@ -634,7 +739,11 @@ def build_snapshot(db: Session, profile_id: UUID) -> dict:
             continue
         by_key = block.field_map()
         frozen[key] = {
-            field_key: present_value(by_key[field_key], value, include_sensitive=False)
+            field_key: (
+                value
+                if block.is_read_through  # already display-safe from its owner
+                else present_value(by_key[field_key], value, include_sensitive=False)
+            )
             for field_key, value in stored.items()
             if field_key in by_key
         }

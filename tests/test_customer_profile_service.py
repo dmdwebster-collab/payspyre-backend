@@ -11,6 +11,7 @@ from uuid import uuid4
 import pytest
 
 from app.models.platform.credit_application import PlatformCreditApplication
+from app.models.platform.borrower_portal import PlatformPatientBankAccount
 from app.models.platform.credit_product import PlatformCreditProduct
 from app.models.platform.customer_profile import PlatformCustomerProfileField
 from app.models.platform.event import PlatformEvent
@@ -251,33 +252,92 @@ def test_delete_is_soft_and_keeps_history(db_session, patient):
 # ---------------------------------------------------------------------------
 
 
-def test_bank_details_are_masked_by_default(db_session, patient):
-    values = _base_values()
-    values["bank_details"] = {
-        "bank_name": "RBC",
-        "institution_number": "0003",
-        "transit_number": "05012",
-        "account_number": "1234567890",
-        "account_holder_name": "Ann Tremblay",
-        "account_type": "Chequing",
-    }
+def _add_bank_account(db_session, patient, **overrides):
+    """Create a row in the table that OWNS bank accounts (064/069)."""
+    row = PlatformPatientBankAccount(
+        id=uuid4(),
+        patient_id=patient.id,
+        institution_name=overrides.get("institution_name", "RBC"),
+        account_mask=overrides.get("account_mask", "\u2022\u2022\u2022\u2022\u2022\u2022\u2022890"),
+        routing_mask=overrides.get("routing_mask", "\u2022\u2022\u202212"),
+        institution_number=overrides.get("institution_number", "003"),
+        transit_number=overrides.get("transit_number", "05012"),
+        account_holder=overrides.get("account_holder", "Ann Tremblay"),
+        account_type=overrides.get("account_type", "Chequing"),
+        source=overrides.get("source", "manual"),
+        verified_via=overrides.get("verified_via", "manual_staff"),
+        is_default=overrides.get("is_default", False),
+        status="active",
+        added_by="staff-1",
+    )
+    db_session.add(row)
+    db_session.commit()
+    return row
+
+
+def test_bank_details_read_through_to_the_owning_table(db_session, patient):
+    """No parallel copy: the block is populated from platform_patient_bank_accounts."""
     profile = profiles.create_profile(
-        db_session, patient_id=patient.id, values=values, actor="staff", source="staff"
+        db_session, patient_id=patient.id, values=_base_values(), actor="staff"
+    )
+    _add_bank_account(db_session, patient)
+
+    read = profiles.read_profile(db_session, profile.id)
+    bank = next(b for b in read["blocks"] if b["block"] == "bank_details")
+    assert bank["read_through"] is True
+    assert bank["owned_by"]
+    assert bank["values"]["bank_name"] == "RBC"
+    assert bank["values"]["institution_number"] == "003"
+    # The account number is the owning table's mask — the full number lives
+    # there Fernet-encrypted and is never decrypted for display.
+    assert bank["values"]["account_number"].endswith("890")
+    assert "1234567890" not in str(read)
+
+    # Nothing was copied into profile field storage.
+    assert not [
+        r for r in profiles.current_fields(db_session, profile.id)
+        if r.block == "bank_details"
+    ]
+
+
+def test_bank_details_writes_are_rejected_with_a_pointer_to_the_owner(
+    db_session, patient
+):
+    values = _base_values()
+    values["bank_details"] = {"bank_name": "RBC", "account_number": "1234567890"}
+    with pytest.raises(ProfileValidationError) as excinfo:
+        profiles.create_profile(
+            db_session, patient_id=patient.id, values=values, actor="staff"
+        )
+    assert any(
+        "platform_patient_bank_accounts" in i.message for i in excinfo.value.issues
     )
 
-    masked = profiles.read_profile(db_session, profile.id)
-    bank = next(b for b in masked["blocks"] if b["block"] == "bank_details")
-    assert bank["values"]["transit_number"] == {
-        "masked": "•••12", "last": "12", "is_masked": True
-    }
-    assert bank["values"]["account_number"]["last"] == "890"
-    assert "1234567890" not in str(bank["values"]["account_number"])
-    # Non-masked fields in the same block are untouched.
-    assert bank["values"]["bank_name"] == "RBC"
 
-    unmasked = profiles.read_profile(db_session, profile.id, include_sensitive=True)
-    bank = next(b for b in unmasked["blocks"] if b["block"] == "bank_details")
-    assert bank["values"]["account_number"] == "1234567890"
+def test_bank_details_edits_are_rejected_too(db_session, patient):
+    profile = profiles.create_profile(
+        db_session, patient_id=patient.id, values=_base_values(), actor="staff"
+    )
+    with pytest.raises(ProfileValidationError):
+        profiles.update_profile(
+            db_session,
+            profile.id,
+            values={"bank_details": {"bank_name": "TD"}},
+            actor="staff",
+        )
+
+
+def test_mask_value_uses_the_shared_masking_contract(db_session):
+    """PR #198's validators must accept everything we emit."""
+    from app.api.clinic.v1.masking import validate_last4, validate_masked
+
+    for raw, reveal, last in (("1234567890", 3, "890"), ("05012", 2, "12")):
+        out = profiles.mask_value(raw, reveal)
+        assert out["last"] == last
+        assert out["is_masked"] is True
+        assert raw not in out["masked"]
+        validate_masked(out["masked"])   # would raise if it leaked
+        validate_last4(out["last"])
 
 
 def test_sin_never_lands_in_profile_storage(db_session, patient):
@@ -300,16 +360,32 @@ def test_sin_never_lands_in_profile_storage(db_session, patient):
     assert "046454286" not in str(read)
 
 
-def test_bank_details_repeat(db_session, patient):
-    values = _base_values()
-    values["bank_details"] = {"bank_name": "RBC", "account_number": "111111"}
-    values["bank_details#1"] = {"bank_name": "TD", "account_number": "222222"}
+def test_bank_details_repeat_one_instance_per_owned_account(db_session, patient):
     profile = profiles.create_profile(
-        db_session, patient_id=patient.id, values=values, actor="staff"
+        db_session, patient_id=patient.id, values=_base_values(), actor="staff"
     )
+    _add_bank_account(db_session, patient, institution_name="RBC", is_default=True)
+    _add_bank_account(db_session, patient, institution_name="TD")
+
     read = profiles.read_profile(db_session, profile.id)
     banks = [b for b in read["blocks"] if b["block"] == "bank_details"]
     assert {b["index"] for b in banks} == {0, 1}
+    # Default payment source sorts first — the Originations tab reads it that way.
+    assert banks[0]["values"]["bank_name"] == "RBC"
+
+
+def test_removed_bank_accounts_do_not_appear(db_session, patient):
+    profile = profiles.create_profile(
+        db_session, patient_id=patient.id, values=_base_values(), actor="staff"
+    )
+    row = _add_bank_account(db_session, patient)
+    row.status = "removed"
+    db_session.commit()
+    read = profiles.read_profile(db_session, profile.id)
+    # The empty block still renders (the form needs the section) but carries
+    # no values — a removed account must not leak back through the profile.
+    bank = next(b for b in read["blocks"] if b["block"] == "bank_details")
+    assert bank["values"] == {}
 
 
 # ---------------------------------------------------------------------------
@@ -393,15 +469,15 @@ def test_attach_rejects_a_profile_for_a_different_patient(db_session, patient, p
         )
 
 
-def test_snapshot_masks_bank_details(db_session, patient, product):
-    values = _base_values()
-    values["bank_details"] = {"bank_name": "RBC", "account_number": "1234567890"}
+def test_snapshot_carries_only_masked_bank_details(db_session, patient, product):
     profile = profiles.create_profile(
-        db_session, patient_id=patient.id, values=values, actor="staff"
+        db_session, patient_id=patient.id, values=_base_values(), actor="staff"
     )
+    _add_bank_account(db_session, patient)
     snapshot = profiles.build_snapshot(db_session, profile.id)
+    account = snapshot["values"]["bank_details"]["account_number"]
+    assert account.endswith("890")
     assert "1234567890" not in str(snapshot)
-    assert snapshot["values"]["bank_details"]["account_number"]["last"] == "890"
 
 
 # ---------------------------------------------------------------------------

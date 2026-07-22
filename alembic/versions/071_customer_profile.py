@@ -1,15 +1,14 @@
 """Customer Profile as a first-class entity (Dave's Credit Application v1.0)
 
-Revision ID: 070_customer_profile
-Revises: 068_dave_status_model
+Revision ID: 071_customer_profile
+Revises: 070_loan_closed_at
 Create Date: 2026-07-22
 
-RE-CHAINING NOTE (several sibling branches are in flight): origin/main's head is
-``068_dave_status_model``, but revision number 069 is already claimed by an
-unmerged sibling (``069_loan_closed_at`` — present in the shared test database).
-This migration therefore takes 070 and chains from 068. Whichever of the two
-merges second must repoint its ``down_revision`` at the other so main keeps a
-single linear head.
+MERGE ORDER (coordinated): this chains from ``070_loan_closed_at``, the archive
+migration on sibling PR #201, which itself chains from ``069_dead_button_backends``
+(PR #199, already on main). **PR #202 must therefore merge AFTER PR #201** — until
+#201 lands, the migrations check cannot resolve this down_revision, and that
+failure is expected rather than a defect.
 
 Creates:
 
@@ -51,8 +50,8 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 
-revision: str = "070_customer_profile"
-down_revision: Union[str, None] = "068_dave_status_model"
+revision: str = "071_customer_profile"
+down_revision: Union[str, None] = "070_loan_closed_at"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

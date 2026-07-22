@@ -64,6 +64,14 @@ FIDELITY NOTES (differences from the sheet, all deliberate, all flagged)
   two "Hidden apart from last N numbers" cells sit in the Visibility Trigger
   column but are a MASKING instruction, not a visibility trigger — encoded as
   ``masking`` and the field stays always-visible.
+* Bank Details is **read-through**, not stored here: ``platform_patient_bank_accounts``
+  (migration 064, extended by 069) already owns borrower bank accounts and does
+  it better than a profile copy could — the full account number is Fernet-
+  encrypted, exactly one default payment source is enforced per patient, and
+  Flinks-vs-manual provenance is recorded. The registry keeps the block so the
+  form renders and validates it; the values are read from that table and writes
+  go to its own API. ``institution_number`` is therefore 3 characters (the
+  owning column is ``String(3)``), not the sheet's 4.
 """
 from __future__ import annotations
 
@@ -308,7 +316,19 @@ class BlockSpec:
     #: bank accounts repeat in the Originations "Bank Accounts" tab
     repeatable: bool = False
     filled_by: FilledBy = FilledBy.APPLICANT
+    #: table that OWNS this block's values when they do not live in
+    #: ``platform_customer_profile_fields`` (Bank Details -> the borrower
+    #: bank-accounts table). Such a block is READ-THROUGH: the profile renders
+    #: and validates it but never stores a parallel copy, and profile writes to
+    #: it are rejected in favour of the owning surface.
+    external_table: Optional[str] = None
+    #: the API that owns writes for an ``external_table`` block
+    owned_by: Optional[str] = None
     note: Optional[str] = None
+
+    @property
+    def is_read_through(self) -> bool:
+        return self.external_table is not None
 
     def field_map(self) -> dict[str, FieldSpec]:
         return {f.key: f for f in self.fields}
@@ -321,6 +341,9 @@ class BlockSpec:
             "visible_when": self.visible_when.to_dict(),
             "repeatable": self.repeatable,
             "filled_by": self.filled_by.value,
+            "external_table": self.external_table,
+            "owned_by": self.owned_by,
+            "read_through": self.is_read_through,
             "note": self.note,
             "fields": [f.to_dict() for f in self.fields],
         }
@@ -829,30 +852,42 @@ _BANK_DETAILS = BlockSpec(
     order=10,
     repeatable=True,
     filled_by=FilledBy.STAFF_OR_BANK_VERIFICATION,
+    external_table="platform_patient_bank_accounts",
+    owned_by="/api/v1/admin/borrower-security (admin_borrower_security.py)",
     note=(
         "Every Bank Details row carries 'Completed by Bank Verification process "
-        "or Backend staff' — the borrower never types these. Declared repeatable "
-        "because the Originations 'Bank Accounts' tab lists several accounts per "
-        "borrower; the sheet specifies one block."
+        "or Backend staff' — the borrower never types these. "
+        "READ-THROUGH: these values are OWNED by ``platform_patient_bank_accounts`` "
+        "(migration 064, extended by 069 with institution/transit/holder/"
+        "account_number_encrypted/source). The profile renders and validates the "
+        "block but stores no parallel copy — that table already Fernet-encrypts "
+        "the full account number, enforces one default payment source per patient "
+        "and records Flinks-vs-manual provenance, none of which a second copy "
+        "could keep in step. Repeatable because that table is one row per account."
     ),
     fields=(
         FieldSpec(key="bank_name", block=ProfileBlock.BANK_DETAILS, label="Bank name",
                   field_type=FieldType.TEXTBOX, format=FieldFormat.ALPHANUMERIC,
                   mandatory=True, char_limit=50,
-                  filled_by=FilledBy.STAFF_OR_BANK_VERIFICATION),
+                  filled_by=FilledBy.STAFF_OR_BANK_VERIFICATION,
+                  external_storage="platform_patient_bank_accounts.institution_name"),
         FieldSpec(key="institution_number", block=ProfileBlock.BANK_DETAILS,
                   label="Bank institution number",
                   field_type=FieldType.TEXTBOX, format=FieldFormat.NUMERIC,
-                  mandatory=True, char_limit=4,
+                  mandatory=True, char_limit=3,
                   filled_by=FilledBy.STAFF_OR_BANK_VERIFICATION,
-                  note="Sheet limit is 4; the Originations review specifies 3 with "
-                       "leading-zero handling. Open question — 4 kept (the sheet "
-                       "is the newer document)."),
+                  external_storage="platform_patient_bank_accounts.institution_number",
+                  sheet_discrepancy=(
+                      "Sheet says 4. Resolved to 3: the owning column is "
+                      "String(3) and the Originations review specifies 3 with "
+                      "leading-zero handling. Still worth confirming with Dave."
+                  )),
         FieldSpec(key="transit_number", block=ProfileBlock.BANK_DETAILS,
                   label="Bank transit number",
                   field_type=FieldType.TEXTBOX, format=FieldFormat.NUMERIC,
                   mandatory=True, char_limit=5,
                   filled_by=FilledBy.STAFF_OR_BANK_VERIFICATION,
+                  external_storage="platform_patient_bank_accounts.transit_number",
                   masking=Masking(
                       visible_suffix=2,
                       reason="Hidden apart from last 2 numbers for security")),
@@ -860,12 +895,16 @@ _BANK_DETAILS = BlockSpec(
                   label="Account holder's full name",
                   field_type=FieldType.TEXTBOX, format=FieldFormat.ALPHA,
                   mandatory=True, char_limit=50,
-                  filled_by=FilledBy.STAFF_OR_BANK_VERIFICATION),
+                  filled_by=FilledBy.STAFF_OR_BANK_VERIFICATION,
+                  external_storage="platform_patient_bank_accounts.account_holder"),
         FieldSpec(key="account_number", block=ProfileBlock.BANK_DETAILS,
                   label="Account number",
                   field_type=FieldType.TEXTBOX, format=FieldFormat.NUMERIC,
                   mandatory=True, char_limit=25,
                   filled_by=FilledBy.STAFF_OR_BANK_VERIFICATION,
+                  external_storage=(
+                      "platform_patient_bank_accounts.account_number_encrypted"
+                  ),
                   masking=Masking(
                       visible_suffix=3,
                       reason="Hidden apart from last 3 numbers for security")),
@@ -873,6 +912,7 @@ _BANK_DETAILS = BlockSpec(
                   field_type=FieldType.TEXTBOX, format=FieldFormat.ALPHA,
                   mandatory=True, char_limit=25,
                   filled_by=FilledBy.STAFF_OR_BANK_VERIFICATION,
+                  external_storage="platform_patient_bank_accounts.account_type",
                   note="The sheet gives no options. The Originations review says "
                        "Checking / Savings — left free-text until confirmed."),
     ),

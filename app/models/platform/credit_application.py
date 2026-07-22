@@ -131,7 +131,7 @@ class PlatformCreditApplication(Base):
     self_reported = Column(JSONB, nullable=False, default=lambda: {})
 
     # =====================================================================
-    # CUSTOMER PROFILE LINK (migration 070)
+    # CUSTOMER PROFILE LINK (migration 071)
     # ---------------------------------------------------------------------
     # Dave: a credit application = profile + finance terms + score. The
     # application REFERENCES the reusable profile and FREEZES the profile state

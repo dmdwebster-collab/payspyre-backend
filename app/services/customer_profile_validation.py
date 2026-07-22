@@ -219,6 +219,7 @@ def validate_profile(
     partial: bool = False,
     today: Optional[date] = None,
     allow_staff_fields: bool = True,
+    writing: bool = False,
 ) -> list[ValidationIssue]:
     """Validate a whole profile against the registry.
 
@@ -228,6 +229,11 @@ def validate_profile(
     ``allow_staff_fields=False`` rejects writes to Bank Details (Dave: those are
     "Completed by Bank Verification process or Backend staff" — never by the
     borrower). Set it from the caller's role, not from the request body.
+
+    ``writing=True`` additionally rejects any value aimed at a READ-THROUGH block
+    (Bank Details), whose owner is ``platform_patient_bank_accounts`` and its own
+    API. Reads and completeness checks leave it False so those blocks still
+    render and count.
     """
     issues: list[ValidationIssue] = []
 
@@ -242,6 +248,13 @@ def validate_profile(
         if index != 0 and not spec.repeatable:
             issues.append(ValidationIssue(block_name, index, None, ErrorCode.NOT_REPEATABLE,
                                           f"Block {block_name!r} does not repeat"))
+            continue
+        if writing and spec.is_read_through:
+            issues.append(ValidationIssue(
+                block_name, index, None, ErrorCode.READ_ONLY,
+                f"{spec.label} is owned by {spec.external_table}; "
+                f"write it via {spec.owned_by} instead of the profile",
+            ))
             continue
         if not allow_staff_fields and spec.filled_by.value == "staff_or_bank_verification":
             issues.append(ValidationIssue(
@@ -308,6 +321,33 @@ def validate_profile(
                         f"{field.label} is required",
                     ))
     return issues
+
+
+def read_through_issues(values: ProfileValues) -> list[ValidationIssue]:
+    """ONLY the "this block is owned elsewhere" check.
+
+    Kept separate from :func:`validate_profile` so a PATCH can be screened for
+    read-through blocks *before* it is merged with the stored profile, without
+    dragging in visibility checks — a patch in isolation legitimately lacks the
+    driver fields its own visibility triggers depend on.
+    """
+    issues: list[ValidationIssue] = []
+    for key in values:
+        block_name, index = parse_instance_key(key)
+        spec = block_spec(block_name)
+        if spec is not None and spec.is_read_through:
+            issues.append(ValidationIssue(
+                block_name, index, None, ErrorCode.READ_ONLY,
+                f"{spec.label} is owned by {spec.external_table}; "
+                f"write it via {spec.owned_by} instead of the profile",
+            ))
+    return issues
+
+
+def assert_no_read_through_writes(values: ProfileValues) -> None:
+    issues = read_through_issues(values)
+    if issues:
+        raise ProfileValidationError(issues)
 
 
 def assert_valid(values: ProfileValues, **kwargs: Any) -> None:

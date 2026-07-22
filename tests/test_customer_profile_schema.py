@@ -86,12 +86,28 @@ def test_bank_details_are_staff_or_bank_verification_filled():
     assert all(f.mandatory for f in block.fields)
     assert {f.key: f.char_limit for f in block.fields} == {
         "bank_name": 50,
-        "institution_number": 4,
+        # 3, not the sheet's 4: the owning column is String(3) and the
+        # Originations review specifies 3 with leading-zero handling.
+        "institution_number": 3,
         "transit_number": 5,
         "account_holder_name": 50,
         "account_number": 25,
         "account_type": 25,
     }
+
+
+def test_bank_details_is_read_through_to_the_owning_table():
+    """No parallel copy: platform_patient_bank_accounts (064/069) owns these."""
+    block = schema.BLOCK_REGISTRY[ProfileBlock.BANK_DETAILS]
+    assert block.is_read_through
+    assert block.external_table == "platform_patient_bank_accounts"
+    assert block.owned_by
+    assert all(f.external_storage for f in block.fields)
+
+
+def test_bank_details_is_the_only_read_through_block():
+    read_through = {b.block for b in schema.BLOCKS if b.is_read_through}
+    assert read_through == {ProfileBlock.BANK_DETAILS}
 
 
 def test_character_limits_match_the_sheet():
@@ -325,6 +341,22 @@ def test_borrowers_cannot_write_bank_details():
     assert ErrorCode.READ_ONLY in _codes(issues)
 
 
+def test_nobody_writes_bank_details_through_the_profile():
+    """Even an admin: platform_patient_bank_accounts owns them."""
+    issues = validate_profile(
+        {"bank_details": {"bank_name": "RBC"}},
+        partial=True,
+        allow_staff_fields=True,
+        writing=True,
+    )
+    assert ErrorCode.READ_ONLY in _codes(issues)
+    assert "platform_patient_bank_accounts" in issues[0].message
+    # ... but a READ (writing=False) still renders and validates the block.
+    assert not _codes(
+        validate_profile({"bank_details": {"bank_name": "RBC"}}, partial=True)
+    )
+
+
 def test_invisible_mandatory_fields_are_never_required():
     """The load-bearing rule. A Canadian citizen is never asked for a passport #."""
     values = _minimal_complete_profile()
@@ -334,7 +366,10 @@ def test_invisible_mandatory_fields_are_never_required():
     assert "personal.country_of_citizenship" not in required
     assert "previous_address_1.street_address" not in required
     assert "additional_income_1.income_type" not in required
-    assert issues == [], issues
+    # Bank Details IS legitimately required and is read-through: with no bank
+    # account on file the profile is incomplete, so exclude it here and assert
+    # it separately below.
+    assert [i for i in issues if i.block != "bank_details"] == [], issues
 
 
 def test_missing_mandatory_visible_field_is_required():
@@ -367,13 +402,44 @@ def test_switching_to_self_employed_demands_the_self_employed_fields():
     assert "employer_name" not in required
 
 
+def test_bank_details_are_required_for_a_complete_profile():
+    """Read-through does not mean optional: a loan needs an account on file."""
+    without = validate_profile(_minimal_complete_profile(), partial=False)
+    assert {i.field for i in without if i.block == "bank_details"} == {
+        "bank_name", "institution_number", "transit_number",
+        "account_holder_name", "account_number", "account_type",
+    }
+    # Supplying the block (as profile_values does by reading the owning table)
+    # satisfies it.
+    assert not validate_profile(_complete_profile_with_bank(), partial=False)
+
+
 def test_completeness_reports_progress():
     partial_values = {"personal": {"first_name": "Ann"}}
     result = completeness(partial_values)
     assert result["is_complete"] is False
     assert result["filled_count"] == 1
     assert result["percent"] < 100
-    assert completeness(_minimal_complete_profile())["is_complete"] is True
+    assert completeness(_complete_profile_with_bank())["is_complete"] is True
+
+
+def _complete_profile_with_bank() -> dict:
+    """As ``_minimal_complete_profile`` plus the read-through Bank Details block.
+
+    In the live service these values arrive from
+    ``platform_patient_bank_accounts`` via ``profile_values``; here they are
+    supplied directly so the validator can be exercised without a database.
+    """
+    values = _minimal_complete_profile()
+    values["bank_details"] = {
+        "bank_name": "RBC",
+        "institution_number": "003",
+        "transit_number": "05012",
+        "account_holder_name": "Ann Marie Tremblay",
+        "account_number": "1234567",
+        "account_type": "Chequing",
+    }
+    return values
 
 
 # ---------------------------------------------------------------------------
@@ -437,12 +503,6 @@ def _minimal_complete_profile() -> dict:
             "hire_date": "2019-06-03",
             "work_phone": "2505550000",
         },
-        "bank_details": {
-            "bank_name": "RBC",
-            "institution_number": "0003",
-            "transit_number": "05012",
-            "account_holder_name": "Ann Marie Tremblay",
-            "account_number": "1234567",
-            "account_type": "Chequing",
-        },
+        # NOTE: no "bank_details" — that block is READ-THROUGH to
+        # platform_patient_bank_accounts and is never supplied to the profile.
     }
