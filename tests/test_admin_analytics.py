@@ -169,7 +169,12 @@ def test_report_risk_and_scoring_and_underwriting(client, db_session):
     _loan(db_session, status="charged_off", principal=400_000, balance=0)
     r = client.get(f"{_BASE}/reports/risk?interval=quarterly")
     assert r.status_code == 200, r.text
-    assert set(r.json()["delinquency_buckets"].keys()) == {"1-29", "30-59", "60-89", "90plus"}
+    # P0/T4 vocabulary: Dave's `1-30 / 31-60 / 61-90 / >91` replaces our
+    # `1-29 / 30-59 / 60-89 / 90plus`. Key names only — this assertion never
+    # exercised a boundary.
+    assert set(r.json()["delinquency_buckets"].keys()) == {
+        "1-30", "31-60", "61-90", "91plus",
+    }
 
     r2 = client.get(f"{_BASE}/reports/scoring")
     assert r2.status_code == 200, r2.text
