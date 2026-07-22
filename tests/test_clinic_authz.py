@@ -30,6 +30,8 @@ Run (only this file — the full suite hits a shared remote DB):
 """
 from __future__ import annotations
 
+import importlib
+import pkgutil
 import uuid
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -39,6 +41,7 @@ from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
+import app.api.clinic.v1.endpoints as endpoints_pkg
 from app.api.clinic.v1.deps import ClinicPrincipal, get_current_clinic_user
 from app.api.clinic.v1.router import clinic_router
 from app.db.base import get_db
@@ -147,11 +150,40 @@ def _mounted_app() -> FastAPI:
 
 
 def _clinic_routes() -> list[APIRoute]:
-    return [
-        r
-        for r in _mounted_app().routes
-        if isinstance(r, APIRoute) and r.path not in _EXCLUDED_PATHS
-    ]
+    """Every clinic route, discovered HERMETICALLY (imports only).
+
+    DO NOT "simplify" this back to walking ``app.routes`` / ``clinic_router
+    .routes`` — that is exactly the trap ``test_vendor_visibility_fence.py``
+    documents. FastAPI 0.139 made ``include_router`` LAZY: the parent holds
+    ``_IncludedRouter`` wrappers that are never expanded into ``APIRoute``
+    objects (not by startup, not by ``openapi()``), so the walk finds NOTHING
+    on CI while passing locally on an older pin — a silently blind fence.
+    Verified against both 0.136.3 and 0.139.2.
+
+    Each endpoint module's OWN ``router`` is safe: its routes are added by the
+    decorators directly on that object, so they are real ``APIRoute``s (with
+    the module router's prefix already applied, and ``.dependant`` built) under
+    every FastAPI version. ``test_discovery_matches_the_mounted_app`` pins this
+    list against the mounted app's OpenAPI schema so a module that stops being
+    mounted — or a mounted route this walk misses — fails loudly.
+    """
+    routes: list[APIRoute] = []
+    for info in pkgutil.walk_packages(
+        endpoints_pkg.__path__, prefix=endpoints_pkg.__name__ + "."
+    ):
+        module = importlib.import_module(info.name)
+        router = getattr(module, "router", None)
+        if router is None:
+            continue
+        for route in router.routes:
+            if isinstance(route, APIRoute) and _full_path(route) not in _EXCLUDED_PATHS:
+                routes.append(route)
+    return routes
+
+
+def _full_path(route: APIRoute) -> str:
+    """The route's path as mounted (module-router prefix + the API base)."""
+    return f"{_BASE}{route.path}"
 
 
 def _declared_permissions(route: APIRoute) -> tuple[str, ...] | None:
@@ -183,7 +215,11 @@ def _depends_on_clinic_scoping(route: APIRoute) -> bool:
 
 
 def _route_keys(route: APIRoute) -> list[tuple[str, str]]:
-    return [(m, route.path) for m in sorted(route.methods) if m not in ("HEAD", "OPTIONS")]
+    return [
+        (m, _full_path(route))
+        for m in sorted(route.methods)
+        if m not in ("HEAD", "OPTIONS")
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -192,8 +228,31 @@ def _route_keys(route: APIRoute) -> list[tuple[str, str]]:
 
 
 def test_discovery_is_not_empty():
-    """Guard the guard: an empty walk would make every assertion below vacuous."""
+    """Guard the guard: an empty walk would make every assertion below vacuous.
+
+    This is the assertion that caught FastAPI 0.139's lazy ``include_router``
+    turning the first version of this file into a blind fence on CI. Keep it.
+    """
     assert len(_clinic_routes()) >= 25
+
+
+def test_discovery_matches_the_mounted_app():
+    """The hermetic walk finds EXACTLY the routes the app actually serves.
+
+    Cross-checked against ``app.openapi()`` — a public API that reflects the
+    real mounted surface under every FastAPI version. If a module router stops
+    being mounted (or something is mounted that this walk cannot see), the two
+    sets diverge and this fails instead of silently under-covering.
+    """
+    spec = _mounted_app().openapi()
+    mounted = {
+        (method.upper(), path)
+        for path, ops in spec["paths"].items()
+        for method in ops
+        if path not in _EXCLUDED_PATHS
+    }
+    discovered = {key for route in _clinic_routes() for key in _route_keys(route)}
+    assert discovered == mounted
 
 
 def test_every_clinic_route_declares_a_permission():
