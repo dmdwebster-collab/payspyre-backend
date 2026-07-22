@@ -20,6 +20,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.api.clinic.v1.deps import ClinicPrincipal, get_current_clinic_user
+from app.services.clinic_permissions import require_clinic_permission
 from app.api.clinic.v1.endpoints.dashboard_applications import applications_block
 from app.api.clinic.v1.endpoints.dashboard_loanbook import loan_book_block, payments_block
 from app.api.clinic.v1.endpoints.dashboard_marketplace import marketplace_block
@@ -52,7 +53,11 @@ class VendorOverview(BaseModel):
 # --- route -----------------------------------------------------------------
 
 
-@router.get("/dashboard/overview", response_model=VendorOverview)
+@router.get(
+    "/dashboard/overview",
+    response_model=VendorOverview,
+    dependencies=[Depends(require_clinic_permission("monitoring", "loan_servicing"))],
+)
 def dashboard_overview(
     frm: datetime | None = Query(None, alias="from"),
     to: datetime | None = Query(None, alias="to"),

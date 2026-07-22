@@ -31,6 +31,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from app.api.clinic.v1.deps import ClinicPrincipal, get_current_clinic_user
+from app.services.clinic_permissions import require_clinic_permission
 from app.db.base import get_db
 from app.models.loan import Vendor
 from app.models.platform.profile_change_request import (
@@ -167,7 +168,11 @@ def to_change_request(row: PlatformVendorProfileChangeRequest) -> ProfileChangeR
 # --- routes ----------------------------------------------------------------
 
 
-@router.get("/account/profile", response_model=VendorProfile)
+@router.get(
+    "/account/profile",
+    response_model=VendorProfile,
+    dependencies=[Depends(require_clinic_permission("vendor_management", "monitoring"))],
+)
 def get_profile(
     db: Session = Depends(get_db),
     principal: ClinicPrincipal = Depends(get_current_clinic_user),
@@ -183,6 +188,7 @@ def get_profile(
     "/account/profile/change-requests",
     response_model=ProfileChangeRequest,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_clinic_permission("vendor_management"))],
 )
 def create_change_request(
     body: ProfileChangeRequestBody,
