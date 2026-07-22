@@ -354,7 +354,7 @@ class TestHandleVerificationResult:
 
 
 # ---------------------------------------------------------------------------
-# Decision paths (run_flow thresholds: <600 declined, 600-679 review, >=680 approved)
+# Decision paths (run_flow thresholds: <600 declined, 600-659 review, >=660 approved)
 # ---------------------------------------------------------------------------
 
 

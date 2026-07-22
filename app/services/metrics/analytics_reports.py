@@ -15,6 +15,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
+# Delinquency vocabulary + boundaries live in ONE place. This module stays
+# DB-free: only the pure constants/mapper are used here (``get_policy`` is
+# called by the endpoints, which have a Session).
+from app.services import delinquency_buckets as _D
+
 # ---------------------------------------------------------------------------
 # Interval handling — maps the API's interval choice to a Postgres date_trunc
 # field and to the strftime-ish label the series keys use. The actual truncation
@@ -170,49 +175,42 @@ def delta(current: Optional[float], prior: Optional[float]) -> dict:
 # Delinquency / collections aging buckets.
 # ---------------------------------------------------------------------------
 
-# Collections "potential" buckets keyed by days-past-due, spec order.
-COLLECTIONS_BUCKETS = ["current_late", "30", "60", "90", "120plus"]
+# ONE vocabulary, Dave's: `Good / 1-30 / 31-60 / 61-90 / >91`. Both the
+# collections ageing report and the risk delinquency-performance report used to
+# ship their OWN boundaries (`current_late/30/60/90/120plus` and
+# `1-29/30-59/60-89/90plus`); neither matched Dave's screens and they did not
+# match each other, so the two reports disagreed about the same loan. Corrected
+# 2026-07-22 (P0/T4) — see app.services.delinquency_buckets for the canonical
+# definitions and the POT-ladder-vs-ageing reconciliation.
+COLLECTIONS_BUCKETS = list(_D.AGING_BUCKETS)
+DELINQUENCY_BUCKETS = list(_D.AGING_BUCKETS)
 
-# Risk delinquency-performance buckets (spec: 1-29, 30-59, 60-89, >90).
-DELINQUENCY_BUCKETS = ["1-29", "30-59", "60-89", "90plus"]
-
-
-def days_past_due_bucket(days: int) -> str:
-    """Map days-past-due into the risk delinquency-performance bucket label."""
-    d = int(days or 0)
-    if d <= 0:
-        return "current"
-    if d < 30:
-        return "1-29"
-    if d < 60:
-        return "30-59"
-    if d < 90:
-        return "60-89"
-    return "90plus"
+#: Re-exported so report callers can special-case the not-late class by name
+#: instead of by literal.
+BUCKET_GOOD = _D.AGING_GOOD
+BUCKET_LABELS = dict(_D.AGING_BUCKET_LABELS)
 
 
-def collections_bucket(days: int) -> str:
-    """Map days-past-due into the collections potential-loss bucket label.
+def days_past_due_bucket(days: int, policy=None) -> str:
+    """Map days-past-due onto the ageing vocabulary (`good`, `1-30`, `31-60`,
+    `61-90`, `91plus`). Thin pass-through to
+    :func:`app.services.delinquency_buckets.aging_bucket` — the single mapper.
 
-    <=0        current (not late)
-    1-29       current_late (late this month, not yet 30)
-    30-59      "30"
-    60-89      "60"
-    90-119     "90"
-    120+       "120plus"
+    ``policy`` is a ``BucketPolicy``; ``None`` uses the shipped defaults. Pass
+    ``delinquency_buckets.get_policy(db)`` from a DB-backed call site so an
+    admin's retuned boundaries apply without a deploy.
     """
-    d = int(days or 0)
-    if d <= 0:
-        return "current"
-    if d < 30:
-        return "current_late"
-    if d < 60:
-        return "30"
-    if d < 90:
-        return "60"
-    if d < 120:
-        return "90"
-    return "120plus"
+    return _D.aging_bucket(days, policy or _D.DEFAULT_POLICY)
+
+
+def collections_bucket(days: int, policy=None) -> str:
+    """Alias of :func:`days_past_due_bucket`.
+
+    Kept because the collections report reads better with this name, but it is
+    the SAME function now: collections ageing and risk delinquency-performance
+    are the same buckets, by definition.
+    """
+    return days_past_due_bucket(days, policy)
 
 
 def bucket_summary(buckets: dict[str, dict[str, int]], total_outstanding_cents: int) -> dict:

@@ -94,9 +94,13 @@ class TestLabels:
         # (delinquent label fires on status=='delinquent' OR max_dpd>=30).
         assert lab["outcome_delinquent"] == 0
 
-    def test_dpd_90_is_default(self):
+    def test_past_default_threshold_is_default(self):
+        # Dave's rule: default at >90 DPD (BucketPolicy.default_min_dpd = 91).
         lab = m.derive_labels(status="active", max_dpd=120)
         assert lab["outcome_default"] == 1 and lab["outcome_delinquent"] == 1
+        assert m.derive_labels(status="active", max_dpd=91)["outcome_default"] == 1
+        # 90 DPD is the last non-default day.
+        assert m.derive_labels(status="active", max_dpd=90)["outcome_default"] == 0
 
     def test_dpd_30_is_delinquent_not_default(self):
         lab = m.derive_labels(status="active", max_dpd=45)
@@ -107,11 +111,14 @@ class TestLabels:
         assert lab["outcome_paid_off"] == 1 and lab["outcome_default"] == 0
 
     def test_buckets(self):
-        assert m.days_past_due_bucket(0) == "current"
-        assert m.days_past_due_bucket(15) == "1-29"
-        assert m.days_past_due_bucket(45) == "30-59"
-        assert m.days_past_due_bucket(75) == "60-89"
-        assert m.days_past_due_bucket(200) == "90+"
+        # Single shared vocabulary with the reports (P0/T4).
+        assert m.days_past_due_bucket(0) == "good"
+        assert m.days_past_due_bucket(15) == "1-30"
+        assert m.days_past_due_bucket(30) == "1-30"
+        assert m.days_past_due_bucket(45) == "31-60"
+        assert m.days_past_due_bucket(75) == "61-90"
+        assert m.days_past_due_bucket(90) == "61-90"
+        assert m.days_past_due_bucket(200) == "91plus"
 
 
 class TestDecisionFeatures:
@@ -339,7 +346,7 @@ class TestExportEndToEnd:
         _item(db_session, l1, n=2, due=AS_OF + timedelta(days=30))
         _payment(db_session, l1, amount=111800, when=now)
 
-        # 2. delinquent (30-59 dpd)
+        # 2. delinquent (31-60 dpd)
         p2 = _patient(db_session)
         a2 = _application(db_session, p2)
         l2 = _loan(db_session, a2, status="delinquent")
@@ -367,7 +374,7 @@ class TestExportEndToEnd:
         r1 = rows[m.hash_id(l1.id, SALT)]
         assert r1["status"] == "active"
         assert r1["outcome_default"] == "0" and r1["outcome_delinquent"] == "0"
-        assert r1["days_past_due_bucket"] == "current"
+        assert r1["days_past_due_bucket"] == "good"
         assert r1["decision"] == "approved"
         assert r1["decision_reason_codes"] == "clean_above_band"
         assert r1["self_reported_income_cents"] == "7200000"
@@ -377,7 +384,7 @@ class TestExportEndToEnd:
 
         r2 = rows[m.hash_id(l2.id, SALT)]
         assert r2["outcome_delinquent"] == "1" and r2["outcome_default"] == "0"
-        assert r2["days_past_due_bucket"] == "30-59"
+        assert r2["days_past_due_bucket"] == "31-60"
 
         r3 = rows[m.hash_id(l3.id, SALT)]
         assert r3["outcome_default"] == "1"

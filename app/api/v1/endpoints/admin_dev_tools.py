@@ -273,7 +273,7 @@ def seed_past_due(db: Session = Depends(get_db)):
     """DEV/staging: seed several past-due loans across the delinquency buckets.
 
     Creates one fully-originated, funded loan per bucket (current-month-late / 30 /
-    60 / 90 / 120+), back-dated so Collections and the delinquency aging + queue
+    60 / 90+ DPD), back-dated so Collections and the delinquency aging + queue
     reports have data to work against. Each account is booked through the real
     engine and then marked delinquent by the real aging pass — so the state is
     identical to how it arises in production.

@@ -181,7 +181,7 @@ class TestApplicantJourney:
             decided = decided or result.decided
         assert decided is True
 
-        # status approved (seed product, score 720 ≥ 680, clean identity/bank)
+        # status approved (seed product, score 720 ≥ 660, clean identity/bank)
         r = client.get(f"{_BASE}/applications/{app_id}", headers=headers)
         assert r.json()["status"] == "approved"
 

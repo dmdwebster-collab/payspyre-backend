@@ -29,6 +29,7 @@ from app.db.base import get_db
 from app.models.loan import Vendor
 from app.models.platform.credit_application import PlatformCreditApplication
 from app.models.platform.loan import PlatformLoan, PlatformLoanPayment, PlatformLoanScheduleItem
+from app.services import delinquency_buckets as dq
 from app.services.metrics import analytics_reports as R
 
 router = APIRouter(dependencies=[Depends(require_roles("admin", "staff"))])
@@ -446,7 +447,7 @@ def report_portfolio(f: ReportFilters = Depends(), db: Session = Depends(get_db)
 
 
 # --------------------------------------------------------------------------
-# 2) COLLECTIONS — current-late / 30 / 60 / 90 / 120+ buckets (#, $, %), write-offs.
+# 2) COLLECTIONS — 1-30 / 31-60 / 61-90 / >91 ageing buckets (#, $, %), write-offs.
 # --------------------------------------------------------------------------
 
 
@@ -463,8 +464,11 @@ def report_collections(f: ReportFilters = Depends(), db: Session = Depends(get_d
     """Delinquency aging by potential-loss bucket, plus write-offs.
 
     Aging is derived from the oldest unpaid/overdue schedule installment per loan:
-    days-past-due = today - earliest overdue due_date. Buckets: current_late (1-29),
-    30 (30-59), 60 (60-89), 90 (90-119), 120plus.
+    days-past-due = today - earliest overdue due_date. Buckets are Dave's
+    platform-wide ageing vocabulary — ``1-30 / 31-60 / 61-90 / 91plus`` (upper
+    bounds inclusive; the not-late ``good`` class is omitted from the table).
+    Boundaries come from ``delinquency_buckets.get_policy(db)`` so they are
+    admin-tunable.
     """
     today = datetime.now(timezone.utc).date()
 
@@ -487,11 +491,12 @@ def report_collections(f: ReportFilters = Depends(), db: Session = Depends(get_d
         f,
     )
 
+    policy = dq.get_policy(db)
     buckets = {b: {"count": 0, "amount_cents": 0} for b in R.COLLECTIONS_BUCKETS}
     for oldest_due, balance in rows_q.all():
         dpd = (today - oldest_due).days if oldest_due else 0
-        b = R.collections_bucket(dpd)
-        if b == "current":
+        b = R.collections_bucket(dpd, policy)
+        if b == R.BUCKET_GOOD:
             continue
         buckets[b]["count"] += 1
         buckets[b]["amount_cents"] += int(balance or 0)
@@ -771,7 +776,7 @@ def report_operational(f: ReportFilters = Depends(), db: Session = Depends(get_d
 
 
 # --------------------------------------------------------------------------
-# 5) RISK — delinquency performance buckets (1-29/30-59/60-89/>90), write-off trend.
+# 5) RISK — delinquency performance buckets (1-30/31-60/61-90/>91), write-off trend.
 # --------------------------------------------------------------------------
 
 
@@ -805,11 +810,12 @@ def report_risk(f: ReportFilters = Depends(), db: Session = Depends(get_db)):
         f,
     ).all()
 
+    policy = dq.get_policy(db)
     buckets = {b: {"count": 0, "amount_cents": 0} for b in R.DELINQUENCY_BUCKETS}
     for oldest_due, balance in rows:
         dpd = (today - oldest_due).days if oldest_due else 0
-        b = R.days_past_due_bucket(dpd)
-        if b == "current":
+        b = R.days_past_due_bucket(dpd, policy)
+        if b == R.BUCKET_GOOD:
             continue
         buckets[b]["count"] += 1
         buckets[b]["amount_cents"] += int(balance or 0)

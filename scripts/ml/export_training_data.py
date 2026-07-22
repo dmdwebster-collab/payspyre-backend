@@ -67,6 +67,8 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Iterable, Optional
 
+from app.services.delinquency_buckets import DEFAULT_POLICY, aging_bucket
+
 # ---------------------------------------------------------------------------
 # Column contract
 # ---------------------------------------------------------------------------
@@ -342,27 +344,30 @@ def performance_features(
 # Labels
 # ---------------------------------------------------------------------------
 def days_past_due_bucket(max_dpd: int) -> str:
-    """Coarse DPD bucket used as a categorical label / stratification key."""
-    if max_dpd <= 0:
-        return "current"
-    if max_dpd < 30:
-        return "1-29"
-    if max_dpd < 60:
-        return "30-59"
-    if max_dpd < 90:
-        return "60-89"
-    return "90+"
+    """Coarse DPD bucket used as a categorical label / stratification key.
+
+    Delegates to :func:`app.services.delinquency_buckets.aging_bucket` — the
+    platform's single ageing mapper — so the training labels use the SAME
+    boundaries the reports do (`good` / `1-30` / `31-60` / `61-90` / `91plus`).
+    This file used to carry its own `1-29 / 30-59 / 60-89 / 90+` copy, which
+    silently disagreed with every report by one day at each cut.
+    """
+    return aging_bucket(max_dpd)
 
 
 def derive_labels(*, status: str, max_dpd: int) -> dict[str, Any]:
     """Compute the supervised labels from terminal status + worst DPD.
 
-    * ``outcome_default``    — charged off OR ever 90+ DPD.
+    * ``outcome_default``    — charged off OR ever past the default threshold
+      (``BucketPolicy.default_min_dpd``, Dave's ">90" rule = 91+ DPD; was a
+      hard-coded 90 here).
     * ``outcome_delinquent`` — currently delinquent OR ever 30+ DPD.
     * ``outcome_paid_off``   — loan reached paid_off.
     """
     return {
-        "outcome_default": int(status == "charged_off" or max_dpd >= 90),
+        "outcome_default": int(
+            status == "charged_off" or max_dpd >= DEFAULT_POLICY.default_min_dpd
+        ),
         "outcome_delinquent": int(status == "delinquent" or max_dpd >= 30),
         "outcome_paid_off": int(status == "paid_off"),
         "days_past_due_bucket": days_past_due_bucket(max_dpd),

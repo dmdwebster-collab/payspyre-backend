@@ -129,7 +129,7 @@ def test_report_portfolio_shape(client, db_session):
 
 def test_report_collections_buckets(client, db_session):
     loan = _loan(db_session, status="delinquent", principal=1_000_000, balance=900_000)
-    # An overdue installment 45 days ago -> "30" bucket.
+    # An overdue installment 45 days ago -> "31-60" bucket (Dave's vocabulary).
     db_session.add(PlatformLoanScheduleItem(
         loan_id=loan.id, installment_number=1, due_date=date.today() - timedelta(days=45),
         principal_cents=90000, interest_cents=5000, total_cents=95000, status="scheduled", paid_cents=0))
@@ -137,8 +137,8 @@ def test_report_collections_buckets(client, db_session):
     r = client.get(f"{_BASE}/reports/collections")
     assert r.status_code == 200, r.text
     b = r.json()
-    assert set(b["buckets"].keys()) == {"current_late", "30", "60", "90", "120plus"}
-    assert b["buckets"]["30"]["count"] >= 1
+    assert set(b["buckets"].keys()) == {"1-30", "31-60", "61-90", "91plus"}
+    assert b["buckets"]["31-60"]["count"] >= 1
     assert "write_offs" in b
 
 
@@ -169,7 +169,12 @@ def test_report_risk_and_scoring_and_underwriting(client, db_session):
     _loan(db_session, status="charged_off", principal=400_000, balance=0)
     r = client.get(f"{_BASE}/reports/risk?interval=quarterly")
     assert r.status_code == 200, r.text
-    assert set(r.json()["delinquency_buckets"].keys()) == {"1-29", "30-59", "60-89", "90plus"}
+    # P0/T4 vocabulary: Dave's `1-30 / 31-60 / 61-90 / >91` replaces our
+    # `1-29 / 30-59 / 60-89 / 90plus`. Key names only — this assertion never
+    # exercised a boundary.
+    assert set(r.json()["delinquency_buckets"].keys()) == {
+        "1-30", "31-60", "61-90", "91plus",
+    }
 
     r2 = client.get(f"{_BASE}/reports/scoring")
     assert r2.status_code == 200, r2.text

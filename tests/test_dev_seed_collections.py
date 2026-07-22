@@ -40,9 +40,11 @@ class TestSeedPastDueAccounts:
             assert abs(dpd - acct["days_past_due"]) <= 1, (acct, dpd)
             seen_buckets.add(_bucket_for(dpd))
 
-        # The seed spreads across the distinct delinquency buckets (current-late,
-        # 30, 60, 90, 120+) — i.e. it is not all bunched in one tier.
-        assert seen_buckets == {"1-29", "30-59", "60-89", "90-119", "120+"}
+        # The seed spreads across every past-due ageing bucket in Dave's
+        # vocabulary (1-30 / 31-60 / 61-90 / >91) — not all bunched in one tier.
+        # Two accounts land in 91plus (100 and 150 DPD): under the corrected
+        # ">90 = default" rule there is no separate 120+ tier any more.
+        assert seen_buckets == {"1-30", "31-60", "61-90", "91plus"}
 
     def test_amounts_are_realistic_and_positive(self, db_session: Session):
         result = dev_seed_collections.seed_past_due_accounts(db_session)
