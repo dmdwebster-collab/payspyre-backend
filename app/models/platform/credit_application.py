@@ -131,6 +131,26 @@ class PlatformCreditApplication(Base):
     self_reported = Column(JSONB, nullable=False, default=lambda: {})
 
     # =====================================================================
+    # CUSTOMER PROFILE LINK (migration 071)
+    # ---------------------------------------------------------------------
+    # Dave: a credit application = profile + finance terms + score. The
+    # application REFERENCES the reusable profile and FREEZES the profile state
+    # its decision was made on, extending the ``product_config_snapshot``
+    # pattern above — a later profile edit must never silently rewrite the basis
+    # of a past decision.
+    #
+    # All four are nullable: every application created before profiles existed
+    # keeps working untouched, and the structured columns below remain the
+    # decision engine's input either way.
+    # =====================================================================
+    customer_profile_id = Column(
+        UUID(as_uuid=True), ForeignKey("platform_customer_profiles.id"), nullable=True, index=True
+    )
+    profile_version = Column(Integer, nullable=True)
+    profile_snapshot = Column(JSONB, nullable=True)
+    profile_snapshot_at = Column(DateTime(timezone=True), nullable=True)
+
+    # =====================================================================
     # CANONICAL CREDIT-APPLICATION FIELD SET (Dave's spec, migration 043)
     # ---------------------------------------------------------------------
     # Structured, real columns for the scored core of the application. ALL are
@@ -214,6 +234,7 @@ class PlatformCreditApplication(Base):
 
     # Relationships
     patient = relationship("PlatformPatient", back_populates="applications")
+    customer_profile = relationship("PlatformCustomerProfile")
     credit_product = relationship("PlatformCreditProduct", back_populates="applications")
     co_applicant = relationship("PlatformCreditApplication", remote_side=[id], post_update=True)
     verifications = relationship("PlatformVerification", back_populates="application", cascade="all, delete-orphan")
