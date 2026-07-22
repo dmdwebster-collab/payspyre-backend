@@ -30,16 +30,19 @@ from app.api.applicant.v1.deps import (
     require_step_up,
 )
 from app.db.base import get_db
+from app.models.loan import Vendor
 from app.models.platform.borrower_portal import PlatformPatientBankAccount
 from app.models.platform.credit_application import PlatformCreditApplication
 from app.models.platform.credit_product import PlatformCreditProduct
 from app.models.platform.loan import (
+    PlatformCollectionAttempt,
     PlatformLoan,
     PlatformLoanPayment,
     PlatformLoanScheduleItem,
     PlatformLoanStatement,
+    PlatformLoanTransaction,
 )
-from app.services import loan_payments
+from app.services import borrower_portal, loan_payments
 
 router = APIRouter(tags=["borrower-loans"])
 
@@ -76,6 +79,14 @@ class BorrowerLoanDetail(BorrowerLoanSummary):
     installments_total: int
     installments_paid: int
     product_name: Optional[str] = None
+    # "Which clinic is this loan with?" (video 11 §1.9's Vendor/provider cell).
+    # The platform has ONE vendors entity, so vendor = business_name and the
+    # provider is the application's free-text ``provider_name`` (there is no
+    # Provider entity yet — it stays None when the vendor never named one).
+    vendor_id: Optional[UUID] = None
+    vendor_name: Optional[str] = None
+    vendor_dba_name: Optional[str] = None
+    provider_name: Optional[str] = None
 
 
 class ScheduleRow(BaseModel):
@@ -83,6 +94,12 @@ class ScheduleRow(BaseModel):
     due_date: date
     principal_cents: int
     interest_cents: int
+    # Fee component of the installment = total - principal - interest (the
+    # schedule model stores exactly those three money columns, so this is an
+    # identity, not an allocation guess). SINGLE figure — the schedule layer
+    # does not itemize fees into buckets, so TL's per-row fee dropdown has no
+    # data behind it (see borrower_portal.schedule_fee_cents).
+    fee_cents: int
     total_cents: int
     paid_cents: int
     status: str
@@ -93,9 +110,45 @@ class LoanSchedule(BaseModel):
 
 
 class PaymentRow(BaseModel):
+    """One row of the borrower's Transactions tab (video 11 §1.10).
+
+    Dave's eight columns map as:
+      Status → ``status`` · Date → ``effective_date`` · Total → ``amount_cents``
+      · Principal → ``principal_cents`` · Interest → ``interest_cents`` · Fee →
+      ``fee_total_cents`` · Repayment mode → ``repayment_mode_label`` ·
+      Repayment method → ``repayment_method_label``.
+
+    Every money figure is the POSTED ledger allocation, read as written by the
+    actuals engine — never recomputed here.
+    """
+
+    # --- pre-existing contract (unchanged) ---------------------------------
     amount_cents: int
     received_at: datetime
     method: str
+
+    # --- ledger allocation (None only on the pre-ledger fallback path) -----
+    status: str  # posted | reversed | reversal
+    effective_date: Optional[date] = None
+    principal_cents: Optional[int] = None
+    interest_cents: Optional[int] = None
+    fees_cents: Optional[int] = None
+    add_on_cents: Optional[int] = None
+    fee_total_cents: Optional[int] = None  # fees_cents + add_on_cents
+
+    # --- mode / method -----------------------------------------------------
+    repayment_mode: Optional[str] = None  # regular | add_on | special | payoff
+    repayment_mode_label: str = "Payment"
+    is_automatic: bool = False
+    repayment_method: Optional[str] = None  # cash | check | eft | credit_card | adjustment
+    repayment_method_label: str = ""
+
+    # --- provenance --------------------------------------------------------
+    txn_type: str = "receipt"  # payment | adjustment | reversal | receipt
+    reference: Optional[str] = None
+    reverses_reference: Optional[str] = None
+    reversed_on: Optional[date] = None
+    allocation_source: str = "ledger"  # ledger | unallocated
 
 
 class LoanPayments(BaseModel):
@@ -238,6 +291,10 @@ def get_loan(
     installments_paid = sum(1 for s in loan.schedule if s.status == "paid")
 
     product_name: Optional[str] = None
+    vendor_id: Optional[UUID] = None
+    vendor_name: Optional[str] = None
+    vendor_dba_name: Optional[str] = None
+    provider_name: Optional[str] = None
     if loan.application_id is not None:
         product_name = (
             db.query(PlatformCreditProduct.name)
@@ -248,6 +305,21 @@ def get_loan(
             .filter(PlatformCreditApplication.id == loan.application_id)
             .scalar()
         )
+        # Vendor / provider (B2). LEFT join: an application without a vendor
+        # (direct-to-consumer origination) still returns its provider_name.
+        origin = (
+            db.query(
+                PlatformCreditApplication.vendor_id,
+                PlatformCreditApplication.provider_name,
+                Vendor.business_name,
+                Vendor.dba_name,
+            )
+            .outerjoin(Vendor, Vendor.id == PlatformCreditApplication.vendor_id)
+            .filter(PlatformCreditApplication.id == loan.application_id)
+            .first()
+        )
+        if origin is not None:
+            vendor_id, provider_name, vendor_name, vendor_dba_name = origin
 
     return BorrowerLoanDetail(
         **summary.model_dump(),
@@ -260,6 +332,10 @@ def get_loan(
         installments_total=installments_total,
         installments_paid=installments_paid,
         product_name=product_name,
+        vendor_id=vendor_id,
+        vendor_name=vendor_name,
+        vendor_dba_name=vendor_dba_name,
+        provider_name=provider_name,
     )
 
 
@@ -284,6 +360,7 @@ def get_schedule(
                 due_date=r.due_date,
                 principal_cents=r.principal_cents,
                 interest_cents=r.interest_cents,
+                fee_cents=borrower_portal.schedule_fee_cents(r),
                 total_cents=r.total_cents,
                 paid_cents=r.paid_cents,
                 status=r.status,
@@ -299,22 +376,59 @@ def get_payments(
     db: Session = Depends(get_db),
     claims: ApplicantClaims = Depends(get_current_applicant),
 ) -> LoanPayments:
-    """Payment history (spec §4.4), most-recent first (received_at desc)."""
+    """The Transactions tab (spec §4.4 / video 11 §1.10), most-recent first.
+
+    Reads the IMMUTABLE LEDGER (``platform_loan_transactions``) — the system of
+    record for how each payment was applied. The principal / interest / fee
+    figures are the allocations the actuals engine POSTED; this endpoint never
+    recomputes or replays them.
+
+    Reversals: a reversed payment is NOT dropped. The original comes back with
+    ``status="reversed"`` (+ ``reversed_on``), and the compensating row comes
+    back as its own ``status="reversal"`` carrying the amounts it undoes.
+
+    Pre-ledger loans (cash receipts written before migration 049) fall back to
+    ``platform_loan_payments`` with ``allocation_source="unallocated"`` and NULL
+    allocations — an honest "we don't have a posted split" rather than a guess.
+    """
     _get_owned_loan(db, loan_id, claims.patient_id)  # 404 if not owned
-    rows = (
-        db.query(PlatformLoanPayment)
-        .filter(PlatformLoanPayment.loan_id == loan_id)
-        .order_by(PlatformLoanPayment.received_at.desc())
+    ledger = (
+        db.query(PlatformLoanTransaction)
+        .filter(PlatformLoanTransaction.loan_id == loan_id)
+        .order_by(PlatformLoanTransaction.seq.asc())
         .all()
     )
+    receipts: list[PlatformLoanPayment] = []
+    automatic_payment_ids: set = set()
+    if not ledger:
+        receipts = (
+            db.query(PlatformLoanPayment)
+            .filter(PlatformLoanPayment.loan_id == loan_id)
+            .order_by(PlatformLoanPayment.received_at.desc())
+            .all()
+        )
+        # Which of those receipts settled an AUTO-collection attempt (the rail
+        # ref is shared): TL's "Automatic payment" vs a borrower-made one.
+        refs = [p.external_ref for p in receipts if p.external_ref]
+        if refs:
+            auto_refs = {
+                row[0]
+                for row in db.query(PlatformCollectionAttempt.external_ref)
+                .filter(
+                    PlatformCollectionAttempt.loan_id == loan_id,
+                    PlatformCollectionAttempt.external_ref.in_(refs),
+                )
+                .all()
+            }
+            automatic_payment_ids = {
+                p.id for p in receipts if p.external_ref in auto_refs
+            }
     return LoanPayments(
         rows=[
-            PaymentRow(
-                amount_cents=p.amount_cents,
-                received_at=p.received_at,
-                method=p.method,
+            PaymentRow(**row)
+            for row in borrower_portal.shape_transaction_rows(
+                ledger, receipts, automatic_payment_ids
             )
-            for p in rows
         ]
     )
 
