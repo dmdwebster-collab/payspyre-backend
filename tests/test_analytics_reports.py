@@ -70,33 +70,54 @@ def test_empty_risk_ranks_shape():
 
 # ---- aging buckets --------------------------------------------------------
 
-@pytest.mark.parametrize("dpd,bucket", [
-    (0, "current"), (-5, "current"),
-    (1, "current_late"), (29, "current_late"),
-    (30, "30"), (59, "30"),
-    (60, "60"), (89, "60"),
-    (90, "90"), (119, "90"),
-    (120, "120plus"), (500, "120plus"),
-])
+# P0/T4: ONE vocabulary (Dave's `Good / 1-30 / 31-60 / 61-90 / >91`), upper
+# bounds INCLUSIVE. The boundary cases (30 / 60 / 90) are the whole point — they
+# used to fall one bucket deeper.
+_AGING_CASES = [
+    (0, "good"), (-5, "good"),
+    (1, "1-30"), (29, "1-30"), (30, "1-30"),
+    (31, "31-60"), (59, "31-60"), (60, "31-60"),
+    (61, "61-90"), (89, "61-90"), (90, "61-90"),
+    (91, "91plus"), (120, "91plus"), (500, "91plus"),
+]
+
+
+@pytest.mark.parametrize("dpd,bucket", _AGING_CASES)
 def test_collections_bucket(dpd, bucket):
     assert R.collections_bucket(dpd) == bucket
 
 
-@pytest.mark.parametrize("dpd,bucket", [
-    (0, "current"), (1, "1-29"), (29, "1-29"),
-    (30, "30-59"), (59, "30-59"),
-    (60, "60-89"), (89, "60-89"),
-    (90, "90plus"), (365, "90plus"),
-])
+@pytest.mark.parametrize("dpd,bucket", _AGING_CASES)
 def test_days_past_due_bucket(dpd, bucket):
     assert R.days_past_due_bucket(dpd) == bucket
 
 
+def test_collections_and_delinquency_share_one_vocabulary():
+    """The two reports used to ship different boundaries and so disagreed about
+    the same loan. They are now definitionally identical."""
+    assert R.COLLECTIONS_BUCKETS == R.DELINQUENCY_BUCKETS
+    assert R.COLLECTIONS_BUCKETS == ["1-30", "31-60", "61-90", "91plus"]
+    for dpd, _ in _AGING_CASES:
+        assert R.collections_bucket(dpd) == R.days_past_due_bucket(dpd)
+
+
+def test_aging_boundaries_are_policy_driven_not_hardcoded():
+    """Configurability: an admin-retuned policy moves the cuts, no deploy."""
+    from dataclasses import replace
+
+    from app.services.delinquency_buckets import DEFAULT_POLICY
+
+    wide = replace(DEFAULT_POLICY, aging_1_30_max_dpd=45)
+    assert R.days_past_due_bucket(40) == "31-60"          # shipped default
+    assert R.days_past_due_bucket(40, wide) == "1-30"     # retuned
+
+
 def test_bucket_summary_adds_pct():
-    buckets = {"30": {"count": 2, "amount_cents": 250}, "60": {"count": 1, "amount_cents": 750}}
+    buckets = {"1-30": {"count": 2, "amount_cents": 250},
+               "31-60": {"count": 1, "amount_cents": 750}}
     out = R.bucket_summary(buckets, total_outstanding_cents=1000)
-    assert out["30"] == {"count": 2, "amount_cents": 250, "pct": 25.0}
-    assert out["60"] == {"count": 1, "amount_cents": 750, "pct": 75.0}
+    assert out["1-30"] == {"count": 2, "amount_cents": 250, "pct": 25.0}
+    assert out["31-60"] == {"count": 1, "amount_cents": 750, "pct": 75.0}
 
 
 def test_bucket_summary_zero_outstanding_gives_null_pct():

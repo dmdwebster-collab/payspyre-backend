@@ -379,12 +379,23 @@ def test_generate_batch_empty_month_has_header_and_zero_trailer():
     assert "000000000" in lines[-1]  # zero records
 
 
-def test_bucket_to_metro2_status_map_covers_reportable_buckets():
-    # Every bureau-reportable bucket (pot_60+) has a Metro2 status code.
+def test_metro2_status_covers_reportable_buckets():
+    # Every bureau-reportable bucket (pot_60+) resolves to a Metro2 status code.
     for bucket in ("pot_60", "pot_90", "default", "insolvency", "written_off"):
-        assert bucket in bureau_reporting.BUCKET_TO_METRO2_STATUS
-    # written_off reports as charged off (97).
-    assert bureau_reporting.BUCKET_TO_METRO2_STATUS["written_off"] == "97"
+        assert bureau_reporting.metro2_status(bucket, 95) is not None
+    # written_off reports as charged off (97) regardless of DPD.
+    assert bureau_reporting.metro2_status("written_off", 0) == "97"
+    # Non-reportable buckets never resolve.
+    assert bureau_reporting.metro2_status("pot_30", 45) is None
+
+
+def test_metro2_aging_code_follows_actual_dpd_not_the_bucket():
+    """P0/T4: `default` now starts at 91 DPD (Dave's ">90"), so mapping the
+    bucket straight to a "120+" code would report a wrong ageing to Equifax."""
+    assert bureau_reporting.metro2_status("default", 95) == "80"    # 90-119
+    assert bureau_reporting.metro2_status("default", 130) == "84"   # 120+
+    assert bureau_reporting.metro2_status("pot_60", 65) == "78"     # 60-89
+    assert bureau_reporting.metro2_status("pot_90", 90) == "80"
 
 
 def test_generate_batch_skips_non_reportable_bucket():
