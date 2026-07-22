@@ -250,19 +250,73 @@ _DECISION_OWNED = (
 )
 
 
+def _module_post_paths(module) -> set[str]:
+    """POST paths declared on an endpoint module's OWN router.
+
+    DISCOVERY IS HERMETIC BY DESIGN — do NOT "simplify" this back to walking
+    ``api_router.routes`` / ``app.routes`` / ``app.openapi()``. FastAPI 0.139
+    made ``include_router`` LAZY: a PARENT router holds ``_IncludedRouter``
+    wrappers that are never expanded into ``APIRoute`` objects (not by startup,
+    not by entering the ``TestClient`` context, not by ``openapi()``), so the
+    walk finds ZERO routes on CI while passing locally on an older pin. That is
+    a silently blind test — twice before in this repo it vacuously "passed" a
+    security assertion. See ``tests/test_clinic_authz.py::_clinic_routes`` and
+    ``tests/test_vendor_visibility_fence.py`` for the same trap, documented.
+
+    A module's own ``router`` is safe: the decorators attach real ``APIRoute``
+    objects directly to it under every FastAPI version. The returned paths are
+    RELATIVE to the module router — the mount prefix is asserted separately by
+    ``test_routes_are_mounted_under_the_expected_prefixes``.
+    """
+    from fastapi.routing import APIRoute
+
+    paths = {
+        route.path
+        for route in module.router.routes
+        if isinstance(route, APIRoute) and "POST" in route.methods
+    }
+    assert paths, (
+        f"Discovered ZERO POST routes on {module.__name__}.router — discovery is "
+        "broken (blind test), not an empty module. See the docstring above."
+    )
+    return paths
+
+
 class TestRegistryActionsHaveEndpoints:
     def test_both_actions_are_routed(self):
-        from app.api.v1.api import api_router
+        from app.api.v1.endpoints import admin_originations
 
-        paths = {
-            r.path for r in api_router.routes if "POST" in getattr(r, "methods", set())
-        }
+        paths = _module_post_paths(admin_originations)
+        # Exact expected set, so an empty/partial map can never read as "fine".
+        assert {
+            "/{application_id}/submit-for-underwriting",
+            "/{application_id}/return-for-reprocessing",
+        } <= paths
+
+    def test_borrower_creation_is_routed(self):
+        from app.api.v1.endpoints import admin_customer_profiles
+
+        assert "/borrowers" in _module_post_paths(admin_customer_profiles)
+
+    def test_routes_are_mounted_under_the_expected_prefixes(self):
+        """The mount prefix completes the public path the frontend wires against.
+
+        Read STATICALLY from the api module's source: the mounted router object
+        cannot be walked (lazy ``include_router``, see ``_module_post_paths``),
+        but the prefix is a literal in the ``include_router`` call, and a moved
+        mount is exactly the change that would silently break the frontend.
+        """
+        import inspect
+
+        from app.api.v1 import api
+
+        source = inspect.getsource(api)
         assert (
-            "/admin/applications/{application_id}/submit-for-underwriting" in paths
-        )
+            'admin_originations.router, prefix="/admin/applications"' in source
+        ), "admin_originations is no longer mounted at /admin/applications"
         assert (
-            "/admin/applications/{application_id}/return-for-reprocessing" in paths
-        )
+            'admin_customer_profiles.router, prefix="/admin"' in source
+        ), "admin_customer_profiles is no longer mounted at /admin"
 
     def test_every_registry_action_the_ui_renders_is_reachable(self):
         """The registry's whole point: a rendered action must be invocable.
