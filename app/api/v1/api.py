@@ -38,6 +38,7 @@ from app.api.v1.endpoints import (
     admin_risk_scores,
     admin_scorecards,
     admin_settings,
+    admin_staff_comments,
     admin_status_model,
     admin_system,
     admin_vendor_changes,
@@ -104,6 +105,11 @@ api_router.include_router(
 )
 # Vendor⇄PaySpyre application messaging (in-app Slack replacement), whole-book.
 api_router.include_router(admin_messages.router, prefix="/admin", tags=["admin-messages"])
+# Dave's internal Comments tab (application + loan). STAFF-ONLY: admin mount
+# only, never exposed on the clinic or borrower-portal routers.
+api_router.include_router(
+    admin_staff_comments.router, prefix="/admin", tags=["admin-staff-comments"]
+)
 # WS-A — communications hub: append-only legal comms log (full message bodies,
 # Dave mandate #4) + staff templated email/SMS send + offline contact log.
 api_router.include_router(

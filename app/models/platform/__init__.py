@@ -48,6 +48,7 @@ from app.models.platform.message import (
     PlatformApplicationMessage,
     PlatformApplicationMessageRead,
 )
+from app.models.platform.staff_comment import PlatformStaffComment
 from app.models.platform.communication import PlatformCommunicationLog
 from app.models.platform.document_template import (
     PlatformDocumentTemplate,
@@ -140,6 +141,7 @@ __all__ = [
     "PlatformHardshipRequest",
     "PlatformApplicationMessage",
     "PlatformApplicationMessageRead",
+    "PlatformStaffComment",
     "PlatformCommunicationLog",
     "PlatformDocumentTemplate",
     "PlatformLoanDocument",

@@ -174,12 +174,22 @@ def list_profiles(
     db: Session = Depends(get_db),
     include_deleted: bool = Query(False),
     locked: Optional[bool] = Query(None),
+    patient_id: Optional[UUID] = Query(
+        None,
+        description=(
+            "Return only profiles for this borrower (platform_patients.id). "
+            "Lets a caller fetch a borrower's profile directly instead of "
+            "walking the paged index."
+        ),
+    ),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):
     query = db.query(PlatformCustomerProfile)
     if not include_deleted:
         query = query.filter(PlatformCustomerProfile.deleted_at.is_(None))
+    if patient_id is not None:
+        query = query.filter(PlatformCustomerProfile.patient_id == patient_id)
     if locked is True:
         query = query.filter(PlatformCustomerProfile.locked_at.isnot(None))
     elif locked is False:
