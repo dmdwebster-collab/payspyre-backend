@@ -7,6 +7,7 @@ from app.api.v1.endpoints import (
     admin_analytics,
     admin_analytics_depth,
     admin_application_process,
+    admin_application_actions,
     admin_applications,
     admin_archive,
     admin_audit,
@@ -65,6 +66,14 @@ api_router.include_router(admin_applications.router, prefix="/admin/applications
 # editing (PricingConfig bounds), header + profile photo, co-borrower linking.
 api_router.include_router(
     admin_originations.router, prefix="/admin/applications", tags=["admin-originations"]
+)
+# P0 T3 (2026-07-21 review): the six controls that rendered DISABLED —
+# Add Bank Account / Bank Verification / Send Email / Send SMS / Hard + Soft
+# Pull. Staff-only; NEVER mounted on the clinic (vendor) API.
+api_router.include_router(
+    admin_application_actions.router,
+    prefix="/admin/applications",
+    tags=["admin-application-actions"],
 )
 # WS-E customer/loan flags: directory CRUD + raise/clear; suppress-notifications
 # flags gate the notification processor's vendor sends.
