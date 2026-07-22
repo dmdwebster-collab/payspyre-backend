@@ -17,6 +17,10 @@ Mounted under ``/admin/applications`` alongside the read-only queue/detail
 * ``POST /{id}/profile-photo`` (+ ``/confirm``) — profile-photo slot reusing
   the existing presigned-PUT document storage. ID-photo match automation is
   DESCOPED (noted in the parity plan); this is the manual slot it will fill.
+* ``POST /{id}/submit-for-underwriting`` / ``POST /{id}/return-for-reprocessing``
+  — the two Status-Flow v1.00 actions the registry declares (and the action bar
+  renders) that had no endpoint. Gated by the registry, written by the
+  orchestrator.
 * ``GET/POST /{id}/co-borrowers`` — Dave mandate #1: co-borrowers are fully
   SEPARATE applicant files linked by id; endpoints to view / link / unlink the
   group. Each linked file is a normal application (identical tab structure via
@@ -33,7 +37,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session, joinedload
 
@@ -48,7 +52,8 @@ from app.models.platform.application_history import (
 from app.models.platform.credit_application import PlatformCreditApplication
 from app.models.platform.event import PlatformEvent
 from app.models.platform.loan import PlatformLoan
-from app.services import document_storage, originations_admin
+from app.services import application_status as sm
+from app.services import document_storage, flow_orchestrator as flow, originations_admin
 from app.services.loan_quote import product_fees_cents, quote_loan
 from app.services.originations_admin import (
     AssignmentRequired,
@@ -389,6 +394,10 @@ class ApplicationHeader(BaseModel):
     branch: Optional[str] = None
     product_name: str
     vendor_name: str
+    #: Dave's header field "provider". Free text on the application (there is no
+    #: providers table yet — see ``PlatformCreditApplication.provider_name``);
+    #: the Originations header rendered it empty because it was never returned.
+    provider_name: Optional[str] = None
     requested_amount_cents: int
     province: Optional[str] = None
     decision_outcome: Optional[str] = None
@@ -472,6 +481,7 @@ def application_header(
         product_name=(app_row.credit_product.name if app_row.credit_product else None)
         or "Financing",
         vendor_name=vendor_name,
+        provider_name=app_row.provider_name,
         requested_amount_cents=app_row.requested_amount_cents,
         province=app_row.residence_province,
         decision_outcome=(app_row.decision or {}).get("outcome"),
@@ -745,4 +755,181 @@ def unlink_co_borrower(
         "primary_application_id": str(primary.id),
         "co_application_id": str(target.id),
         "linked": False,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 5. The two registry actions that had no endpoint (Dave's Status Flow v1.00)
+#
+# ``submit_for_credit_underwriting`` ("Send for approval") and
+# ``return_for_reprocessing`` are declared in
+# ``app/services/application_status.py`` and rendered by the data-driven action
+# bar, but nothing implemented them — an action the UI offers and the API cannot
+# perform is worse than one that was never listed.
+#
+# The REGISTRY is the gate: ``is_action_permitted(status, action)`` decides
+# whether the button may be pressed, so the endpoint and the button can never
+# disagree. The WRITE is the orchestrator's (spec §4.3, guarded by
+# tests/test_application_status_writes.py) — these routes call the existing
+# ``mark_*`` transitions and never assign ``application.status``.
+#
+# DECISION PATH: neither route touches the automated decision engine. Both are
+# refused on every status the registry does not list them for, which excludes
+# ``approved`` / ``declined`` / ``withdrawn`` / ``expired`` / ``active`` and the
+# six closed states, so no already-decided file can be moved by them.
+# ---------------------------------------------------------------------------
+
+
+class StatusActionBody(BaseModel):
+    reason: Optional[str] = None
+    note: Optional[str] = None
+
+
+class SubmitForUnderwritingBody(StatusActionBody):
+    gate: Optional[str] = Field(
+        None,
+        description=(
+            "Optional: park the file on ONE of Dave's three parallel verification "
+            "gates (credit_report | bank_verification | application_verification) "
+            "when the submitter knows which external check it is waiting on. "
+            "Omitted, the file lands on the pre-existing band-level 'verifying' "
+            "status — the same value the automated journey uses — so the default "
+            "path behaves exactly as it did before this route existed."
+        ),
+    )
+
+
+def _registry_gate(app_row: PlatformCreditApplication, action: sm.Action) -> None:
+    """Refuse an action Dave's table does not offer for the file's status."""
+    if not sm.is_action_permitted(str(app_row.status), action):
+        offered = ", ".join(a.value for a in sm.actions_for(str(app_row.status))) or "none"
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"'{action.value}' is not available in status '{app_row.status}'. "
+                f"Permitted here: {offered}."
+            ),
+        )
+
+
+@router.post("/{application_id}/submit-for-underwriting")
+def submit_for_credit_underwriting(
+    application_id: UUID,
+    body: SubmitForUnderwritingBody = Body(default=SubmitForUnderwritingBody()),
+    db: Session = Depends(get_db),
+    user=Depends(require_roles("admin", "staff")),
+):
+    """Dave's Origination action *"Submit the application for credit underwriting"*.
+
+    Moves the file out of the Originations workplace into the verification band.
+    Only ``origination`` / ``pre_qualified`` offer this action in the registry, so
+    a file that has already been decided cannot be re-submitted through here.
+    """
+    app_row = _get_application(db, application_id)
+    _registry_gate(app_row, sm.Action.SUBMIT_FOR_CREDIT_UNDERWRITING)
+    require_assignment_or_override(app_row, user)
+
+    before = str(app_row.status)
+    try:
+        if body.gate is None:
+            flow.mark_verification(app_row)
+        else:
+            flow.mark_verification_gate(app_row, body.gate)
+    except flow.InvalidStateTransition as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+
+    actor = _actor_id(user)
+    _audit(
+        db,
+        event_type="application_submitted_for_underwriting",
+        actor=actor,
+        app_row=app_row,
+        payload={
+            "v": 1,
+            "actor": {"type": "admin", "id": actor},
+            "action": sm.Action.SUBMIT_FOR_CREDIT_UNDERWRITING.value,
+            "from_status": before,
+            "to_status": str(app_row.status),
+            "gate": body.gate,
+            "reason": body.reason,
+            "note": body.note,
+        },
+    )
+    db.commit()
+    return {
+        "application_id": str(app_row.id),
+        "from_status": before,
+        "status": str(app_row.status),
+        "canonical_status": (
+            sm.canonical_for(str(app_row.status)).value
+            if sm.canonical_for(str(app_row.status))
+            else None
+        ),
+        "actions": [a.value for a in sm.actions_for(str(app_row.status))],
+    }
+
+
+@router.post("/{application_id}/return-for-reprocessing")
+def return_for_reprocessing(
+    application_id: UUID,
+    body: StatusActionBody = Body(default=StatusActionBody()),
+    db: Session = Depends(get_db),
+    user=Depends(require_roles("admin", "staff")),
+):
+    """Dave's *"Return the application for reprocessing"* — send the file back to
+    Origination so missing/incorrect information can be corrected and re-submitted.
+
+    Available at most stages of Dave's table (the three verification gates, Credit
+    Underwriting and Offer Acceptance). A ``declined`` file is deliberately NOT
+    reopened here: reversing a credit decision is the decision endpoint's job
+    (``POST /admin/applications/{id}/decision`` with ``override=true``), which
+    carries the reason-code and orphan-loan guards this route does not.
+    """
+    app_row = _get_application(db, application_id)
+    if str(app_row.status) == "declined":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "A declined application is reopened through "
+                "POST /admin/applications/{id}/decision with override=true, which "
+                "enforces the decision-override permission, the reason codes and "
+                "the orphan-loan guard."
+            ),
+        )
+    _registry_gate(app_row, sm.Action.RETURN_FOR_REPROCESSING)
+    require_assignment_or_override(app_row, user)
+
+    before = str(app_row.status)
+    try:
+        flow.mark_returned_for_reprocessing(app_row)
+    except flow.InvalidStateTransition as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+
+    actor = _actor_id(user)
+    _audit(
+        db,
+        event_type="application_returned_for_reprocessing",
+        actor=actor,
+        app_row=app_row,
+        payload={
+            "v": 1,
+            "actor": {"type": "admin", "id": actor},
+            "action": sm.Action.RETURN_FOR_REPROCESSING.value,
+            "from_status": before,
+            "to_status": str(app_row.status),
+            "reason": body.reason,
+            "note": body.note,
+        },
+    )
+    db.commit()
+    return {
+        "application_id": str(app_row.id),
+        "from_status": before,
+        "status": str(app_row.status),
+        "canonical_status": (
+            sm.canonical_for(str(app_row.status)).value
+            if sm.canonical_for(str(app_row.status))
+            else None
+        ),
+        "actions": [a.value for a in sm.actions_for(str(app_row.status))],
     }

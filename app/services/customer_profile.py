@@ -44,6 +44,7 @@ from datetime import date, datetime, timezone
 from typing import Any, Mapping, Optional
 from uuid import UUID
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api.clinic.v1.masking import mask_tail, validate_last4, validate_masked
@@ -438,6 +439,163 @@ def create_profile(
             "schema_version": schema.SCHEMA_VERSION,
             "field_count": written,
             "source": source,
+        },
+    )
+    db.commit()
+    db.refresh(profile)
+    return profile
+
+
+class DuplicateBorrowerError(ProfileError):
+    """A borrower with the supplied email/phone already exists.
+
+    Carries the existing borrower so the caller can point the admin at the
+    profile they should be using instead of minting a silent duplicate.
+    """
+
+    def __init__(self, patient: PlatformPatient, matched_on: str, profile_id: Optional[UUID]):
+        self.patient_id = patient.id
+        self.matched_on = matched_on
+        self.profile_id = profile_id
+        super().__init__(
+            f"A borrower already exists with this {matched_on.replace('_', ' ')} "
+            f"(patient {patient.id}). Use the existing profile instead of creating "
+            "a duplicate."
+        )
+
+
+def _identity_from_values(values: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
+    """Pull the denormalized ``platform_patients`` identity out of a profile payload.
+
+    Reads through the registry's own instance keys (``personal`` / ``contact``,
+    index 0) rather than restating the field list — the same mapping
+    ``_sync_patient_identity`` uses, plus the phone (which has no profile→patient
+    sync because it is set once at borrower creation).
+    """
+    identity: dict[str, Any] = {}
+    for key, supplied in values.items():
+        block_name, index = parse_instance_key(key)
+        if index != 0:
+            continue
+        for field_key, value in (supplied or {}).items():
+            if value in (None, ""):
+                continue
+            column = _PATIENT_IDENTITY_SYNC.get((block_name, field_key))
+            if column is not None:
+                identity[column] = value
+            elif (block_name, field_key) == (ProfileBlock.CONTACT.value, "main_phone"):
+                identity["phone_e164"] = value
+    dob = identity.get("dob")
+    if dob is not None and not isinstance(dob, date):
+        identity["dob"] = date.fromisoformat(str(dob)[:10])
+    return identity
+
+
+def find_duplicate_borrower(
+    db: Session, *, email: Optional[str], phone: Optional[str]
+) -> Optional[tuple[PlatformPatient, str]]:
+    """An existing, non-deleted borrower matching this email or phone (email first).
+
+    Deliberately case-insensitive on email and exact on phone: the phone is
+    already stored E.164-normalized by every origination entry point, while
+    emails arrive in whatever case the admin typed.
+    """
+    if email:
+        row = (
+            db.query(PlatformPatient)
+            .filter(
+                PlatformPatient.deleted_at.is_(None),
+                func.lower(PlatformPatient.email) == email.strip().lower(),
+            )
+            .order_by(PlatformPatient.created_at.asc())
+            .first()
+        )
+        if row is not None:
+            return row, "email"
+    if phone:
+        row = (
+            db.query(PlatformPatient)
+            .filter(
+                PlatformPatient.deleted_at.is_(None),
+                PlatformPatient.phone_e164 == phone.strip(),
+            )
+            .order_by(PlatformPatient.created_at.asc())
+            .first()
+        )
+        if row is not None:
+            return row, "phone"
+    return None
+
+
+def create_borrower(
+    db: Session,
+    *,
+    values: Mapping[str, Mapping[str, Any]],
+    actor: str,
+    source: str = "staff",
+    allow_staff_fields: bool = True,
+    require_complete: bool = False,
+) -> PlatformCustomerProfile:
+    """Mint a NEW borrower (``platform_patients``) AND its customer profile.
+
+    Dave, 2026-07-21: *"there is no way to initiate a new credit application in
+    the backend"* — back-office origination starts with a brand-new borrower, and
+    until now nothing under ``/admin`` could create one: every profile route
+    required a ``patient_id`` that only the applicant journey could mint.
+
+    This is deliberately NOT a parallel profile-creation path: the payload is
+    validated by, and persisted through, :func:`create_profile`, so the registry
+    rules (mandatory-when-visible, formats, char limits, read-through blocks, SIN
+    handling) apply identically. SIN stays OPTIONAL — Dave's legal mandate; the
+    registry, not this function, decides what is mandatory.
+
+    Duplicate handling: an email/phone that already belongs to a borrower raises
+    :class:`DuplicateBorrowerError` carrying that borrower's ids, so the admin is
+    routed to the existing profile instead of creating a second file for the same
+    person. Nothing is written when it raises.
+    """
+    identity = _identity_from_values(values)
+    duplicate = find_duplicate_borrower(
+        db, email=identity.get("email"), phone=identity.get("phone_e164")
+    )
+    if duplicate is not None:
+        existing, matched_on = duplicate
+        existing_profile = get_profile_for_patient(db, existing.id, include_deleted=True)
+        raise DuplicateBorrowerError(
+            existing, matched_on, existing_profile.id if existing_profile else None
+        )
+
+    patient = PlatformPatient(**identity)
+    db.add(patient)
+    db.flush()
+
+    try:
+        profile = create_profile(
+            db,
+            patient_id=patient.id,
+            values=values,
+            actor=actor,
+            source=source,
+            allow_staff_fields=allow_staff_fields,
+            require_complete=require_complete,
+        )
+    except Exception:
+        # create_profile validates BEFORE writing; roll the bare patient back so a
+        # rejected payload cannot leave an orphan borrower behind.
+        db.rollback()
+        raise
+
+    _log(
+        db,
+        patient_id=patient.id,
+        event_type="borrower.created",
+        actor=actor,
+        payload={
+            "profile_id": str(profile.id),
+            "source": source,
+            "origin": "back_office",
+            # Keys only — never values (Hard Rule #6).
+            "identity_fields": sorted(identity),
         },
     )
     db.commit()
@@ -1120,6 +1278,7 @@ def backfill_all(
 
 __all__ = [
     "FIELD_SOURCES",
+    "DuplicateBorrowerError",
     "ProfileError",
     "ProfileLockedError",
     "application_to_profile_values",
@@ -1128,10 +1287,12 @@ __all__ = [
     "backfill_all",
     "backfill_profile_from_application",
     "build_snapshot",
+    "create_borrower",
     "create_profile",
     "current_fields",
     "delete_profile",
     "field_history",
+    "find_duplicate_borrower",
     "get_profile",
     "get_profile_for_patient",
     "lock_profile",

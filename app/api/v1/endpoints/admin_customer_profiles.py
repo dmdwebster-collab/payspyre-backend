@@ -7,7 +7,13 @@ and the applicant journey render from.
 * ``GET  /admin/profile-schema`` — the whole field registry as data: categories,
   visibility triggers, mandatory flags, options, formats and character limits.
   Read-only, stateless, no DB. The UI must not hard-code any of it.
-* ``POST /admin/customer-profiles`` — create a profile for a patient.
+* ``POST /admin/borrowers`` — create a BRAND-NEW borrower from the back office:
+  mints the ``platform_patients`` row AND its customer profile in one call.
+  Dave's stated requirement (2026-07-21): back-office origination starts with a
+  borrower who has never touched the applicant journey, and every other route
+  here needs a ``patient_id`` that only that journey could mint. Duplicate
+  email/phone → ``409`` pointing at the existing profile.
+* ``POST /admin/customer-profiles`` — create a profile for an EXISTING patient.
 * ``GET  /admin/customer-profiles/{id}`` — the profile, masked per the registry.
 * ``PATCH /admin/customer-profiles/{id}`` — edit; creates a NEW version, the
   prior values become "former" (never overwritten).
@@ -30,11 +36,12 @@ anyone by any route here.
 """
 from __future__ import annotations
 
+from datetime import date
 from typing import Any, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
 
 from app.core.auth import get_current_user, require_roles
@@ -82,6 +89,27 @@ class ProfileCreateRequest(BaseModel):
     require_complete: bool = False
 
 
+class BorrowerCreateRequest(BaseModel):
+    """Dave's D2 back-office origination, NEW-borrower branch.
+
+    ``values`` is the same registry-shaped payload every other profile route
+    speaks (``{"personal": {...}, "contact": {...}, ...}``) — there is no second
+    field list. The borrower's identity columns on ``platform_patients`` are
+    derived from it, so the caller never supplies them twice.
+    """
+
+    values: ProfileValuesBody = Field(default_factory=dict)
+    source: str = "staff"
+    require_complete: bool = Field(
+        False,
+        description=(
+            "Enforce every mandatory-when-visible registry field. Left False so "
+            "an admin can capture a borrower over the phone and finish later. "
+            "SIN is optional either way — Dave's legal mandate."
+        ),
+    )
+
+
 class ProfileUpdateRequest(BaseModel):
     values: ProfileValuesBody
     source: str = "staff"
@@ -92,7 +120,15 @@ class ReasonRequest(BaseModel):
 
 
 class ApplicationFromProfileRequest(BaseModel):
-    """Dave's D2 back-office origination, existing-profile branch."""
+    """Dave's D2 back-office origination, existing-profile branch.
+
+    The finance-terms half of the dialog is the SAME set the main origination
+    path (``POST /clinic/v1/applications``) accepts, and is validated the same
+    way: a custom first due date must fall after the start date. ``start_date``
+    lands on ``platform_credit_applications.loan_start_date`` and
+    ``first_due_date`` on ``first_due_date`` — the columns the booking path
+    reads — so nothing downstream learns a new field name.
+    """
 
     credit_product_id: UUID
     requested_amount_cents: int = Field(gt=0)
@@ -102,6 +138,35 @@ class ApplicationFromProfileRequest(BaseModel):
     requested_annual_rate_bps: Optional[int] = None
     promo_code: Optional[str] = None
     require_complete_profile: bool = False
+
+    #: Dave's finance-terms dialog: "start date" + the custom-first-payment-date
+    #: checkbox. The checkbox is carried explicitly rather than inferred from
+    #: ``first_due_date is not None`` so a checked box with an empty date is a
+    #: 422 instead of silently falling back to the default schedule.
+    start_date: Optional[date] = None
+    use_custom_first_due_date: bool = False
+    first_due_date: Optional[date] = None
+
+    @model_validator(mode="after")
+    def _validate_terms(self) -> "ApplicationFromProfileRequest":
+        if self.use_custom_first_due_date:
+            if self.first_due_date is None:
+                raise ValueError(
+                    "use_custom_first_due_date is set but first_due_date is missing."
+                )
+        elif self.first_due_date is not None:
+            raise ValueError(
+                "first_due_date supplied without use_custom_first_due_date; "
+                "check the custom-first-payment-date box or omit the date."
+            )
+        # Same invariant as the main origination path (vendor_origination.py).
+        if (
+            self.first_due_date is not None
+            and self.start_date is not None
+            and self.first_due_date <= self.start_date
+        ):
+            raise ValueError("first_due_date must be after start_date.")
+        return self
 
 
 # ---------------------------------------------------------------------------
@@ -140,6 +205,59 @@ def validate_payload(
 # ---------------------------------------------------------------------------
 # CRUD
 # ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/borrowers",
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a NEW borrower (patient + customer profile) from the back office",
+)
+def create_borrower(
+    payload: BorrowerCreateRequest,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Dave's *"no way to initiate a new credit application in the backend"* fix.
+
+    Mints the ``platform_patients`` row and version 1 of its customer profile in
+    one operation, validated against the profile registry and audited to
+    ``platform_events`` (``borrower.created`` + ``customer_profile.created``).
+    The response is the standard masked profile read, so the caller gets the same
+    shape ``GET /admin/customer-profiles/{id}`` returns, plus ``patient_id`` to
+    hand straight to ``POST /admin/customer-profiles/{id}/applications``.
+
+    **Duplicates.** An email or phone already on a non-deleted borrower returns
+    ``409`` with ``{existing_patient_id, existing_profile_id, matched_on}`` — the
+    admin is routed to that profile instead of creating a second file for the
+    same person. Nothing is written on the conflict path.
+    """
+    try:
+        profile = profiles.create_borrower(
+            db,
+            values=payload.values,
+            actor=_actor_id(user),
+            source=payload.source,
+            allow_staff_fields=_is_admin(user),
+            require_complete=payload.require_complete,
+        )
+    except profiles.DuplicateBorrowerError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            {
+                "message": str(exc),
+                "matched_on": exc.matched_on,
+                "existing_patient_id": str(exc.patient_id),
+                "existing_profile_id": str(exc.profile_id) if exc.profile_id else None,
+            },
+        )
+    except ProfileValidationError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, _validation_detail(exc))
+    except profiles.ProfileError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
+
+    # ``read_profile`` already carries ``patient_id`` — the key the caller hands
+    # to POST /admin/customer-profiles/{id}/applications.
+    return profiles.read_profile(db, profile.id)
 
 
 @router.post(
@@ -432,6 +550,8 @@ def create_application_from_profile(
         provider_name=payload.provider_name,
         requested_term_months=payload.requested_term_months,
         requested_annual_rate_bps=payload.requested_annual_rate_bps,
+        loan_start_date=payload.start_date,
+        first_due_date=payload.first_due_date,
         status="started",
         self_reported={"promo_code": payload.promo_code} if payload.promo_code else {},
     )
@@ -448,6 +568,8 @@ def create_application_from_profile(
         "profile_version": application.profile_version,
         "status": application.status,
         "requested_amount_cents": application.requested_amount_cents,
+        "start_date": application.loan_start_date,
+        "first_due_date": application.first_due_date,
         "completeness": (application.profile_snapshot or {}).get("completeness"),
     }
 

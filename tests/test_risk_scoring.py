@@ -550,10 +550,13 @@ def test_alembic_history_has_a_single_head():
 
     heads = [r for r in revisions if r not in set(parents)]
     # The head moves with every merge. 073 was the tip when this test was
-    # written (PR #204); 074_staff_comments (PR #205) re-chained onto 073 and
-    # is now the tip. Whoever adds the next migration updates this line — that
-    # edit is the point, because it forces the author to look at the chain.
-    assert heads == ["074_staff_comments"], f"expected a single head at 074, got {heads}"
+    # written (PR #204); 074_staff_comments (PR #205) re-chained onto 073, and
+    # 075_write_off_permission (the admin-origination-gaps PR) now chains onto
+    # 074. Whoever adds the next migration updates this line — that edit is the
+    # point, because it forces the author to look at the chain.
+    assert heads == ["075_write_off_permission"], (
+        f"expected a single head at 075, got {heads}"
+    )
 
 
 def test_no_scorecard_means_no_fabricated_score():
