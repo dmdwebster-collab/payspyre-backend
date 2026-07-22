@@ -87,25 +87,63 @@ def has_clinic_permission(roles: Optional[Iterable[str]], permission: str) -> bo
     return permission in set(roles)
 
 
-def require_clinic_permission(permission: str):
-    """Dependency factory: 403 unless the clinic principal holds ``permission``.
+def has_any_clinic_permission(
+    roles: Optional[Iterable[str]], permissions: Sequence[str]
+) -> bool:
+    """PURE: does a membership's role list grant AT LEAST ONE of ``permissions``?
+
+    Same legacy semantics as :func:`has_clinic_permission` (``roles=None`` =>
+    full access, ``[]`` => nothing). ``permissions`` must be non-empty; every
+    key is validated so a typo can never silently widen a route.
+    """
+    if not permissions:
+        raise ValueError("At least one permission is required.")
+    unknown = [p for p in permissions if p not in CLINIC_ROLE_KEYS]
+    if unknown:
+        raise ValueError(f"Unknown clinic permission(s): {sorted(set(unknown))!r}")
+    if roles is None:
+        return True
+    held = set(roles)
+    return any(p in held for p in permissions)
+
+
+def require_clinic_permission(*permissions: str):
+    """Dependency factory: 403 unless the clinic principal holds one of ``permissions``.
 
     Layered ON TOP of ``get_current_clinic_user`` (so vendor scoping + the
-    membership requirement still apply). Usage::
+    membership requirement still apply). Multiple permissions are OR-ed — a
+    route reachable from more than one workplace (e.g. the loan book, which
+    both Servicing and Collection staff use) declares every role that may
+    reach it. Usage::
 
         @router.post("", dependencies=[Depends(require_clinic_permission("loan_origination"))])
+        @router.get("", dependencies=[Depends(require_clinic_permission("loan_servicing", "collection"))])
+
+    The returned dependency carries ``__clinic_permissions__`` so the
+    coverage test in ``tests/test_clinic_authz.py`` can prove that EVERY
+    clinic route declares a permission.
     """
-    if permission not in CLINIC_ROLE_KEYS:  # fail at import time, not request time
-        raise ValueError(f"Unknown clinic permission: {permission!r}")
+    if not permissions:
+        raise ValueError("At least one permission is required.")
+    for permission in permissions:  # fail at import time, not request time
+        if permission not in CLINIC_ROLE_KEYS:
+            raise ValueError(f"Unknown clinic permission: {permission!r}")
+
+    required = tuple(permissions)
 
     def _dependency(
         principal: ClinicPrincipal = Depends(get_current_clinic_user),
     ) -> ClinicPrincipal:
-        if not has_clinic_permission(principal.roles, permission):
+        if not has_any_clinic_permission(principal.roles, required):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Your clinic role does not include '{permission}'.",
+                detail=(
+                    "Your clinic role does not include "
+                    + " or ".join(f"'{p}'" for p in required)
+                    + "."
+                ),
             )
         return principal
 
+    _dependency.__clinic_permissions__ = required
     return _dependency

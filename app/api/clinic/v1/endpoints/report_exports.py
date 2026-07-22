@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from app.api.clinic.v1.deps import ClinicPrincipal, get_current_clinic_user
+from app.services.clinic_permissions import require_clinic_permission
 from app.db.base import get_db
 from app.services.report_exports import REPORT_KEYS, generate_report, report_catalog
 
@@ -22,7 +23,10 @@ router = APIRouter(tags=["clinic-reports"])
 _XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
-@router.get("/reports/exports")
+@router.get(
+    "/reports/exports",
+    dependencies=[Depends(require_clinic_permission("export"))],
+)
 def list_reports(
     principal: ClinicPrincipal = Depends(get_current_clinic_user),
 ) -> list[dict]:
@@ -30,7 +34,10 @@ def list_reports(
     return report_catalog()
 
 
-@router.get("/reports/exports/{report_key}")
+@router.get(
+    "/reports/exports/{report_key}",
+    dependencies=[Depends(require_clinic_permission("export"))],
+)
 def export_report(
     report_key: str,
     date_from: Optional[date] = Query(None, description="Inclusive window start"),

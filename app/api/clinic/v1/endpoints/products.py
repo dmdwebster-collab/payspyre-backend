@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.api.clinic.v1.deps import ClinicPrincipal, get_current_clinic_user
+from app.services.clinic_permissions import require_clinic_permission
 from app.api.clinic.v1.schemas import ClinicProduct
 from app.db.base import get_db
 from app.models.platform.credit_product import PlatformCreditProduct
@@ -23,7 +24,11 @@ from app.models.platform.credit_product import PlatformCreditProduct
 router = APIRouter(prefix="/products", tags=["clinic-products"])
 
 
-@router.get("", response_model=list[ClinicProduct])
+@router.get(
+    "",
+    response_model=list[ClinicProduct],
+    dependencies=[Depends(require_clinic_permission("loan_origination", "monitoring"))],
+)
 def list_products(
     db: Session = Depends(get_db),
     _principal: ClinicPrincipal = Depends(get_current_clinic_user),

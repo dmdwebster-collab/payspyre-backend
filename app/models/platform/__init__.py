@@ -97,6 +97,7 @@ from app.models.platform.borrower_portal import (
 from app.models.platform.application_process_config import (
     PlatformApplicationProcessConfig,
 )
+from app.models.platform.credit_report import PlatformCreditReportPull
 
 __all__ = [
     "PlatformPatient",
@@ -166,6 +167,7 @@ __all__ = [
     "PlatformBureauBatch",
     "PlatformPatientSecondFactor",
     "PlatformPatientBankAccount",
+    "PlatformCreditReportPull",
     "PlatformPatientIdDocument",
     "PlatformPayoutRequest",
     "PlatformProvinceComplianceRule",

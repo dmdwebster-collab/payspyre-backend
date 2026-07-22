@@ -17,6 +17,35 @@ contact-log/comms, or SIN. This module makes that rule STRUCTURAL:
    the vendor surface fails this test and forces a conscious review against
    Dave's rules before the snapshot is updated.
 
+THE MASKED-VALUE CONTRACT (replaces the old blanket token ban)
+--------------------------------------------------------------
+This fence used to ban the tokens ``bank``/``account``/``routing``/
+``institution`` outright. That is *wrong for the product*: Dave's video-10 rule
+R2 explicitly asks for masked bank details on the vendor surface — *"the
+account number ends in 000… the institution number could be fully blocked
+out."* A blanket ban would have failed CI on the feature he asked for, and the
+tempting fix — allowlisting the token — reopens the entire category.
+
+So the bank vocabulary is now **conditionally** permitted, and only in a form
+that is provably masked:
+
+* ``HARD_FORBIDDEN_TOKENS`` — risk/score, bureau, bank statements, hardship,
+  scheduled-transaction internals, borrower comms, SIN, decision internals, and
+  payment-rail identity. Never permitted, in any form, masked or not.
+* ``MASKABLE_TOKENS`` (``bank account routing transit institution iban``) — a
+  field may carry these ONLY if it is
+    - named ``*_masked`` and typed :data:`app.api.clinic.v1.masking.MaskedValue`
+      (validator: must contain redaction characters, may reveal ≤4 digits), or
+    - named ``*_last4`` and typed :data:`app.api.clinic.v1.masking.Last4`
+      (validator: 1–4 digits and nothing else), or
+    - a pure trade-NAME field (``*_name``/``*_label``) whose only maskable hit
+      is ``bank``/``institution`` — *"your account is with Flinks Capital"* is a
+      label, not an account identifier.
+  Anything else — ``account_number``, ``routing_number``, a ``str``-typed
+  ``account_number_masked`` — fails. The NAME test proves the shape; the
+  validators in ``app/api/clinic/v1/masking.py`` (unit-tested below) make an
+  unmasked VALUE impossible to serialize through the declared type.
+
 DISCOVERY IS HERMETIC BY DESIGN (do not "simplify" it back to route walking):
 the first version of this fence walked ``clinic_router.routes`` and read each
 route's ``response_model``. That is instantiation-state and version dependent —
@@ -48,35 +77,66 @@ from __future__ import annotations
 
 import importlib
 import pkgutil
-from typing import get_args, get_origin
+from typing import Annotated, Optional, Union, get_args, get_origin
 
-from pydantic import BaseModel
+import pytest
+from pydantic import BaseModel, ValidationError
 
 import app.api.clinic.v1 as clinic_pkg
+from app.api.clinic.v1.masking import (
+    Last4,
+    MaskedField,
+    MaskedValue,
+    mask_tail,
+    validate_last4,
+    validate_masked,
+)
 
 # ---------------------------------------------------------------------------
 # Forbidden vocabulary (Dave's never-list). Matching is TOKEN-based on the
 # snake_case field name so e.g. "housing" does not false-positive on "sin".
 # ---------------------------------------------------------------------------
 
-FORBIDDEN_TOKENS = {
+# NEVER permitted, in any form — masking does not redeem these.
+HARD_FORBIDDEN_TOKENS = {
     # SIN / identifiers
     "sin", "ssn",
-    # proprietary risk + bureau
+    # proprietary risk + bureau (R4, R5)
     "risk", "score", "bureau", "equifax", "transunion",
-    # bank details / statements / payment-rail internals
-    "bank", "account", "routing", "transit", "institution", "iban",
-    "statement", "statements", "flinks", "zumrails",
-    # hardship / rescheduling / scheduled-transaction internals
+    # bank statements — the verification payload itself (R7)
+    "statement", "statements", "flinks",
+    # hardship / rescheduling (R8) + scheduled-transaction internals (R9).
+    # NB "scheduled" ≠ "schedule": the contractual amortization schedule
+    # (VendorPaymentPreview.schedule) is vendor-safe and stays allowed.
     "hardship", "reschedule", "rescheduling", "suspension", "suspended",
-    # borrower comms / contact log
+    "scheduled",
+    # payment-processor / rail identity (R11 — vendors see the accounting of a
+    # payment and its method, never the processor or rail behind it)
+    "zumrails", "processor", "rail", "gateway", "merchant",
+    # borrower comms / contact log (R12)
     "comms", "communication", "communications", "log",
     # raw decision internals (vendors get the mapped status only)
     "decision", "reasons",
 }
 
+# Permitted ONLY through the masked-value contract below (R2).
+MASKABLE_TOKENS = {"bank", "account", "routing", "transit", "institution", "iban"}
+
+# Trade-name/label forms are permitted for these tokens only: an institution's
+# NAME ("Flinks Capital") is not an account identifier. Never for account /
+# routing / transit / iban, where a "name" could carry the number itself.
+NAMEABLE_TOKENS = {"bank", "institution"}
+NAME_SUFFIXES = ("_name", "_label")
+
+MASKED_SUFFIX = "_masked"
+LAST4_SUFFIXES = ("_last4", "_last_4")
+
+# Back-compat / self-check: the full never-list vocabulary.
+FORBIDDEN_TOKENS = HARD_FORBIDDEN_TOKENS | MASKABLE_TOKENS
+
 # Fields whose name trips a token but whose content is explicitly vendor-safe.
-# Each entry needs a justification.
+# Each entry needs a justification. This is a per-FIELD escape hatch, never a
+# per-token one — allowlisting a token would reopen a whole category.
 ALLOWLIST: set[tuple[str, str]] = {
     # The vendor's OWN compliance score on their OWN profile — data about the
     # vendor, not about any borrower (10__: risk scores are borrower-side).
@@ -263,6 +323,90 @@ def _tokens(field_name: str) -> set[str]:
 
 
 # ---------------------------------------------------------------------------
+# The masked-value contract
+# ---------------------------------------------------------------------------
+
+
+def _mask_kind(annotation) -> Optional[str]:
+    """The :class:`MaskedField` kind declared by an annotation, if any.
+
+    Accepts either a raw annotation or a pydantic ``FieldInfo`` (pydantic v2
+    hoists ``Annotated`` metadata off ``.annotation`` and onto ``.metadata``).
+    Unwraps ``Annotated[...]`` and ``Optional[...]`` / unions so
+    ``Optional[MaskedValue]`` is recognised just like ``MaskedValue``.
+    """
+    for meta in getattr(annotation, "metadata", None) or ():
+        if isinstance(meta, MaskedField):
+            return meta.kind
+    if hasattr(annotation, "annotation"):  # FieldInfo
+        return _mask_kind(annotation.annotation)
+    if get_origin(annotation) is Annotated:
+        args = get_args(annotation)
+        for meta in args[1:]:
+            if isinstance(meta, MaskedField):
+                return meta.kind
+        return _mask_kind(args[0])
+    if get_origin(annotation) is Union:
+        for arg in get_args(annotation):
+            kind = _mask_kind(arg)
+            if kind:
+                return kind
+    return None
+
+
+def field_violation(model_name: str, field_name: str, annotation) -> Optional[str]:
+    """The fence rule for ONE field. Returns a message, or None if permitted.
+
+    Shared by the real-surface scan and the contract unit tests below, so the
+    tests exercise exactly the rule that guards production.
+    """
+    if (model_name, field_name) in ALLOWLIST:
+        return None
+
+    name = field_name.lower()
+    tokens = _tokens(name)
+
+    hard = tokens & HARD_FORBIDDEN_TOKENS
+    if hard:
+        return (
+            f"{model_name}.{field_name} — forbidden vocabulary {sorted(hard)}; "
+            "this category is never exposed to vendors, masked or not."
+        )
+
+    maskable = tokens & MASKABLE_TOKENS
+    if not maskable:
+        return None
+
+    # Trade name / label (e.g. bank_name) — permitted for bank/institution only.
+    if name.endswith(NAME_SUFFIXES) and maskable <= NAMEABLE_TOKENS:
+        return None
+
+    if name.endswith(MASKED_SUFFIX):
+        if _mask_kind(annotation) == "masked":
+            return None
+        return (
+            f"{model_name}.{field_name} — named as masked but not typed "
+            "`MaskedValue`; the mask must be enforced by the type, not by the "
+            "field name (app/api/clinic/v1/masking.py)."
+        )
+
+    if name.endswith(LAST4_SUFFIXES):
+        if _mask_kind(annotation) == "last4":
+            return None
+        return (
+            f"{model_name}.{field_name} — named as a last-4 field but not typed "
+            "`Last4` (app/api/clinic/v1/masking.py)."
+        )
+
+    return (
+        f"{model_name}.{field_name} — bank vocabulary {sorted(maskable)} on the "
+        "vendor surface must be masked: name it `*_masked` (typed MaskedValue) "
+        "or `*_last4` (typed Last4). Full account/routing/institution numbers "
+        "are never exposed to vendors (video 10 R2)."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
 
@@ -281,16 +425,15 @@ def test_discovery_is_not_empty():
 
 def test_no_forbidden_field_names_on_the_vendor_surface():
     """Dave's never-list is STRUCTURALLY absent: no clinic model may declare a
-    field whose name touches risk/bureau/bank/hardship/comms/SIN vocabulary.
-    Absent means absent — not just null."""
+    field whose name touches risk/bureau/hardship/comms/SIN/rail vocabulary, and
+    bank vocabulary only through the masked-value contract. Absent means absent
+    — not just null."""
     offenders = []
     for model in clinic_models():
-        for name in model.model_fields:
-            if (model.__name__, name) in ALLOWLIST:
-                continue
-            hit = _tokens(name) & FORBIDDEN_TOKENS
-            if hit:
-                offenders.append(f"{model.__name__}.{name} (matched: {sorted(hit)})")
+        for name, field in model.model_fields.items():
+            problem = field_violation(model.__name__, name, field)
+            if problem:
+                offenders.append(problem)
     assert not offenders, (
         "Vendor-forbidden field name(s) on the clinic surface — Dave's visibility "
         "rules (10__Vendor_Access.md) prohibit exposing this data to vendors:\n"
@@ -325,3 +468,140 @@ def test_forbidden_vocabulary_covers_the_spec_never_list():
     for required in ("sin", "risk", "score", "bureau", "bank", "routing",
                      "institution", "statement", "hardship", "log"):
         assert required in FORBIDDEN_TOKENS
+    # The maskable set is a strict, named subset — everything else is absolute.
+    assert MASKABLE_TOKENS.isdisjoint(HARD_FORBIDDEN_TOKENS)
+    assert FORBIDDEN_TOKENS == HARD_FORBIDDEN_TOKENS | MASKABLE_TOKENS
+
+
+def test_the_categories_dave_never_wants_stay_forbidden():
+    """R4/R5/R7/R8/R9/R11/R12 + SIN: still refused, and masking cannot buy them
+    in — a `*_masked` name does NOT redeem a hard-forbidden token."""
+    for field_name in (
+        "risk_score", "credit_score", "bureau_report_id", "equifax_file",
+        "transunion_file", "bank_statement_url", "flinks_login_id",
+        "hardship_plan", "rescheduling_status", "suspended_until",
+        "scheduled_transactions", "zumrails_customer_id", "processor_ref",
+        "rail_type", "gateway_id", "merchant_id", "contact_log",
+        "communication_history", "decision_reasons", "sin", "ssn_last4",
+    ):
+        assert field_violation("SomeClinicModel", field_name, str), field_name
+        # even dressed up as masked
+        assert field_violation("SomeClinicModel", field_name + "_masked", MaskedValue)
+
+
+# --- R2: masked bank details are PERMITTED ---------------------------------
+
+
+class _BankDetailExample(BaseModel):
+    """Dave's R2 view: "your account is with Flinks Capital, the account number
+    ends in 000… the institution number could be fully blocked out."""
+
+    bank_name: str
+    account_number_masked: MaskedValue
+    account_number_last4: Last4
+    routing_number_masked: MaskedValue
+    institution_number_masked: MaskedValue
+
+
+def test_masked_bank_detail_fields_pass_the_fence():
+    for name, field in _BankDetailExample.model_fields.items():
+        assert field_violation("_BankDetailExample", name, field) is None, name
+
+
+def test_full_account_number_fails_the_fence():
+    class _Leaky(BaseModel):
+        account_number: str
+        routing_number: str
+        institution_number: str
+        iban: str
+        transit_number: str
+
+    offenders = [
+        name
+        for name, field in _Leaky.model_fields.items()
+        if field_violation("_Leaky", name, field)
+    ]
+    assert offenders == list(_Leaky.model_fields)
+
+
+def test_masked_name_without_the_masked_type_fails():
+    """The mask must be enforced by the TYPE — a `str` named `*_masked` is a
+    promise, not a guarantee, and is exactly how the category would leak back."""
+
+    class _NameOnly(BaseModel):
+        account_number_masked: str
+        account_number_last4: str
+
+    for name, field in _NameOnly.model_fields.items():
+        assert field_violation("_NameOnly", name, field) is not None
+
+
+def test_optional_masked_field_is_recognised():
+    class _Optional(BaseModel):
+        account_number_masked: Optional[MaskedValue] = None
+
+    field = _Optional.model_fields["account_number_masked"]
+    assert field_violation("_Optional", "account_number_masked", field) is None
+
+
+def test_name_form_is_only_for_bank_and_institution():
+    assert field_violation("M", "bank_name", str) is None
+    assert field_violation("M", "institution_name", str) is None
+    # An "account name" could carry the number itself — not a free pass.
+    assert field_violation("M", "account_name", str) is not None
+    assert field_violation("M", "routing_label", str) is not None
+
+
+# --- value-level: an unmasked value cannot serialize through the type ------
+
+
+def test_masked_value_validator_accepts_dave_examples():
+    assert validate_masked("•••• 000") == "•••• 000"
+    assert validate_masked("•••••5") == "•••••5"
+    assert validate_masked("•••") == "•••"  # institution fully blocked
+    assert validate_masked("****1234") == "****1234"
+
+
+def test_masked_value_validator_rejects_unmasked_and_overlong():
+    for bad in ("123456789", "", "   ", "•12345", "4029930001234"):
+        with pytest.raises(ValueError):
+            validate_masked(bad)
+
+
+def test_last4_validator():
+    assert validate_last4("0000") == "0000"
+    assert validate_last4(" 123 ") == "123"
+    for bad in ("12345", "abcd", "12a4", ""):
+        with pytest.raises(ValueError):
+            validate_last4(bad)
+
+
+def test_model_refuses_to_serialize_an_unmasked_account_number():
+    """The end-to-end guarantee: even if a builder passes the raw number, the
+    declared type rejects it — the vendor response never carries it."""
+    with pytest.raises(ValidationError):
+        _BankDetailExample(
+            bank_name="Flinks Capital",
+            account_number_masked="402993000",  # raw — must be refused
+            account_number_last4="000",
+            routing_number_masked="•••••5",
+            institution_number_masked="•••",
+        )
+    ok = _BankDetailExample(
+        bank_name="Flinks Capital",
+        account_number_masked=mask_tail("402993000", reveal=3),
+        account_number_last4="3000",
+        routing_number_masked="•••••5",
+        institution_number_masked="•••",
+    )
+    assert ok.account_number_masked.endswith("000")
+    assert "402993" not in ok.account_number_masked
+
+
+def test_mask_tail_helper():
+    assert mask_tail("402993000", reveal=3).endswith("000")
+    assert mask_tail("402993000", reveal=0).strip("•") == ""
+    # reveal is clamped to the 4-digit maximum
+    assert len([c for c in mask_tail("402993000", reveal=9) if c.isdigit()]) == 4
+    assert mask_tail(None) is None
+    assert mask_tail("no-digits") is None

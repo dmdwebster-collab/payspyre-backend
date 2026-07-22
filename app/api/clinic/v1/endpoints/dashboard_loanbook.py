@@ -35,6 +35,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.clinic.v1.deps import ClinicPrincipal, get_current_clinic_user
+from app.services.clinic_permissions import require_clinic_permission
 from app.core.config import settings
 from app.db.base import get_db
 from app.models.platform.credit_application import PlatformCreditApplication
@@ -339,7 +340,15 @@ def _to_row(loan: PlatformLoan, patient, as_of: date) -> VendorLoanRow:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/dashboard/loan-book", response_model=VendorLoanBook)
+@router.get(
+    "/dashboard/loan-book",
+    response_model=VendorLoanBook,
+    dependencies=[
+        Depends(
+            require_clinic_permission("loan_servicing", "collection", "monitoring")
+        )
+    ],
+)
 def loan_book(
     status: Optional[str] = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
