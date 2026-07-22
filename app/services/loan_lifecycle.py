@@ -55,6 +55,7 @@ from app.core.logging import get_logger
 from app.models.platform.credit_application import PlatformCreditApplication
 from app.models.platform.event import PlatformEvent
 from app.models.platform.loan import PlatformLoan
+from app.services import archive
 from app.services import integration_settings
 from app.services import loan_servicing
 from app.services.esign.signnow_adapter import SignerInput
@@ -568,6 +569,9 @@ def charge_off_loan(
         raise ValueError(f"cannot charge off a loan in status '{loan.status}'")
 
     loan.status = "charged_off"
+    # Real close timestamp (migration 069): the Archive sorts and pages on Close
+    # date, which used to be the drifting ``updated_at`` proxy.
+    archive.stamp_loan_closed(loan)
     _record_loan_event(
         db,
         loan,

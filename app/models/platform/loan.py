@@ -192,6 +192,17 @@ class PlatformLoan(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
+    # ---- Closure (migration 069) -----------------------------------------
+    # When the loan reached a terminal status. NULL = not closed. Stamped by
+    # ``app.services.archive.stamp_loan_closed`` from the code path that closes
+    # the loan; backfilled for pre-069 rows (see the migration for the
+    # rationale). ``updated_at`` was the Archive's proxy until now and is a
+    # *last touched* timestamp, so it drifts on every later write.
+    closed_at = Column(DateTime(timezone=True), nullable=True)
+    # Provenance of ``closed_at`` — the honesty flag surfaced to the Archive UI:
+    # 'transition' (exact) | 'backfill_last_payment' | 'backfill_updated_at'.
+    closed_at_source = Column(String, nullable=True)
+
     # Relationships
     schedule = relationship(
         "PlatformLoanScheduleItem",
