@@ -549,7 +549,11 @@ def test_alembic_history_has_a_single_head():
     assert not duplicated, f"forked alembic chain — shared down_revision(s): {duplicated}"
 
     heads = [r for r in revisions if r not in set(parents)]
-    assert heads == ["073_risk_score_model"], f"expected a single head at 073, got {heads}"
+    # The head moves with every merge. 073 was the tip when this test was
+    # written (PR #204); 074_staff_comments (PR #205) re-chained onto 073 and
+    # is now the tip. Whoever adds the next migration updates this line — that
+    # edit is the point, because it forces the author to look at the chain.
+    assert heads == ["074_staff_comments"], f"expected a single head at 074, got {heads}"
 
 
 def test_no_scorecard_means_no_fabricated_score():

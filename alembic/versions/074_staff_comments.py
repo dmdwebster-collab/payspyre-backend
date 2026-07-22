@@ -1,14 +1,15 @@
 """Internal staff comments (Dave's Comments tab on application + loan).
 
 Revision ID: 074_staff_comments
-Revises: 072_settings_backend_gaps
+Revises: 073_risk_score_model
 Create Date: 2026-07-22
 
-RE-CHAINING NOTE: a sibling branch (``feat/risk-score-model``) is taking
-``073``. This revision is numbered ``074`` but chains off ``072`` because
-``073`` does not exist on ``main`` yet — whichever of the two merges SECOND
-must repoint its ``down_revision`` at the other so ``main`` keeps a single
-linear head. Nothing here depends on 073's tables.
+RE-CHAINED 2026-07-22: this revision was authored against ``072`` while the
+sibling branch ``feat/risk-score-model`` was still open. That branch merged
+first (PR #204), so ``073_risk_score_model`` landed on ``main`` and
+``down_revision`` was repointed at it — leaving ``072`` with a single child and
+the history linear. Nothing here depends on 073's tables; the re-chain is
+ordering only.
 
 Creates ``platform_staff_comments``: one internal note by a PaySpyre operator
 about exactly one subject (an application XOR a loan; enforced by a CHECK).
@@ -26,7 +27,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision = "074_staff_comments"
-down_revision = "072_settings_backend_gaps"
+down_revision = "073_risk_score_model"
 branch_labels = None
 depends_on = None
 

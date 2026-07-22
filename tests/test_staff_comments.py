@@ -424,3 +424,29 @@ class TestStaffOnlyFence:
             assert any(
                 "require_roles" in getattr(g, "__qualname__", "") for g in guards
             ), f"{fn.__name__} is not gated by require_roles"
+
+
+def test_migration_074_chain_pin():
+    """074 chains onto 073, keeping the alembic history a single linear head.
+
+    This migration was authored against ``072_settings_backend_gaps`` while the
+    sibling branch ``feat/risk-score-model`` was still open. That branch merged
+    first (PR #204), landing ``073_risk_score_model`` on main, so 074 was
+    re-chained onto 073 — otherwise 072 would have had two children and
+    ``alembic upgrade head`` would have failed on a forked chain.
+
+    If the merge train re-chains this again, update BOTH the migration's
+    ``down_revision`` and this pin together. The repo-wide fork detector lives
+    in ``tests/test_risk_scoring.py::test_alembic_history_has_a_single_head``.
+    """
+    import importlib.util
+    from pathlib import Path
+
+    name = "074_staff_comments"
+    path = Path(__file__).resolve().parents[1] / "alembic" / "versions" / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    assert mod.revision == "074_staff_comments"
+    assert mod.down_revision == "073_risk_score_model"
