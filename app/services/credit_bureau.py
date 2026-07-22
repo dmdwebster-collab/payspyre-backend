@@ -1,19 +1,35 @@
 import hashlib
 import json
+import logging
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Optional
 from uuid import uuid4
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 
 class CreditBureauClient:
     """Base client for credit bureau integrations with caching and rate limiting."""
 
-    def __init__(self, bureau_name: str, api_key: str, base_url: str):
+    def __init__(
+        self,
+        bureau_name: str,
+        api_key: str,
+        base_url: str,
+        log_request: bool = False,
+        log_response: bool = False,
+    ):
         self.bureau_name = bureau_name
         self.api_key = api_key
         self.base_url = base_url
+        # Settings-area "Log request" / "Log response" knobs. Off by default —
+        # unchanged behaviour. Only NON-PII envelope metadata is ever logged:
+        # bureau, endpoint, HTTP status, request id. Never the consumer block,
+        # never the bureau file (Hard Rule #6).
+        self.log_request = log_request
+        self.log_response = log_response
         self._cache: dict[str, tuple[dict, datetime]] = {}
         self._rate_limit_tracker: dict[str, list[datetime]] = {}
         self.cache_ttl_hours = 24
@@ -28,19 +44,33 @@ class CreditBureauClient:
     ) -> dict[str, Any]:
         """Make authenticated request to bureau API."""
         url = f"{self.base_url}{endpoint}"
+        request_id = str(uuid4())
         request_headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
-            "X-Request-ID": str(uuid4()),
+            "X-Request-ID": request_id,
         }
         if headers:
             request_headers.update(headers)
+
+        if self.log_request:
+            logger.info(
+                "bureau_request bureau=%s endpoint=%s method=%s request_id=%s",
+                self.bureau_name, endpoint, method, request_id,
+            )
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             if method == "GET":
                 response = await client.get(url, headers=request_headers, params=data)
             else:
                 response = await client.post(url, headers=request_headers, json=data)
+
+            if self.log_response:
+                logger.info(
+                    "bureau_response bureau=%s endpoint=%s request_id=%s status=%s bytes=%d",
+                    self.bureau_name, endpoint, request_id,
+                    response.status_code, len(response.content or b""),
+                )
 
             response.raise_for_status()
             return response.json()
@@ -134,14 +164,55 @@ class CreditBureauClient:
 
 
 class EquifaxClient(CreditBureauClient):
-    """Equifax Canada credit bureau client."""
+    """Equifax Canada credit bureau client.
 
-    def __init__(self, api_key: str):
+    The settings-area Equifax block (``app.schemas.integration_config.
+    EquifaxConfig``) is consumed here: ``environment`` selects the base URL,
+    and ``member_number`` / ``customer_code`` are sent on every request as the
+    subscriber identifiers Equifax requires. The fourth member of Dave's quad —
+    the security code — is a credential and reaches the client as part of
+    ``api_key``/secrets, never through this config.
+    """
+
+    #: environment -> API origin. "test" is the default because
+    #: ``EquifaxConfig.environment`` defaults to test, and no production
+    #: subscriber agreement exists yet.
+    BASE_URLS = {
+        "test": "https://api.sandbox.equifax.ca/v1",
+        "production": "https://api.equifax.ca/v1",
+    }
+
+    def __init__(
+        self,
+        api_key: str,
+        environment: str = "production",
+        member_number: Optional[str] = None,
+        customer_code: Optional[str] = None,
+        log_request: bool = False,
+        log_response: bool = False,
+    ):
+        # Default ``environment="production"`` preserves the previous
+        # hard-coded base URL for every existing caller that passes only
+        # api_key (the two unit-test suites and any un-migrated code path).
         super().__init__(
             bureau_name="equifax",
             api_key=api_key,
-            base_url="https://api.equifax.ca/v1",
+            base_url=self.BASE_URLS.get(environment, self.BASE_URLS["production"]),
+            log_request=log_request,
+            log_response=log_response,
         )
+        self.environment = environment
+        self.member_number = member_number
+        self.customer_code = customer_code
+
+    def _subscriber_block(self) -> dict[str, Any]:
+        """Equifax subscriber identifiers, omitted entirely when unconfigured."""
+        block = {}
+        if self.member_number:
+            block["member_number"] = self.member_number
+        if self.customer_code:
+            block["customer_code"] = self.customer_code
+        return {"subscriber": block} if block else {}
 
     async def _fetch_report_from_bureau(
         self,
@@ -163,6 +234,7 @@ class EquifaxClient(CreditBureauClient):
             "product": "credit_score_plus",
             "consent": True,
             "purpose": "credit_application",
+            **self._subscriber_block(),
         }
 
         response = await self._make_request("/credit/report", data=payload)

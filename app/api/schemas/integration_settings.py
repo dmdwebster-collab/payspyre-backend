@@ -47,6 +47,10 @@ class IntegrationSettingsRead(BaseModel):
     # app.schemas.integration_config with defaults resolved, so the admin UI
     # renders every knob even on a row saved before the schema landed.
     config: dict[str, Any]
+    # Per-field editability contract: {field: {informational, consumed_by,
+    # reason}}. Fields with informational=true have no consumer BY DESIGN and
+    # MUST be rendered read-only — an editable-but-ignored control is a bug.
+    config_meta: dict[str, Any] = Field(default_factory=dict)
     # Names of the secret keys that are populated (values redacted).
     secret_keys: list[str] = Field(default_factory=list)
     # Which secret keys this provider expects — labels the write-only inputs.

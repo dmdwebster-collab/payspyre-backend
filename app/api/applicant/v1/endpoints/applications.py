@@ -36,6 +36,7 @@ from app.api.applicant.v1.deps import (
 from app.api.applicant.v1.schemas import (
     ApplicationStateResponse,
     AuthChallenge,
+    BankVerificationPolicy,
     ConsentGrantResponse,
     CreateApplicationBody,
     CreateApplicationResponse,
@@ -221,11 +222,22 @@ def get_required_consents(
     application_id: UUID,
     claims: ApplicantClaims = Depends(get_current_applicant),
     orchestrator: FlowOrchestrator = Depends(get_orchestrator),
+    db: Session = Depends(get_db),
 ):
     require_app_scope(application_id, claims)
     with _http_errors():
         required = orchestrator.get_required_consents(application_id)
-    return RequiredConsentsResponse(required=required)
+    # The Flinks behaviour block (settings area) rides along when bank
+    # verification is required, so the client sequences the step and offers
+    # (or withholds) Skip from configuration instead of hard-coding it.
+    policy = None
+    if "bank_verification" in required:
+        from app.services import integration_behaviour
+
+        policy = BankVerificationPolicy(
+            **integration_behaviour.bank_verification_policy(db)
+        )
+    return RequiredConsentsResponse(required=required, bank_verification=policy)
 
 
 @router.post("/{application_id}/consents/{purpose}", response_model=ConsentGrantResponse)

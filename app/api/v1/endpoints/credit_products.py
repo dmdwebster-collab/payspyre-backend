@@ -15,6 +15,7 @@ enforced by the service layer; this endpoint only forwards data.
 """
 from __future__ import annotations
 
+from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -33,6 +34,7 @@ from app.schemas.product_policy_config import (
     ProductPolicyConfigError,
     assert_loan_type_change_allowed,
     parse_product_policy_config,
+    policy_config_field_metadata,
 )
 from app.services import credit_products as service
 from app.services import loan_quote
@@ -160,6 +162,22 @@ async def list_credit_products(
     _user=Depends(get_current_user),
 ):
     return service.list_credit_products(db, active_only=active_only)
+
+
+@router.get(
+    "/policy-config/field-metadata",
+    summary="Which policy_config sections/fields actually change behaviour",
+    description=(
+        "Per-section status (`consumed` / `informational` / `pending_consumer`) "
+        "plus machine-readable editability for the two allocation-priority "
+        "lists. `repayment` is consumed by the regular-payment allocator and may "
+        "be reordered only within `swappable_groups`; `accrual` is informational "
+        "and must be rendered read-only. Sections marked `pending_consumer` must "
+        "not be presented as if editing them changes anything."
+    ),
+)
+async def get_policy_config_field_metadata(_user=Depends(get_current_user)):
+    return policy_config_field_metadata()
 
 
 @router.get(

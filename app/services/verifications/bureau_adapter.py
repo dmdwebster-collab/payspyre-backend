@@ -77,9 +77,36 @@ def _api_key_from_settings(setting: Any, bureau: str) -> str:
     return api_key
 
 
-def _client_for(bureau: str, api_key: str):
+def _client_for(bureau: str, api_key: str, settings_row: Any = None):
+    """Build the bureau HTTP client, consuming the row's typed behaviour config.
+
+    For Equifax that is the non-secret half of Dave's quad (member number,
+    customer code, environment) plus the request/response logging switches. The
+    values come from the SAME ``settings_row`` the api_key does, so the admin
+    Integrations page is the single source of truth. A row with no config (or
+    ``settings_row=None``) reproduces the previous hard-coded behaviour:
+    production base URL, no subscriber block, no logging.
+    """
     if bureau == "equifax":
-        return EquifaxClient(api_key=api_key)
+        from app.schemas.integration_config import EquifaxConfig
+
+        raw = (getattr(settings_row, "config", None) or {}) if settings_row else {}
+        try:
+            cfg = EquifaxConfig.model_validate(raw)
+        except Exception:  # noqa: BLE001 — tolerant read; writes validate
+            cfg = EquifaxConfig()
+        return EquifaxClient(
+            api_key=api_key,
+            # Only an explicitly-stored environment moves the base URL; an
+            # absent config keeps the historical production origin.
+            environment=(
+                cfg.environment.value if "environment" in raw else "production"
+            ),
+            member_number=cfg.member_number,
+            customer_code=cfg.customer_code,
+            log_request=cfg.log_request,
+            log_response=cfg.log_response,
+        )
     if bureau == "transunion":
         return TransUnionClient(api_key=api_key)
     raise BureauCredentialsError(f"Unsupported bureau provider '{bureau}'.")
@@ -106,7 +133,7 @@ class RealBureauAdapter(BureauAdapter):
         """
         self._bureau = bureau
         self._api_key = _api_key_from_settings(settings_row, bureau)
-        self._client = _client_for(bureau, self._api_key)
+        self._client = _client_for(bureau, self._api_key, settings_row)
         self._req = pull_request
         self._use_cache = use_cache
 

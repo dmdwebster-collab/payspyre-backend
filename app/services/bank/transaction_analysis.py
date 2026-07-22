@@ -421,8 +421,10 @@ def _infer_per_month_from_gaps(gaps: list[int]) -> float:
     return 30.4 / median_gap
 
 
-def _monthly_income_cents(txns: list[_Txn], today: date) -> int:
-    cutoff_days = INCOME_LOOKBACK_DAYS
+def _monthly_income_cents(
+    txns: list[_Txn], today: date, lookback_days: Optional[int] = None
+) -> int:
+    cutoff_days = lookback_days or INCOME_LOOKBACK_DAYS
     credits = [
         t
         for t in txns
@@ -447,6 +449,7 @@ def analyze_accounts(
     accounts: list[dict[str, Any]],
     *,
     today: Optional[date] = None,
+    lookback_days: Optional[int] = None,
 ) -> dict[str, int]:
     """Derive underwriting metrics from raw Flinks ``Accounts[]`` data.
 
@@ -456,6 +459,15 @@ def analyze_accounts(
         monthly_income_cents, nsf_count_90d, account_age_months, avg_balance_cents
 
     ``today`` is injectable for deterministic testing; defaults to UTC today.
+
+    ``lookback_days`` is the income-detection window and is fed by the Flinks
+    settings-area knob ``transaction_depth_days`` (Dave: "Depth of account
+    report = 90 days"). ``None`` keeps :data:`INCOME_LOOKBACK_DAYS` (90), so the
+    default is byte-identical to the previous hard-coded behaviour. NOTE
+    ``nsf_count_90d`` is deliberately NOT re-windowed — it is a named 90-day
+    metric in the ``ReplayBankAdapter``/scorecard contract and in the decision
+    rules; changing its window would change underwriting outcomes, not just the
+    data pull depth.
     """
     if today is None:
         today = datetime.now(timezone.utc).date()
@@ -463,7 +475,7 @@ def analyze_accounts(
     txns = _extract_txns(accounts)
 
     return {
-        "monthly_income_cents": _monthly_income_cents(txns, today),
+        "monthly_income_cents": _monthly_income_cents(txns, today, lookback_days),
         "nsf_count_90d": _nsf_count_90d(txns, today),
         "account_age_months": _account_age_months(txns, today),
         "avg_balance_cents": _avg_balance_cents(accounts),

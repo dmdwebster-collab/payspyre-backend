@@ -146,8 +146,26 @@ class ApplicationStateResponse(BaseModel):
     status_updated_at: datetime
 
 
+class BankVerificationPolicy(BaseModel):
+    """The applicant-facing half of the Flinks settings block.
+
+    Drives when the client runs the bank-verification step, whether a Skip
+    control is offered at all, and the freshness window shown to the borrower.
+    Source: ``app.schemas.integration_config.FlinksConfig`` via
+    ``integration_behaviour.bank_verification_policy``.
+    """
+
+    when_to_verify: str
+    allow_customer_skip: bool
+    verification_expiry_days: int
+    verification_reminder_days: int
+
+
 class RequiredConsentsResponse(BaseModel):
     required: list[str]
+    #: Present whenever bank_verification is required; the client MUST honour
+    #: allow_customer_skip rather than hard-coding a Skip button.
+    bank_verification: Optional[BankVerificationPolicy] = None
 
 
 class ConsentGrantResponse(BaseModel):
