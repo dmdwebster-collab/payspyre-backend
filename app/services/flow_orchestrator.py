@@ -1203,6 +1203,30 @@ class FlowOrchestrator:
         application.decision_at = datetime.now(timezone.utc)
         application.decision_by = "auto"
 
+        # RISK-SCORE PERSISTENCE (migration 073). Records WHAT WAS JUST COMPUTED —
+        # score, scorecard version, band/segment, PD, odds, the 8-node check
+        # pipeline, the rule evaluations and the SYSTEM half of the dual decision.
+        # ⚠️ DECISION-PATH: this runs strictly AFTER the outcome is resolved and
+        # written, reads nothing back into the decision, and is fully guarded —
+        # a recording failure must never change or roll back a decision.
+        try:
+            from app.services import risk_scores
+
+            risk_scores.record_from_flow_decision(
+                self.db,
+                application,
+                flow_decision.to_dict(),
+                decision_summary=decision_summary,
+                scorecard_inputs=scorecard_inputs,
+                decided_at=application.decision_at,
+            )
+        except Exception as exc:  # noqa: BLE001 — decision integrity over recording
+            logger.error(
+                "risk_score_recording_failed",
+                application_id=str(application.id),
+                error=str(exc),
+            )
+
         # Stamp the terminal marketplace lead_state (approved/declined) + capture
         # any verification depth gained in this flow. Non-terminal (under_review)
         # is left on the forward ladder maintained at verification time.

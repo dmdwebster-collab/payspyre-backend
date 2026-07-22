@@ -150,7 +150,10 @@ def test_report_applications_funnel_and_bands(client, db_session):
     assert "total" in b["funnel"]
     assert set(b["by_amount_band"].keys()) == {"<1k", "1-5k", "5-10k", "10-20k", "20-30k", ">30k"}
     assert b["by_amount_band"]["5-10k"]["count"] >= 1
-    assert b["by_risk_rank"]["value"] is None  # stubbed
+    # No longer stubbed (migration 073): real bands, with an honest `unscored`
+    # residual for loans whose application carries no reconstructable score.
+    assert set(b["by_risk_rank"]) >= {"ranks", "bands", "unscored", "as_of"}
+    assert len(b["by_risk_rank"]["bands"]) == 5
     assert "repaid_pct_of_disbursed" in b["repaid_vs_disbursed"]
 
 
@@ -179,8 +182,16 @@ def test_report_risk_and_scoring_and_underwriting(client, db_session):
     r2 = client.get(f"{_BASE}/reports/scoring")
     assert r2.status_code == 200, r2.text
     s = r2.json()
-    assert s["scorecard_stability"] is None and s["scorecard_accuracy"] is None
-    assert s["notes"]  # carries the TODO
+    # No longer a null stub (migration 073) — the four tables compute for real.
+    assert len(s["system_stability"]["rows"]) == 5
+    assert len(s["scorecard_accuracy"]["rows"]) == 5
+    assert s["delinquency_performance"]["columns"] == [
+        "good", "1-30", "31-60", "61-90", "91plus", "written_off",
+    ]
+    assert len(s["final_score"]["rows"]) == 5
+    # With no scored applications there is no baseline, so PSI is honestly null.
+    assert s["scorecard_stability"] is None
+    assert s["notes"]
 
     r3 = client.get(f"{_BASE}/reports/underwriting")
     assert r3.status_code == 200, r3.text

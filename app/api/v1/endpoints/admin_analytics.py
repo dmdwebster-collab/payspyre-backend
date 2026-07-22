@@ -634,12 +634,7 @@ def report_applications(f: ReportFilters = Depends(), db: Session = Depends(get_
         interval=f.interval,
         funnel=funnel,
         by_amount_band=bands,
-        by_risk_rank={
-            "ranks": R.empty_risk_ranks(),
-            "value": None,
-            "notes": "risk rank is not persisted on the decision — no numeric score "
-                     "column exists yet; ranks return null pending a scorecard field.",
-        },
+        by_risk_rank=_by_risk_rank(db, f),
         repaid_vs_disbursed={
             "disbursed_cents": int(disbursed_total or 0),
             "repaid_cents": int(repaid_total or 0),
@@ -650,9 +645,33 @@ def report_applications(f: ReportFilters = Depends(), db: Session = Depends(get_
         notes=[
             "fees_cents is 0 in the repayment split — fees are not modeled separately "
             "from interest in the amortization schedule/statements.",
-            "risk-rank distribution is stubbed null (no persisted score); see by_risk_rank.notes.",
+            "by_risk_rank is now computed from the persisted risk-score model "
+            "(migration 073); loans whose application has no reconstructable score "
+            "are reported under by_risk_rank.unscored rather than folded into a band.",
         ],
     )
+
+
+def _by_risk_rank(db: Session, f: ReportFilters) -> dict:
+    """'Number of loans grouped by risk level' — real, off the score model.
+
+    Keeps the legacy ``ranks`` key (the FE's ``PendingData`` guard reads it) and
+    adds Dave's five named segments alongside. Both are the same population."""
+    from app.services.metrics import risk_reports as RR
+
+    payload = RR.loans_by_risk_band(db, f)
+    return {
+        "ranks": {
+            b["risk_level"]: {
+                "count": b["count"], "principal_cents": b["principal_cents"]
+            }
+            for b in payload["bands"]
+        },
+        "bands": payload["bands"],
+        "unscored": payload["unscored"],
+        "as_of": payload["as_of"],
+        "notes": "; ".join(payload["notes"]),
+    }
 
 
 # --------------------------------------------------------------------------
@@ -849,44 +868,113 @@ def report_risk(f: ReportFilters = Depends(), db: Session = Depends(get_db)):
 
 
 # --------------------------------------------------------------------------
-# 6) SCORING — scorecard stability / accuracy / delinquency-by-score.
-#    STUBBED: no scorecard history is tracked yet (no persisted score, no
-#    versioned scorecard). Returns nulls with a clear TODO, per the spec.
+# 6) SCORING — Dave's four tables: System stability (PSI), Scorecard accuracy,
+#    Delinquency performance by band, Final score. Real computations off the
+#    persisted risk-score model (migration 073); was a hard-coded null stub.
 # --------------------------------------------------------------------------
 
 
 class ScoringReport(BaseModel):
+    window: dict
+    system_stability: dict
+    scorecard_accuracy: dict
+    delinquency_performance: dict
+    final_score: dict
+    # Back-compat scalar for any caller still reading the old stub shape.
     scorecard_stability: Optional[float] = None
-    scorecard_accuracy: Optional[float] = None
-    delinquency_by_score: Optional[list[dict]] = None
     notes: list[str]
 
 
-@router.get("/reports/scoring", response_model=ScoringReport)
-def report_scoring(f: ReportFilters = Depends(), db: Session = Depends(get_db)):
-    """Scorecard stability / accuracy / delinquency-by-score — STUBBED.
+def _scoring_window(
+    from_date: Optional[date], to_date: Optional[date], days: int
+) -> tuple[datetime, datetime]:
+    """Resolve the reporting window. Defaults to Dave's 'Last month' (30 days)."""
+    end = (
+        datetime.combine(to_date, datetime.min.time(), tzinfo=timezone.utc)
+        + timedelta(days=1)
+        if to_date is not None
+        else datetime.now(timezone.utc)
+    )
+    start = (
+        datetime.combine(from_date, datetime.min.time(), tzinfo=timezone.utc)
+        if from_date is not None
+        else end - timedelta(days=days)
+    )
+    return (start, end)
 
-    TODO(scorecard-history): none of these are derivable yet. The decision JSONB
-    (``PlatformCreditApplication.decision``) stores only {decision, reasons,
-    verifications_performed, next_state} — there is no persisted numeric risk
-    score, no scorecard version, and no time-series of scores to measure PSI
-    (Population Stability Index) or KS/AUC accuracy against realized delinquency.
-    To light this up, persist a numeric score + scorecard_version on decision and
-    a scored-vs-outcome history table, then compute PSI (stability) and KS/AUC
-    (accuracy) here.
+
+@router.get("/reports/scoring", response_model=ScoringReport)
+def report_scoring(
+    f: ReportFilters = Depends(),
+    from_date: Optional[date] = Query(
+        None, alias="from", description="Window start (inclusive, ISO date)."
+    ),
+    to_date: Optional[date] = Query(
+        None, alias="to", description="Window end (inclusive, ISO date)."
+    ),
+    days: int = Query(
+        30, ge=1, le=3650, description="Window length in days when from/to are omitted."
+    ),
+    db: Session = Depends(get_db),
+):
+    """Reports → Scoring: Dave's four tables, computed off the persisted score model.
+
+    Previously a hard-coded ``null`` stub — there was no persisted numeric score
+    or scorecard version to compute anything from. Migration 073
+    (``platform_application_risk_scores``) supplies both, so these are now real:
+
+    * ``system_stability``        — PSI: ``Actual %``, ``Expected %``, ``(A-E)``,
+      ``(A/E)``, ``Ln(A/E)``, ``Index`` per risk level + a RAG-coloured total.
+      Expected = the segment distribution BEFORE the window; Actual = inside it.
+      Degenerate rows (0% actual → ``-∞``) are shipped visibly, as Dave ships them.
+    * ``scorecard_accuracy``      — ``Accounts / Bad / Bad rate / Expected bad rate``.
+    * ``delinquency_performance`` — ``Accounts / good / 1-30 / 31-60 / 61-90 /
+      91plus / written_off``, in BOTH ``#`` and ``%`` (his unit toggle), using the
+      corrected upper-inclusive bucket vocabulary from #200.
+    * ``final_score``             — ``Applicants / Approved / Approved % /
+      Low-side % / High-side %`` — the override columns the dual system-vs-
+      underwriter decision record exists to make computable.
     """
+    from app.services.metrics import risk_reports as RR
+
+    window_start, window_end = _scoring_window(from_date, to_date, days)
+    stability = RR.system_stability(db, f, window_start=window_start, window_end=window_end)
     return ScoringReport(
-        scorecard_stability=None,
-        scorecard_accuracy=None,
-        delinquency_by_score=None,
+        window={"from": window_start.isoformat(), "to": window_end.isoformat()},
+        system_stability=stability,
+        scorecard_accuracy=RR.scorecard_accuracy(db, f),
+        delinquency_performance=RR.delinquency_by_band(db, f),
+        final_score=RR.final_score(db, f, window_start=window_start, window_end=window_end),
+        scorecard_stability=stability["total_psi"],
         notes=[
-            "STUBBED: no scorecard history tracked. decision JSONB carries no numeric "
-            "score or scorecard version, so PSI (stability), KS/AUC (accuracy) and "
-            "delinquency-by-score band are not computable yet.",
-            "TODO(scorecard-history): persist score + scorecard_version on the decision "
-            "and a scored-vs-outcome table to populate these metrics.",
+            "Computed from platform_application_risk_scores (migration 073) — the "
+            "immutable per-application score snapshot written by the flow engine.",
+            "Backfilled rows (score_source='backfill') are EXCLUDED from these four "
+            "tables: a reconstructed row has no reliable score, so counting it would "
+            "corrupt every rate here.",
         ],
     )
+
+
+class RiskBandReport(BaseModel):
+    as_of: str
+    bands: list[dict]
+    unscored: dict
+    notes: list[str] = []
+
+
+@router.get("/reports/risk-bands", response_model=RiskBandReport)
+def report_risk_bands(f: ReportFilters = Depends(), db: Session = Depends(get_db)):
+    """Funded loans grouped by risk level — Portfolio report #4 ("Number of loans
+    grouped by risk level"), and the segmentation the Risks "Delinquency
+    performance" chart groups its bars by.
+
+    Count, originated principal and outstanding balance per one of Dave's five
+    risk segments, plus an honest ``unscored`` residual for loans whose
+    application carries no reconstructable score."""
+    from app.services.metrics import risk_reports as RR
+
+    return RiskBandReport(**RR.loans_by_risk_band(db, f))
 
 
 # --------------------------------------------------------------------------
