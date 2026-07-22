@@ -36,11 +36,11 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api.clinic.v1.deps import ClinicPrincipal, get_current_clinic_user
+from app.services.clinic_permissions import require_clinic_permission
 from app.db.base import get_db
 from app.models.platform.credit_application import PlatformCreditApplication
 from app.models.platform.loan import PlatformLoan
 from app.models.platform.marketplace import (
-    PlatformMarketplaceListing,
     PlatformMarketplaceVendorInterest,
 )
 
@@ -286,7 +286,11 @@ def _revenue(db: Session, vendor_id: UUID, frm: datetime, to: datetime) -> Vendo
 # --- routes -----------------------------------------------------------------
 
 
-@router.get("/dashboard/funnel", response_model=VendorFunnel)
+@router.get(
+    "/dashboard/funnel",
+    response_model=VendorFunnel,
+    dependencies=[Depends(require_clinic_permission("monitoring", "loan_servicing"))],
+)
 def dashboard_funnel(
     from_: Optional[str] = Query(default=None, alias="from"),
     to: Optional[str] = None,
@@ -300,7 +304,11 @@ def dashboard_funnel(
     return VendorFunnel(**app_track, **mkt_track)
 
 
-@router.get("/dashboard/revenue", response_model=VendorRevenue)
+@router.get(
+    "/dashboard/revenue",
+    response_model=VendorRevenue,
+    dependencies=[Depends(require_clinic_permission("monitoring", "loan_servicing"))],
+)
 def dashboard_revenue(
     from_: Optional[str] = Query(default=None, alias="from"),
     to: Optional[str] = None,

@@ -80,7 +80,11 @@ class ExtraPayoutResponse(BaseModel):
 # --- routes -----------------------------------------------------------------
 
 
-@router.get("/wallet", response_model=WalletResponse)
+@router.get(
+    "/wallet",
+    response_model=WalletResponse,
+    dependencies=[Depends(require_clinic_permission("vendor_management", "loan_servicing"))],
+)
 def get_wallet(
     db: Session = Depends(get_db),
     principal: ClinicPrincipal = Depends(get_current_clinic_user),
@@ -91,7 +95,11 @@ def get_wallet(
     return WalletResponse(**snapshot.as_dict())
 
 
-@router.get("", response_model=list[DisbursementRow])
+@router.get(
+    "",
+    response_model=list[DisbursementRow],
+    dependencies=[Depends(require_clinic_permission("vendor_management", "loan_servicing"))],
+)
 def list_history(
     limit: int = Query(100, ge=1, le=500),
     db: Session = Depends(get_db),
