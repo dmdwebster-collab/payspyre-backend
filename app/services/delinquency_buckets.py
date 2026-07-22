@@ -36,12 +36,29 @@ cure/rollover semantics are AMBIGUOUS pending Dave — flagged in the PR):
      tolerance algorithm is a separate Excel he still owes us — when it
      arrives it will plug in here as a policy knob).
   4. POT-N derivation is DAYS-past-due at month-end: pot_30 ⇐ 30-59 DPD,
-     pot_60 ⇐ 60-89, pot_90 ⇐ 90-120, default ⇐ >120 (dpd ≥ 121). NOTE: Dave's
+     pot_60 ⇐ 60-89, pot_90 ⇐ 90, default ⇐ >90 (dpd ≥ 91). NOTE: Dave's
      video narration counts MONTHS unpaid ("due July 15 → CML until Jul 31 →
      pot-30 on Aug 1"); for due dates early in a month the two diverge (due
      Jul 1 unpaid at Jul 31 is 30 DPD → pot_30 here, but "still CML" by the
      month-count reading). DPD thresholds are implemented per the build spec;
      flagged for Dave.
+
+     CORRECTED 2026-07-22 (P0/T4): the default threshold shipped at 121 DPD
+     (Turnkey's ">120" rule). Dave, video 04: *"instead of the 120 plus …
+     once they get past pot 90 they would just be quote unquote default."*
+     ``default_min_dpd`` is now **91** and, like every other boundary here,
+     is DB-overridable — see :func:`get_policy`.
+
+     ⚠️ KNOWN CONSEQUENCE, FLAG TO DAVE: because bucketing here is DPD-driven
+     while Dave narrates it in MONTHS UNPAID, ``default_min_dpd=91`` collapses
+     ``pot_90`` to a one-day window (dpd == 90 exactly). On a monthly schedule
+     the month-ends land near 30 / 60 / 90 / 120 DPD, so the 4th missed-payment
+     month (~120 DPD) now reports ``default`` instead of ``pot_90``. That IS
+     the literal reading of "once they get past pot 90 they would just be
+     default", and it is what Dave asked for — but if he meant "the month
+     AFTER a loan is pot 90", the correct value is ~121 (Turnkey's old rule).
+     No deploy is needed to switch: set ``default_min_dpd`` in the
+     ``delinquency_buckets`` integration-settings row.
   5. Insolvency overrides everything INCLUDING written_off: Dave keeps a
      segregated insolvency portfolio that is written off the main book but
      still maintained, so an insolvent charged-off loan reports ``insolvency``.
@@ -56,6 +73,59 @@ cure/rollover semantics are AMBIGUOUS pending Dave — flagged in the PR):
 MONEY: integer cents everywhere. Snapshot outstanding principal comes from the
 actuals ledger's balance view (``loan_ledger.loan_balances`` at the month-end
 date) so re-running a month's snapshot is deterministic.
+
+----------------------------------------------------------------------------
+TWO MODELS, ONE MODULE — how the POT ladder and the DPD AGEING buckets relate
+----------------------------------------------------------------------------
+Dave's platform uses **two different delinquency vocabularies** and they are
+NOT the same concept. Both now live here so there is exactly one place where a
+day-count boundary is written down.
+
+1. **The POT ladder (state machine, month-end).** ``current →
+   current_month_late → pot_30 → pot_60 → pot_90 → default`` (+ ``insolvency``
+   / ``written_off``). This is a *stateful classification of a loan*, assigned
+   only at the month-end snapshot, persisted on
+   ``platform_loan_delinquency_snapshots`` and ``platform_loans.current_bucket``.
+   It drives collections (queues, collector tiers, roll rates), bureau
+   reportability (pot_60+) and the default flag. Constants: ``BUCKET_*``.
+
+2. **The DPD ageing buckets (stateless, live).** Dave's platform-wide reporting
+   vocabulary — ``Good / 1-30 / 31-60 / 61-90 / >91`` — seen on the Risks "Bad
+   rate trend", the Scoring "Delinquency performance" table and the servicing
+   "All past due" filter menu. This is a *pure function of today's days-past-due*
+   with no memory: recompute it any time, for any as-of date. Constants:
+   ``AGING_*``; mapper :func:`aging_bucket`.
+
+Reconciliation (deliberate, and the reason the two must not be merged):
+
+  * The ageing buckets are **inclusive of their upper bound** (``1-30`` contains
+    30 DPD); the POT ladder's cuts are **exclusive** (30 DPD is already
+    ``pot_30``). So the same loan at exactly 30/60/90 DPD sits one notch
+    "milder" in the ageing view than in the POT view. That is Dave's own
+    arithmetic on both screens, not a bug — an ageing row labelled ``1-30`` and
+    a snapshot bucket of ``pot_30`` can coexist for the same loan on the same
+    day.
+  * ``>91`` (ageing) and ``default`` (POT) now describe the SAME population at
+    the same cut — everything past pot 90 — which is exactly what Dave asked
+    for. Before this change the ageing view stopped at ``120plus`` and the POT
+    view defaulted at 121, so both disagreed with him *and* with each other.
+  * The ageing buckets never see ``insolvency`` / ``written_off``; those are
+    event-driven POT-ladder states. Reports that need them read the snapshot.
+
+WHAT WAS WRONG BEFORE (P0/T4, corrected 2026-07-22):
+
+  ===================  ==========================  =========================
+  value                before                      after
+  ===================  ==========================  =========================
+  default threshold    121 DPD (">120")            91 DPD (">90")
+  ageing vocabulary    current/30/60/90/120plus    good/1-30/31-60/61-90/91plus
+                       and 1-29/30-59/60-89/90plus (one vocabulary, Dave's)
+  ageing boundaries    exclusive upper (1-29)      inclusive upper (1-30)
+  ===================  ==========================  =========================
+
+Every one of those numbers is a field on :class:`BucketPolicy` and every field
+is overridable at runtime through the ``delinquency_buckets`` integration-settings
+row (:func:`get_policy`) — no deploy needed to retune them.
 """
 from __future__ import annotations
 
@@ -109,6 +179,41 @@ ROLL_LADDER = (
 
 INSOLVENCY_STATUSES = ("consumer_proposal", "bankruptcy", "credit_counseling")
 
+
+# ---------------------------------------------------------------------------
+# DPD ageing vocabulary — Dave's PLATFORM-WIDE reporting buckets
+# ---------------------------------------------------------------------------
+# `Good / 1-30 / 31-60 / 61-90 / >91`, seen on the Risks "Bad rate trend", the
+# Scoring "Delinquency performance" table and the servicing "All past due"
+# filter menu. Stateless: a pure function of days-past-due (see module docstring
+# for how this relates to the POT ladder above).
+#
+# Upper bounds are INCLUSIVE (`1-30` contains 30 DPD) — that is Dave's reading
+# of his own labels, and the reason the previous `1-29 / 30-59 / 60-89` cut
+# produced plausible-but-wrong numbers.
+
+AGING_GOOD = "good"
+AGING_1_30 = "1-30"
+AGING_31_60 = "31-60"
+AGING_61_90 = "61-90"
+AGING_91_PLUS = "91plus"
+
+#: Past-due ageing buckets, in report order. ``AGING_GOOD`` is excluded — it is
+#: the not-late class, never a row in a delinquency table.
+AGING_BUCKETS = (AGING_1_30, AGING_31_60, AGING_61_90, AGING_91_PLUS)
+
+#: Same, with the not-late class prepended (Dave's "Good" column).
+AGING_BUCKETS_WITH_GOOD = (AGING_GOOD,) + AGING_BUCKETS
+
+#: Display labels exactly as they read on Dave's screens.
+AGING_BUCKET_LABELS = {
+    AGING_GOOD: "Good",
+    AGING_1_30: "1-30",
+    AGING_31_60: "31-60",
+    AGING_61_90: "61-90",
+    AGING_91_PLUS: ">91",
+}
+
 # Installment statuses that mean "nothing is owed on this row" for bucketing.
 # ``suspended`` is WS-F's (possibly not-yet-merged) scheduled-transaction
 # surgery status — excluded by string value so both merge orders work.
@@ -123,15 +228,27 @@ class BucketPolicy:
     """EVERY policy choice of the bucket machine, in ONE place (see module
     docstring for the numbered assumptions — each maps to a field here).
 
-    Flagged for Dave: cure semantics, month-end-only assignment, the DPD-vs-
-    months-unpaid derivation, and the >120 default threshold.
+    Flagged for Dave: cure semantics, month-end-only assignment, and the
+    DPD-vs-months-unpaid derivation. The default threshold itself is NO LONGER
+    flagged — it is Dave's stated ">90" rule (see module docstring).
+
+    Every field is DB-overridable via :func:`get_policy`; nothing here should
+    ever be re-hardcoded at a call site.
     """
 
     pot_30_min_dpd: int = 30
     pot_60_min_dpd: int = 60
     pot_90_min_dpd: int = 90
-    # ">120 → default": 120 DPD is still pot_90; 121 is default.
-    default_min_dpd: int = 121
+    # ">90 → default" (Dave, video 04: "instead of the 120 plus … once they get
+    # past pot 90 they would just be quote unquote default"). 90 DPD is the last
+    # pot_90 day; 91 is default. Was 121 (Turnkey's ">120") until 2026-07-22.
+    default_min_dpd: int = 91
+    # -- DPD ageing buckets (stateless reporting vocabulary; see docstring) ---
+    # INCLUSIVE upper bounds: 1..30 → "1-30", 31..60 → "31-60",
+    # 61..90 → "61-90", 91+ → "91plus". 0 or less → "good".
+    aging_1_30_max_dpd: int = 30
+    aging_31_60_max_dpd: int = 60
+    aging_61_90_max_dpd: int = 90
     # Buckets at/after this one raise the bureau_reportable snapshot flag.
     bureau_reportable_buckets: tuple = (BUCKET_POT_60, BUCKET_POT_90, BUCKET_DEFAULT)
     # Assumption 1: buckets move only at month-end (intra-month reads keep the
@@ -146,10 +263,74 @@ class BucketPolicy:
 
 DEFAULT_POLICY = BucketPolicy()
 
+#: Integration-settings provider key carrying the optional DB override (same
+#: seam ``auto_collection.get_policy`` uses). Config keys are the
+#: :class:`BucketPolicy` field names; unknown keys are ignored.
+_POLICY_PROVIDER = "delinquency_buckets"
+
+#: The numeric BucketPolicy fields an admin may retune without a deploy.
+TUNABLE_POLICY_FIELDS = (
+    "pot_30_min_dpd",
+    "pot_60_min_dpd",
+    "pot_90_min_dpd",
+    "default_min_dpd",
+    "aging_1_30_max_dpd",
+    "aging_31_60_max_dpd",
+    "aging_61_90_max_dpd",
+)
+
+
+def get_policy(db) -> BucketPolicy:
+    """Resolve the effective bucket policy: the ``delinquency_buckets``
+    integration-settings row's ``config`` overlays the dataclass defaults.
+
+    Missing / disabled row (the shipped state) → :data:`DEFAULT_POLICY`, so the
+    corrected values above are what everything sees until an admin tunes them.
+    Deliberately tolerant: a malformed config must never take the collections
+    and reporting surfaces down, so it falls back to the defaults.
+
+    ``db=None`` → defaults (keeps the pure/DB-free call sites callable).
+    """
+    if db is None:
+        return DEFAULT_POLICY
+    try:
+        from app.services import integration_settings
+
+        row = integration_settings.get(db, _POLICY_PROVIDER)
+        if row is None or not row.enabled:
+            return DEFAULT_POLICY
+        cfg = row.config or {}
+        kwargs: dict = {}
+        for key in TUNABLE_POLICY_FIELDS:
+            if cfg.get(key) is not None:
+                kwargs[key] = int(cfg[key])
+        return BucketPolicy(**kwargs) if kwargs else DEFAULT_POLICY
+    except Exception:  # noqa: BLE001 — config failure must never break reads
+        return DEFAULT_POLICY
+
 
 # ---------------------------------------------------------------------------
 # Pure core
 # ---------------------------------------------------------------------------
+
+
+def aging_bucket(days_past_due: int, policy: BucketPolicy = DEFAULT_POLICY) -> str:
+    """Map days-past-due onto Dave's ageing vocabulary. PURE.
+
+    ``<=0 → good``, ``1-30``, ``31-60``, ``61-90``, ``91plus`` — upper bounds
+    INCLUSIVE. This is the ONE mapper for the ageing vocabulary; report
+    endpoints, exports and the ML feature builder all route through it.
+    """
+    d = int(days_past_due or 0)
+    if d <= 0:
+        return AGING_GOOD
+    if d <= policy.aging_1_30_max_dpd:
+        return AGING_1_30
+    if d <= policy.aging_31_60_max_dpd:
+        return AGING_31_60
+    if d <= policy.aging_61_90_max_dpd:
+        return AGING_61_90
+    return AGING_91_PLUS
 
 
 @dataclass(frozen=True)
@@ -226,7 +407,7 @@ def bucket_for(
       2. loan charged_off → ``written_off``.
       3. Otherwise from days past due of the OLDEST unpaid installment at
          ``month_end``: 0 → current, 1-29 → current_month_late, 30-59 →
-         pot_30, 60-89 → pot_60, 90-120 → pot_90, >120 → default.
+         pot_30, 60-89 → pot_60, 90 → pot_90, >90 → default.
 
     ``days_past_due`` / ``amount_past_due_cents`` are computed for every
     classification (informational on insolvency/written_off rows).

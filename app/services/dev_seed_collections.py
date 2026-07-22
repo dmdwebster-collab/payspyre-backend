@@ -9,8 +9,9 @@ installment lands at a chosen days-past-due (DPD). The nightly aging job
 (``loan_servicing.run_delinquency_aging``) is then run so the loans flip to
 ``delinquent`` exactly as they would in production.
 
-DPD → bucket mapping mirrors app/api/v1/endpoints/admin_collections.py::_BUCKETS:
-    1-29 (current-month-late) / 30-59 / 60-89 / 90-119 / 120+.
+DPD → bucket mapping mirrors ``delinquency_buckets.aging_bucket`` (Dave's
+platform-wide vocabulary): 1-30 / 31-60 / 61-90 / >91. The plan below also
+covers the POT ladder's deeper cuts so Collections sees a spread.
 
 This is DEV/STAGING ONLY — it is invoked from the token-gated admin-dev endpoint
 and the off-prod seed script, never mounted or runnable in production. It writes
@@ -29,11 +30,11 @@ from app.services import demo_simulation, loan_servicing
 # (label, days_past_due) — one representative account per delinquency bucket.
 # The DPD is chosen to sit safely inside each bucket (not on a boundary).
 _BUCKET_PLAN: list[tuple[str, int]] = [
-    ("current-month-late", 12),   # 1-29 bucket (within the grace window)
-    ("30-days", 45),              # 30-59 bucket
-    ("60-days", 75),              # 60-89 bucket
-    ("90-days", 100),             # 90-119 bucket
-    ("120-plus", 150),            # 120+ bucket
+    ("current-month-late", 12),   # ageing 1-30   / pot: current_month_late
+    ("30-days", 45),              # ageing 31-60  / pot_30
+    ("60-days", 75),              # ageing 61-90  / pot_60
+    ("90-days", 100),             # ageing 91plus / default (>90, Dave's rule)
+    ("120-plus", 150),            # ageing 91plus / default (deepest account)
 ]
 
 # Realistic dental-financing principals per bucket (integer cents), so the queue /

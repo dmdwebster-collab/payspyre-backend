@@ -108,8 +108,11 @@ async def test_mid_band_manual_review():
 
 
 async def test_co_applicant_average_manual_review():
-    """Primary 700 + co-applicant 640 -> average 670 -> manual_review band."""
-    scores = {"primary@x.test": 700, "co@x.test": 640}
+    """Primary 700 + co-applicant 600 -> average 650 -> manual_review band.
+
+    (Was 700/640 -> 670; 670 now AUTO-APPROVES under the corrected 660 cut —
+    P0/T4. The averaging behaviour under test is unchanged.)"""
+    scores = {"primary@x.test": 700, "co@x.test": 600}
     adapters = make_adapters(bureau=ScriptedBureau(scores))
 
     primary_patient = make_patient(email="primary@x.test")
@@ -121,7 +124,7 @@ async def test_co_applicant_average_manual_review():
     assert "manual_review_band" in decision.decision_reasons
     group_events = [e for e in decision.events_to_emit if e["event_type"] == "flow.group_decision_evaluated"]
     assert len(group_events) == 1
-    assert group_events[0]["payload"]["average_score"] == 670
+    assert group_events[0]["payload"]["average_score"] == 650
     assert group_events[0]["payload"]["applicant_count"] == 2
 
 
@@ -189,7 +192,7 @@ async def test_manual_review_band_product_override():
     adapters = make_adapters(
         bureau=MockBureauAdapter(forced_score=695, forced_bankruptcy=False, forced_fraud_high_risk=False)
     )
-    # 695 would be APPROVED under the default 680 floor, but the override band
+    # 695 would be APPROVED under the default 660 floor, but the override band
     # (650-700) puts it in manual_review.
     decision = await run_flow(make_application(), make_product(matrix), make_patient(), adapters)
     assert decision.decision == "manual_review"
