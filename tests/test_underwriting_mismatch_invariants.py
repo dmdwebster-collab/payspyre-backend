@@ -40,7 +40,7 @@ MATRIX: dict = {
     "bureau": {"soft_pull_required": True, "hard_pull_required": True},
 }
 
-CLEAN_SCORE = 720  # above the default manual-review band (600–679)
+CLEAN_SCORE = 720  # above the default manual-review band (600–659)
 BAND_SCORE = 640   # inside the band
 
 

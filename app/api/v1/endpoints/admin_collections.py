@@ -31,12 +31,18 @@ from app.models.platform.loan import (
     PlatformLoanScheduleItem,
 )
 from app.models.platform.patient import PlatformPatient
+from app.services import delinquency_buckets as dq
 from app.services.delinquency_buckets import compute_roll_rates, effective_bucket
 
 router = APIRouter(dependencies=[Depends(require_roles("admin", "staff"))])
 
-# Bucket upper bounds (inclusive lower, exclusive upper). 0 = current.
-_BUCKETS = [("current", 0, 1), ("1-29", 1, 30), ("30-59", 30, 60), ("60-89", 60, 90), ("90-119", 90, 120), ("120+", 120, 10**9)]
+# Live DPD ageing vocabulary — Dave's platform-wide `Good / 1-30 / 31-60 /
+# 61-90 / >91` (upper bounds INCLUSIVE). Was `current/1-29/30-59/60-89/90-119/
+# 120+`, i.e. Turnkey's cut, which put 30/60/90-DPD loans one bucket deeper than
+# Dave's screens do and invented a 120+ row he folded into Default. Corrected
+# 2026-07-22 (P0/T4). The boundaries come from `dq.get_policy(db)` — do NOT
+# re-derive them here.
+_BUCKET_NAMES = dq.AGING_BUCKETS_WITH_GOOD
 
 
 class AgingBucket(BaseModel):
@@ -101,11 +107,9 @@ def _earliest_unpaid_due(db: Session, loan_id: UUID):
     return row[0] if row else None
 
 
-def _bucket_for(dpd: int) -> str:
-    for name, lo, hi in _BUCKETS:
-        if lo <= dpd < hi:
-            return name
-    return "120+"
+def _bucket_for(dpd: int, policy: dq.BucketPolicy = dq.DEFAULT_POLICY) -> str:
+    """Live ageing bucket for a days-past-due count (delegates to the one mapper)."""
+    return dq.aging_bucket(dpd, policy)
 
 
 def _bucket_aggregates_for_month(db: Session, month: date) -> list[MonthEndBucketAggregate]:
@@ -187,13 +191,14 @@ def aging(db: Session = Depends(get_db), _user=Depends(get_current_user)):
         .filter(PlatformLoan.status.in_(("active", "delinquent")))
         .all()
     )
-    agg: dict[str, dict[str, int]] = {name: {"count": 0, "out": 0} for name, _, _ in _BUCKETS}
+    policy = dq.get_policy(db)
+    agg: dict[str, dict[str, int]] = {name: {"count": 0, "out": 0} for name in _BUCKET_NAMES}
     delinquent_count = 0
     total_out = 0
     for loan in loans:
         due = _earliest_unpaid_due(db, loan.id)
         dpd = max(0, (today - due).days) if due else 0
-        bucket = _bucket_for(dpd)
+        bucket = _bucket_for(dpd, policy)
         agg[bucket]["count"] += 1
         agg[bucket]["out"] += loan.principal_balance_cents
         if dpd > 0:
@@ -203,7 +208,7 @@ def aging(db: Session = Depends(get_db), _user=Depends(get_current_user)):
         as_of=today,
         buckets=[
             AgingBucket(bucket=name, count=agg[name]["count"], outstanding_cents=agg[name]["out"])
-            for name, _, _ in _BUCKETS
+            for name in _BUCKET_NAMES
         ],
         total_delinquent_count=delinquent_count,
         total_outstanding_cents=total_out,
@@ -229,7 +234,13 @@ class CollectionsQueueRow(BaseModel):
 
 @router.get("/queue", response_model=list[CollectionsQueueRow])
 def queue(
-    bucket: Optional[str] = Query(None),
+    bucket: Optional[str] = Query(
+        None,
+        description=(
+            "Live DPD ageing bucket: good | 1-30 | 31-60 | 61-90 | 91plus "
+            "(Dave's platform-wide vocabulary)."
+        ),
+    ),
     month_end_bucket: Optional[str] = Query(None),
     include_insolvency: bool = Query(
         False,
@@ -245,7 +256,9 @@ def queue(
     _user=Depends(get_current_user),
 ):
     """Delinquent worklist, worst-first (highest DPD). Optional filters on the
-    legacy rolling-DPD ``bucket`` or the WS-H ``month_end_bucket``.
+    live DPD ageing ``bucket`` (``good``/``1-30``/``31-60``/``61-90``/``91plus``)
+    or the WS-H month-end POT-ladder ``month_end_bucket``. The two are different
+    concepts — see ``app.services.delinquency_buckets``.
 
     WS-C: insolvency rows are segregated OUT by default (Dave: "essentially
     going to be separated out of those other collection queues") — the
@@ -255,6 +268,7 @@ def queue(
 
     Phase 1 sorts by DPD; a risk/balance-weighted SCORED priority is Phase 4."""
     today = date.today()
+    policy = dq.get_policy(db)
     loans = (
         db.query(PlatformLoan, PlatformPatient)
         .filter(PlatformLoan.status.in_(("active", "delinquent")))
@@ -290,7 +304,7 @@ def queue(
         # segregated insolvency portfolio is maintained, not dropped.
         if dpd <= 0 and me_bucket != "insolvency":
             continue
-        b = _bucket_for(dpd)
+        b = _bucket_for(dpd, policy)
         if bucket and b != bucket:
             continue
         if month_end_bucket and me_bucket != month_end_bucket:

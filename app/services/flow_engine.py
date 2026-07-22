@@ -9,11 +9,13 @@ orchestration layer; this engine only *returns* ``next_state`` and a list of
 
 Decision logic (kickoff Pre-resolved Decision #2):
 
-    score >= 680            -> approved
-    600 <= score <= 679     -> manual_review
-    score <  600            -> declined
+    score >= approve_at     -> approved   (shipped default 660; see
+                                          decision_rules.BUREAU_SCORE_DEFAULT_APPROVE_AT)
+    decline_below <= score  -> manual_review  (shipped default 600..659)
+    score <  decline_below  -> declined       (shipped default 600)
 
-The manual-review band defaults to ``{min: 600, max: 679}`` and is overridable
+The manual-review band defaults to ``{min: 600, max: 659}`` (was ``{600, 679}``
+until 2026-07-22 — see ``decision_rules``) and is overridable
 per-product via ``verification_matrix.bureau.manual_review_band`` (all thresholds
 come from the snapshotted product config — Hard Rules #7 / #8 — never hardcoded
 elsewhere).
@@ -32,6 +34,7 @@ from uuid import UUID
 
 import structlog
 
+from app.services import decision_rules
 from app.services.adapters.base import (
     BankAccountSummary,
     BureauResult,
@@ -51,9 +54,16 @@ logger = structlog.get_logger(__name__)
 
 T = TypeVar("T")
 
-# Engine defaults (kickoff Pre-resolved Decision #2). Overridable per-product via
-# verification_matrix.bureau.manual_review_band.
-DEFAULT_MANUAL_REVIEW_BAND: dict[str, int] = {"min": 600, "max": 679}
+# Engine default manual-review band. DERIVED — never written out here — from
+# app.services.decision_rules, which is the single source of truth for the
+# score cuts and the surface an admin edits without a deploy.
+# Overridable per-product via verification_matrix.bureau.manual_review_band.
+#
+# ⚠️ DECISION-PATH 2026-07-22 (P0/T4): this was {600, 679} (approve at 680);
+# Dave's Settings screen shows a 660 second cut, so the shipped default is now
+# {600, 659} (approve at 660). Applicants scoring 660-679 now auto-approve
+# where they previously went to manual review. CONFIRM 660 WITH DAVE.
+DEFAULT_MANUAL_REVIEW_BAND: dict[str, int] = decision_rules.default_manual_review_band()
 
 # WS-E bankruptcy discharge policy (Dave: "discharged for a minimum of two years
 # with established credit in order to be considered"). Overridable per-product via

@@ -12,10 +12,20 @@ Two enforcement tiers (honest by design):
 
 * ``wired=True`` — the rule's thresholds are actually consumed by the live
   decision path. Today that is:
-    - ``bureau_score`` → ``verification_matrix.bureau.manual_review_band``
-      (engine defaults min=600 / max=679, i.e. approve at 680). The TL video
-      shows a 660 second cut; the PaySpyre engine default (680) wins because
-      behaviour preservation is the contract of this workstream.
+    - ``bureau_score`` → ``verification_matrix.bureau.manual_review_band``.
+      The SEEDED DEFAULT below is the single source of truth for the band and
+      ``flow_engine.DEFAULT_MANUAL_REVIEW_BAND`` is derived from it, so there
+      is exactly one 660/600 in the codebase.
+
+      ⚠️ DECISION-PATH, CHANGED 2026-07-22 (P0/T4): the seeded ``approve_at``
+      was **680** (Turnkey-era engine default) against the **660** on Dave's
+      Settings screen. It is now **660** — auto-approving applicants scoring
+      660-679 who previously went to manual review. **Confirm 660 with Dave**
+      before this reaches production; if he says 680, change
+      :data:`BUREAU_SCORE_DEFAULT_APPROVE_AT` back — one constant, no other
+      edits. Per-product ``verification_matrix.bureau.manual_review_band``
+      snapshots still win over this default, so existing products that pin a
+      band are untouched.
     - ``bankruptcy_check`` → ``verification_matrix.bureau.bankruptcy_discharge_min_years``.
   Wired rules have LOCKED outcomes (the engine's decline/review semantics are
   law); only their numeric params are editable, and ``enabled=False`` simply
@@ -84,6 +94,32 @@ def _r(key: str, group: str, name: str, description: str, *,
         params=params or {}, outcome=outcome, enabled=enabled,
         wired=wired, outcome_locked=outcome_locked,
     )
+
+
+# ---------------------------------------------------------------------------
+# Credit-bureau score band — the ONE place the numbers live
+# ---------------------------------------------------------------------------
+# ``flow_engine.DEFAULT_MANUAL_REVIEW_BAND`` is derived from these, the registry
+# spec below seeds from them, and an admin can override per-deployment through
+# ``platform_decision_rules`` (no deploy). Do not hardcode 600/660 anywhere else.
+#
+# ⚠️ 660 is Dave's on-screen "Second score threshold"; the engine shipped 680.
+# See the module docstring — this needs Dave's written confirmation.
+BUREAU_SCORE_DEFAULT_DECLINE_BELOW = 600
+BUREAU_SCORE_DEFAULT_APPROVE_AT = 660
+
+
+def default_manual_review_band() -> dict[str, int]:
+    """The shipped ``{min, max}`` manual-review band (max is inclusive).
+
+    ``min`` = decline floor, ``max`` = ``approve_at - 1``. Consumed by
+    ``flow_engine`` as its engine default so the engine and the decision-rules
+    directory can never drift apart.
+    """
+    return {
+        "min": BUREAU_SCORE_DEFAULT_DECLINE_BELOW,
+        "max": BUREAU_SCORE_DEFAULT_APPROVE_AT - 1,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -249,9 +285,11 @@ _SPECS: tuple[DecisionRuleSpec, ...] = (
     _r("bureau_score", "credit_bureau", "Credit bureau score",
        "Score band: below decline_below → decline; decline_below..approve_at-1 → "
        "manual review; approve_at and above → approve. WIRED to "
-       "verification_matrix.bureau.manual_review_band. (TL video second cut was "
-       "660; PaySpyre engine default approves at 680 — behaviour preserved.)",
-       params={"decline_below": 600, "approve_at": 680},
+       "verification_matrix.bureau.manual_review_band. Seeded from Dave's "
+       "Settings screen (second score threshold 660); was 680 until 2026-07-22 "
+       "— DECISION-PATH, pending Dave's written confirmation.",
+       params={"decline_below": BUREAU_SCORE_DEFAULT_DECLINE_BELOW,
+               "approve_at": BUREAU_SCORE_DEFAULT_APPROVE_AT},
        outcome="manual_review", wired=True, outcome_locked=True),
     # -- Co-applicant ------------------------------------------------------
     _r("coapp_blacklisted", "co_applicant", "Co-applicants: blacklisted",

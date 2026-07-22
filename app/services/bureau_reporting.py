@@ -35,18 +35,51 @@ from app.models.platform.loan import PlatformLoan, PlatformLoanDelinquencySnapsh
 from app.models.platform.patient import PlatformPatient
 from app.services.delinquency_buckets import default_snapshot_month, month_end_of
 
-# Metro2 account-status codes for the delinquency ladder (Field 17A). The
-# bucket→code mapping follows the standard Metro2 aging codes; ``written_off``
-# reports as charged off. Insolvency reports the aging status — the consumer
-# information indicator (bankruptcy/proposal) is part of the certified-layout
-# follow-up.
-BUCKET_TO_METRO2_STATUS = {
-    "pot_60": "78",   # 60-89 days past due
-    "pot_90": "80",   # 90-119 days past due
-    "default": "84",  # 120+ days past due (ladder collapsed — see module note)
-    "insolvency": "84",
+# Metro2 account-status codes (Field 17A). ``written_off`` reports as charged
+# off. Insolvency reports the aging status — the consumer information indicator
+# (bankruptcy/proposal) is part of the certified-layout follow-up.
+#
+# TERMINAL states are bucket-driven; the AGING codes are DPD-driven, never
+# bucket-driven. That distinction matters: since the P0/T4 correction the
+# ``default`` bucket starts at 91 DPD (Dave's ">90" rule), so a defaulted loan
+# may be only 95 days down. Mapping ``default`` straight to a "120+" code — as
+# this table used to — would report a factually wrong ageing to Equifax. The
+# code is now derived from the account's actual ``days_past_due``.
+TERMINAL_BUCKET_TO_METRO2_STATUS = {
     "written_off": "97",  # charged off
 }
+
+# (min_dpd_inclusive, Metro2 aging status code), worst-first.
+METRO2_AGING_CODES: tuple[tuple[int, str], ...] = (
+    (120, "84"),  # 120+ days past due
+    (90, "80"),   # 90-119
+    (60, "78"),   # 60-89
+    (30, "71"),   # 30-59
+)
+
+# Buckets that may appear in a batch at all (the snapshot's bureau_reportable
+# flag is the real gate; this is the belt-and-braces second check).
+REPORTABLE_BUCKETS = ("pot_60", "pot_90", "default", "insolvency", "written_off")
+
+
+def metro2_status(bucket: str, days_past_due: int) -> Optional[str]:
+    """Metro2 Field-17A status for one account. PURE.
+
+    Terminal buckets map by bucket; everything else maps by ACTUAL days past
+    due so the reported ageing is true regardless of where the internal bucket
+    boundaries currently sit. Returns ``None`` for anything not reportable, so
+    a non-reportable row can never leak into the file.
+    """
+    if bucket in TERMINAL_BUCKET_TO_METRO2_STATUS:
+        return TERMINAL_BUCKET_TO_METRO2_STATUS[bucket]
+    if bucket not in REPORTABLE_BUCKETS:
+        return None
+    for min_dpd, code in METRO2_AGING_CODES:
+        if days_past_due >= min_dpd:
+            return code
+    # Reportable bucket but under 30 DPD (e.g. a cured-but-not-yet-resnapshotted
+    # row): report the shallowest aging code rather than fabricating a deeper one.
+    return METRO2_AGING_CODES[-1][1]
 
 REPORTER_NAME = "PAYSPYRE FINANCIAL"
 PORTFOLIO_TYPE = "I"  # installment
@@ -102,7 +135,7 @@ def generate_batch_content(
     ]
     total_balance = 0
     for acct in accounts:
-        status = BUCKET_TO_METRO2_STATUS.get(acct.bucket)
+        status = metro2_status(acct.bucket, acct.days_past_due)
         if status is None:
             # Never let a non-reportable bucket leak into the file.
             continue

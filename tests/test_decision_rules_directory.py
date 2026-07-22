@@ -41,7 +41,8 @@ class TestRegistry:
         assert reg["minimal_age"].params == {"min_age": 19}
         assert reg["active_loans"].params == {"max_active_loans": 2}
         assert reg["delinquency_check"].params == {"minor_dpd": 14, "major_dpd": 30}
-        assert reg["bureau_score"].params == {"decline_below": 600, "approve_at": 680}
+        # P0/T4: seeded from Dave's Settings screen (second cut 660), was 680.
+        assert reg["bureau_score"].params == {"decline_below": 600, "approve_at": 660}
         assert reg["suspicious_age"].params == {"max_age": 100}
         assert reg["nsf_fees_90d"].params == {"max_count": 0}
 
