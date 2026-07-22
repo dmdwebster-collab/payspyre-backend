@@ -58,6 +58,43 @@ async def list_integration_settings(
     return [service.redact(s) for s in service.list_all(db)]
 
 
+class ProviderConfigSchema(BaseModel):
+    provider: str
+    #: JSON Schema for the provider's readable behaviour config.
+    json_schema: dict
+    #: Every knob at its shipped default — what a brand-new block looks like.
+    defaults: dict
+    #: Secret key names this provider expects (write-only, never returned).
+    expected_secret_keys: list[str]
+
+
+@router.get(
+    "/meta/config-schemas",
+    response_model=list[ProviderConfigSchema],
+    summary="Typed behaviour-config schemas per provider",
+    description=(
+        "Admin-only. For providers with a typed behaviour config (currently "
+        "`flinks` and `equifax`), returns the JSON Schema, the shipped defaults, "
+        "and the names of the write-only secret keys — so the settings UI can "
+        "render the block without hard-coding field lists. Providers absent from "
+        "this list keep a free-form `config` object."
+    ),
+    dependencies=[Depends(require_roles("admin"))],
+)
+async def list_provider_config_schemas(_user=Depends(get_current_user)):
+    from app.schemas.integration_config import PROVIDER_CONFIG_SCHEMAS, SECRET_KEYS
+
+    return [
+        ProviderConfigSchema(
+            provider=provider,
+            json_schema=model.model_json_schema(),
+            defaults=model().model_dump(mode="json"),
+            expected_secret_keys=list(SECRET_KEYS.get(provider, ())),
+        )
+        for provider, model in sorted(PROVIDER_CONFIG_SCHEMAS.items())
+    ]
+
+
 @router.get(
     "/{provider}",
     response_model=IntegrationSettingsRead,

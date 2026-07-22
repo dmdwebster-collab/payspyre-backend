@@ -30,6 +30,12 @@ from sqlalchemy.orm import Session
 
 from app.core.secret_crypto import decrypt_secrets, encrypt_secrets
 from app.models.platform.integration_settings import PlatformIntegrationSettings
+from app.schemas.integration_config import (
+    SECRET_KEYS,
+    IntegrationConfigError,
+    resolve_provider_config,
+    validate_provider_config,
+)
 
 
 def redact(setting: PlatformIntegrationSettings) -> dict[str, Any]:
@@ -42,8 +48,13 @@ def redact(setting: PlatformIntegrationSettings) -> dict[str, Any]:
     secrets = setting.secrets or {}
     return {
         "provider": setting.provider,
-        "config": setting.config or {},
+        # Behaviour config is READABLE and, for providers with a typed schema
+        # (Flinks / Equifax), resolved against its defaults so the admin UI sees
+        # every knob even on a row saved before the schema existed. Credentials
+        # are not in here — they are in `secrets` and never leave the server.
+        "config": resolve_provider_config(setting.provider, setting.config),
         "secret_keys": sorted(secrets.keys()),
+        "expected_secret_keys": list(SECRET_KEYS.get(setting.provider, ())),
         "enabled": setting.enabled,
         "updated_by": setting.updated_by,
         "created_at": setting.created_at,
@@ -100,7 +111,13 @@ def upsert(
     pass-through when no key is configured). The returned row carries the
     DECRYPTED secrets so internal callers see the values they just wrote.
     """
-    config = config or {}
+    # Providers with a typed behaviour schema (Flinks / Equifax) are validated
+    # and stored with defaults materialised; every other provider keeps the
+    # free-form dict exactly as before.
+    try:
+        config = validate_provider_config(provider, config)
+    except IntegrationConfigError as exc:
+        raise ValueError(str(exc)) from exc
     # Encrypt the plaintext credential values before they ever touch the DB.
     encrypted_secrets = encrypt_secrets(secrets or {})
 

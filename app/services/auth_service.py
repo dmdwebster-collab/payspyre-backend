@@ -64,7 +64,13 @@ class AuthService:
     def authenticate_user(self, email: str, password: str, ip_address: Optional[str] = None,
                           user_agent: Optional[str] = None, device_info: Optional[dict] = None) -> Optional[LoginResponse]:
         user = self.db.query(User).filter(User.email == email).first()
-        if not user or not verify_password(password, user.password_hash):
+        # `password_hash IS NULL` = an invited staff account that has not yet
+        # accepted (admins never set passwords — see app/services/staff_accounts).
+        # Fail closed, identically to a wrong password: passlib raises on a None
+        # hash, which would otherwise surface as a 500 and leak account state.
+        if not user or not user.password_hash:
+            return None
+        if not verify_password(password, user.password_hash):
             return None
 
         if not user.is_active:

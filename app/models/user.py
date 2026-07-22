@@ -31,6 +31,9 @@ class Permission(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     roles = relationship("RolePermission", back_populates="permission", cascade="all, delete-orphan")
+    user_grants = relationship(
+        "UserPermissionGrant", back_populates="permission", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         Index("idx_permissions_resource_action", "resource", "action"),
@@ -88,6 +91,14 @@ class User(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     roles = relationship("UserRoleLink", back_populates="user", cascade="all, delete-orphan")
+    permission_grants = relationship(
+        "UserPermissionGrant",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        # UserPermissionGrant has TWO FKs to users (user_id, granted_by); this
+        # relationship is the grantee side.
+        foreign_keys="UserPermissionGrant.user_id",
+    )
     sessions = relationship("Session", back_populates="user", cascade="all, delete-orphan")
     api_keys = relationship("ApiKey", back_populates="user", cascade="all, delete-orphan")
 
@@ -111,6 +122,35 @@ class UserRoleLink(Base):
         Index("idx_user_roles_user", "user_id"),
         Index("idx_user_roles_role", "role_id"),
         Index("idx_user_roles_unique", "user_id", "role_id", unique=True),
+    )
+
+
+class UserPermissionGrant(Base):
+    """A permission granted DIRECTLY to a user, alongside their roles.
+
+    Backs the per-user permission grid in Settings → Accounts → Users. Purely
+    additive: authorization checks consult role grants first and then these, so
+    an empty grant set (the state of every pre-existing user) leaves behaviour
+    exactly as it was. Nothing here can revoke a role-derived permission.
+    """
+
+    __tablename__ = "user_permissions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    permission_id = Column(
+        UUID(as_uuid=True), ForeignKey("permissions.id", ondelete="CASCADE"), nullable=False
+    )
+    granted_by = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    user = relationship("User", back_populates="permission_grants", foreign_keys=[user_id])
+    permission = relationship("Permission", back_populates="user_grants")
+
+    __table_args__ = (
+        Index("idx_user_permissions_user", "user_id"),
+        Index("idx_user_permissions_permission", "permission_id"),
+        Index("idx_user_permissions_unique", "user_id", "permission_id", unique=True),
     )
 
 
