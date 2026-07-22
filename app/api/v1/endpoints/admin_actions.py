@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 
 from app.api.v1.endpoints.admin_originations import require_assignment_or_override
 from app.core.auth import (
+    require_permission_or_admin,
     require_roles,
     user_has_permission,
     user_has_permission_or_admin,
@@ -731,8 +732,21 @@ def _request_action(db: Session, *, action: str, loan_id: UUID, user, body: Acti
 
 @router.post("/loans/{loan_id}/charge-off")
 def request_charge_off(loan_id: UUID, body: ActionRequestBody, db: Session = Depends(get_db),
-                       user=Depends(require_roles("admin"))):
-    """Request a charge-off — a SECOND admin must approve before it executes."""
+                       user=Depends(require_permission_or_admin("loan", "write_off"))):
+    """Request a charge-off (write-off) — a SECOND admin must approve before it executes.
+
+    Dave, 2026-07-21: write-off must be permission-gated *specifically* rather
+    than riding on the ``admin`` role. The gate is the granular ``loan/write_off``
+    grant (WS-F granular perms + the per-user ``user_permissions`` table from
+    #203), with ``admin`` implicitly allowed as everywhere else — so every user
+    who could initiate a write-off before still can, and a non-admin can now be
+    granted it without full admin.
+
+    MAKER-CHECKER IS UNCHANGED: this only files a *request*. The second approver
+    on ``POST /admin/pending-actions/{id}/approve`` is still ``admin``-only and
+    is still the control that actually moves money — the permission decides only
+    who may INITIATE.
+    """
     return _request_action(db, action="charge_off", loan_id=loan_id, user=user, body=body)
 
 

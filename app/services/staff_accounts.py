@@ -137,6 +137,29 @@ WORKPLACE_PERMISSIONS: tuple[WorkplacePermission, ...] = (
     ),
 )
 
+#: Granular action permissions that are NOT part of Dave's transcribed `Add user`
+#: grid. They are grantable exactly like a grid box (role grant or per-user
+#: ``user_permissions`` grant) and appear in the catalog with ``column=None`` so
+#: the UI can render them as a separate "Restricted actions" section instead of
+#: forcing them into a three-column layout they were never in.
+#:
+#: ``loan.write_off`` — Dave, 2026-07-21 Originations review: write-off must be
+#: permission-gated specifically rather than riding on the ``admin`` role, so it
+#: can be granted to a senior collections user without handing them the whole
+#: platform. The MAKER-CHECKER second approver is unchanged and remains the real
+#: control — this permission only decides who may INITIATE a write-off request.
+GRANULAR_PERMISSIONS: tuple[WorkplacePermission, ...] = (
+    WorkplacePermission(
+        "loan.write_off", "loan", "write_off", "Write off a loan", 0, 0,
+    ),
+)
+
+#: Everything an admin may grant: Dave's grid + the granular action tier.
+ALL_PERMISSIONS: tuple[WorkplacePermission, ...] = (
+    *WORKPLACE_PERMISSIONS,
+    *GRANULAR_PERMISSIONS,
+)
+
 #: The amber note above the grid, verbatim.
 CONJUNCTION_NOTE = (
     "NOTE: Edit/Reverse repayment transaction, Assignment officer, Branch "
@@ -144,7 +167,7 @@ CONJUNCTION_NOTE = (
     "additional features and work only in conjunction with any other role."
 )
 
-WORKPLACE_PERMISSION_NAMES = frozenset(p.name for p in WORKPLACE_PERMISSIONS)
+WORKPLACE_PERMISSION_NAMES = frozenset(p.name for p in ALL_PERMISSIONS)
 
 
 class StaffAccountError(ValueError):
@@ -254,9 +277,12 @@ def permission_catalog(db: Session) -> dict[str, Any]:
                 "column": p.column,
                 "row": p.row,
                 "conjunction_only": p.conjunction_only,
+                # Grid boxes carry Dave's 1-based column/row; the granular tier
+                # uses 0 and is flagged so the UI renders it separately.
+                "granular": p.column == 0,
                 "seeded": p.name in known,
             }
-            for p in WORKPLACE_PERMISSIONS
+            for p in ALL_PERMISSIONS
         ],
     }
 
