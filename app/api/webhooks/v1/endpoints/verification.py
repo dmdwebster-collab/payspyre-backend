@@ -132,7 +132,7 @@ def _build_translate_result_from_mvp(body: WebhookVerificationBody, x_nonce: str
 
 
 def _parse_and_translate(
-    vendor: str, raw_body: bytes, headers: dict[str, str]
+    vendor: str, raw_body: bytes, headers: dict[str, str], db: Session = None
 ) -> TranslateResult:
     """Parse + translate per vendor. Raises HTTPException(400) on bad body."""
     try:
@@ -149,7 +149,18 @@ def _parse_and_translate(
             return translate_didit_payload(payload)
         if vendor == "flinks":
             payload_f = FlinksWebhookPayload(**parsed)
-            return translate_flinks_payload(payload_f)
+            # Settings-area Flinks behaviour block (typed FlinksConfig): the
+            # account-report depth drives the income-detection window, and
+            # "Log response" drives the non-PII diagnostic log line. Both fall
+            # back to the schema defaults, i.e. to the prior behaviour.
+            from app.services import integration_behaviour
+
+            flinks_cfg = integration_behaviour.flinks_config(db)
+            return translate_flinks_payload(
+                payload_f,
+                transaction_depth_days=flinks_cfg.transaction_depth_days,
+                log_response=flinks_cfg.log_response,
+            )
         # equifax — MVP envelope.
         body = WebhookVerificationBody(**parsed)
         x_nonce = headers.get("x-nonce") or headers.get("X-Nonce") or ""
@@ -241,7 +252,7 @@ async def receive_verification(
         )
 
     # 2. Parse + translate per vendor.
-    translation = _parse_and_translate(vendor, raw_body, headers)
+    translation = _parse_and_translate(vendor, raw_body, headers, db)
 
     # 3. Nonce / replay check (uses vendor-derived event id).
     assert translation.vendor_event_id is not None  # invariants enforced above

@@ -20,6 +20,7 @@ formula); it is immediately quantized to cents and the rounding remainder is
 reconciled into the final installment so the schedule sums EXACTLY to
 principal + total interest.
 """
+import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Optional
@@ -28,6 +29,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.models.platform.credit_application import PlatformCreditApplication
+from app.models.platform.credit_product import PlatformCreditProduct
 from app.models.platform.event import PlatformEvent
 from app.models.platform.loan import (
     PlatformLoan,
@@ -37,6 +39,10 @@ from app.models.platform.loan import (
     PlatformLoanTransaction,
 )
 from app.schemas.pricing_config import parse_pricing_config, quote_fees_cents
+from app.schemas.product_policy_config import (
+    ProductPolicyConfigError,
+    parse_product_policy_config,
+)
 from app.services import loan_ledger
 from app.services.archive import stamp_loan_closed
 from app.services.interest_engine import REPAYMENT_MODES, allocate_payment
@@ -45,6 +51,8 @@ from app.services.loan_quote import (
     compute_apr_bps,
     exceeds_criminal_rate,
 )
+
+logger = logging.getLogger(__name__)
 
 
 # Money-IN audit event. Mirrors the money-OUT events emitted by
@@ -293,6 +301,54 @@ def generate_amortization_schedule(
         )
 
     return rows
+
+
+def resolve_repayment_priority(db: Session, loan) -> Optional[tuple[str, ...]]:
+    """The loan's product-configured repayment allocation ordering, or ``None``.
+
+    MONEY PATH. Walks loan → application → credit product →
+    ``policy_config.allocation_priority.repayment`` (see
+    :mod:`app.schemas.product_policy_config`). ``None`` means "use the engine
+    default", which is what every loan gets today: ``policy_config`` is NULL on
+    every existing product row, and a migrated loan has no application at all.
+
+    FAIL-SOFT, deliberately: a product row whose stored ``policy_config`` no
+    longer validates must not make a borrower's payment un-postable. We log and
+    fall back to the engine default (which is also the shipped default value),
+    exactly the behaviour that existed before the config was consumed.
+    """
+    application_id = getattr(loan, "application_id", None)
+    if application_id is None:
+        return None
+
+    app_row = (
+        db.query(PlatformCreditApplication)
+        .filter(PlatformCreditApplication.id == application_id)
+        .first()
+    )
+    product_id = getattr(app_row, "credit_product_id", None)
+    if product_id is None:
+        return None
+
+    product = (
+        db.query(PlatformCreditProduct)
+        .filter(PlatformCreditProduct.id == product_id)
+        .first()
+    )
+    raw = getattr(product, "policy_config", None)
+    if not raw:
+        return None
+
+    try:
+        cfg = parse_product_policy_config(raw)
+    except ProductPolicyConfigError:
+        logger.warning(
+            "loan_servicing: product policy_config for loan %s failed validation; "
+            "falling back to the default repayment allocation ordering",
+            getattr(loan, "id", None),
+        )
+        return None
+    return tuple(cfg.allocation_priority.repayment)
 
 
 def _resolve_pricing(application: PlatformCreditApplication) -> tuple[int, int, int]:
@@ -568,7 +624,14 @@ def record_payment(
     # added to the session until the allocation is known-good.
     effective_date = effective_date or processing_date
     balances_before = loan_ledger.loan_balances(loan, as_of=effective_date)
-    allocation = allocate_payment(repayment_mode, amount_cents, balances_before)
+    # MONEY PATH: the product's configured repayment allocation ordering
+    # (policy_config.allocation_priority.repayment). None — every product whose
+    # policy_config is NULL, and every migrated loan — keeps the engine default,
+    # which is byte-identical to the historical hard-coded waterfall.
+    repayment_priority = resolve_repayment_priority(db, loan)
+    allocation = allocate_payment(
+        repayment_mode, amount_cents, balances_before, repayment_priority
+    )
 
     payment = PlatformLoanPayment(
         loan_id=loan.id,

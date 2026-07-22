@@ -33,6 +33,7 @@ from app.models.platform.integration_settings import PlatformIntegrationSettings
 from app.schemas.integration_config import (
     SECRET_KEYS,
     IntegrationConfigError,
+    provider_config_field_metadata,
     resolve_provider_config,
     validate_provider_config,
 )
@@ -53,6 +54,10 @@ def redact(setting: PlatformIntegrationSettings) -> dict[str, Any]:
         # every knob even on a row saved before the schema existed. Credentials
         # are not in here — they are in `secrets` and never leave the server.
         "config": resolve_provider_config(setting.provider, setting.config),
+        # Per-field editability so the UI can never render a knob as editable
+        # when nothing reads it. Fields flagged ``informational`` MUST be shown
+        # read-only; every other field names the code that consumes it.
+        "config_meta": provider_config_field_metadata(setting.provider),
         "secret_keys": sorted(secrets.keys()),
         "expected_secret_keys": list(SECRET_KEYS.get(setting.provider, ())),
         "enabled": setting.enabled,
