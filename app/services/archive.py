@@ -228,7 +228,10 @@ def stamp_loan_closed(loan: PlatformLoan, *, when: Optional[datetime] = None) ->
     an already-stamped loan keeps its first close date, so a re-run or a second
     terminal write cannot move it. No commit — the caller owns the unit of work.
     """
-    if loan.closed_at is not None:
+    # ``getattr`` (not attribute access): the servicing tests drive the payoff
+    # path with lightweight in-memory loan doubles that carry only the columns
+    # under test, and a stamping helper must never be the reason one breaks.
+    if getattr(loan, "closed_at", None) is not None:
         return
     loan.closed_at = when or datetime.now(timezone.utc)
     loan.closed_at_source = "transition"
