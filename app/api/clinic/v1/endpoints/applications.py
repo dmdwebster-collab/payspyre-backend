@@ -22,6 +22,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.clinic.v1.deps import ClinicPrincipal, get_current_clinic_user
+from app.services.clinic_permissions import require_clinic_permission
 from app.api.clinic.v1.schemas import ClinicApplication, ClinicDashboardSummary
 from app.api.clinic.v1.status_map import to_vendor_visible_status
 from app.db.base import get_db
@@ -137,7 +138,17 @@ def summarize_applications(db: Session, vendor_id: UUID) -> ClinicDashboardSumma
 # --- routes ----------------------------------------------------------------
 
 
-@router.get("/applications", response_model=list[ClinicApplication])
+@router.get(
+    "/applications",
+    response_model=list[ClinicApplication],
+    dependencies=[
+        Depends(
+            require_clinic_permission(
+                "loan_origination", "loan_servicing", "monitoring"
+            )
+        )
+    ],
+)
 def list_applications(
     db: Session = Depends(get_db),
     principal: ClinicPrincipal = Depends(get_current_clinic_user),
@@ -146,7 +157,17 @@ def list_applications(
     return [to_clinic_application(r) for r in rows]
 
 
-@router.get("/dashboard/summary", response_model=ClinicDashboardSummary)
+@router.get(
+    "/dashboard/summary",
+    response_model=ClinicDashboardSummary,
+    dependencies=[
+        Depends(
+            require_clinic_permission(
+                "loan_origination", "loan_servicing", "monitoring"
+            )
+        )
+    ],
+)
 def dashboard_summary(
     db: Session = Depends(get_db),
     principal: ClinicPrincipal = Depends(get_current_clinic_user),

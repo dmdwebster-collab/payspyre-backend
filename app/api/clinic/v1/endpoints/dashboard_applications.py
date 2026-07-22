@@ -35,6 +35,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.api.clinic.v1.deps import ClinicPrincipal, get_current_clinic_user
+from app.services.clinic_permissions import require_clinic_permission
 from app.db.base import get_db
 from app.models.platform.credit_application import PlatformCreditApplication
 
@@ -317,7 +318,9 @@ def applications_block(
 
 
 @router.get(
-    "/dashboard/applications/timeseries", response_model=AppTimeseries
+    "/dashboard/applications/timeseries",
+    response_model=AppTimeseries,
+    dependencies=[Depends(require_clinic_permission("monitoring", "loan_servicing"))],
 )
 def applications_timeseries(
     db: Session = Depends(get_db),
