@@ -164,6 +164,10 @@ def get_loan(
         raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="Loan not found")
 
     loan = db.query(PlatformLoan).filter(PlatformLoan.id == loan_id).first()
+    # Borrower join key for the servicing workspace's borrower-scoped tabs.
+    # Added on the ADMIN detail only (not in loan_servicing.get_loan_status,
+    # which archive.py also feeds) so no other surface's payload changes.
+    detail["patient_id"] = str(loan.patient_id) if loan.patient_id else None
     block = _delinquency_block(loan, date.today())
     snapshots = (
         db.query(PlatformLoanDelinquencySnapshot)

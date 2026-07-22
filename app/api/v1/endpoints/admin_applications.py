@@ -65,6 +65,9 @@ class AdminApplicationDetail(BaseModel):
     """Queue-row metadata + the FULL canonical field set for the workspace."""
 
     id: UUID
+    #: The borrower (``platform_patients.id``). Admin-only join key for every
+    #: borrower-scoped tab; see ``ApplicationHeader.patient_id``.
+    patient_id: UUID
     patient_name: str
     patient_contact: str
     product_name: str
@@ -269,6 +272,7 @@ def get_application(
     contact = ((p.email or p.phone_e164) if p else "") or ""
     return AdminApplicationDetail(
         id=app.id,
+        patient_id=app.patient_id,
         patient_name=_patient_name(p),
         patient_contact=contact,
         product_name=_product_name(app.credit_product),

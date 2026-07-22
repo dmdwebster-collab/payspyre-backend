@@ -376,6 +376,11 @@ def edit_offer(
 
 class ApplicationHeader(BaseModel):
     application_id: UUID
+    #: The borrower (``platform_patients.id``). Admin-only: it is the join key
+    #: every borrower-scoped tab (Borrower details, Co-Borrower, Bank Accounts,
+    #: Bank Statements, Documents) needs, so the UI no longer has to recover it
+    #: by scanning ``platform_events`` audit history.
+    patient_id: UUID
     name: str
     email: Optional[str] = None
     phone: Optional[str] = None
@@ -457,6 +462,7 @@ def application_header(
 
     return ApplicationHeader(
         application_id=app_row.id,
+        patient_id=app_row.patient_id,
         name=name or "Unknown applicant",
         email=email,
         phone=phone,
