@@ -35,6 +35,7 @@ from app.api.v1.endpoints import (
     admin_originations,
     admin_report_builder,
     admin_report_exports,
+    admin_risk_scores,
     admin_scorecards,
     admin_settings,
     admin_staff_comments,
@@ -158,6 +159,10 @@ api_router.include_router(
 api_router.include_router(admin_offers.router, prefix="/admin", tags=["admin-offers"])
 # WS-D — editable 5-band verified-data scorecards + per-vendor assignment (mandate #3).
 api_router.include_router(admin_scorecards.router, prefix="/admin/scorecards", tags=["admin-scorecards"])
+# Risk-score persistence model (migration 073) — the Risk score TAB per
+# application, its append-only scoring history, and the honest backfill. The
+# loans-by-risk-band + Scoring-section aggregations live under /admin/analytics.
+api_router.include_router(admin_risk_scores.router, prefix="/admin/risk-scores", tags=["admin-risk-scores"])
 # Dave's Application Status Flow v1.00 registry (2026-07-21 review §A) — the
 # data the UI renders workplace queues + per-status action buttons from.
 api_router.include_router(admin_status_model.router, prefix="/admin", tags=["admin-config"])

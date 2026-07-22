@@ -19,6 +19,7 @@ from datetime import date, datetime, timezone
 from typing import Literal, Optional
 from uuid import UUID
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, model_validator
 from sqlalchemy import text
@@ -44,6 +45,8 @@ from app.services.flow_orchestrator import (
     InvalidStateTransition,
     mark_cancelled,
 )
+
+logger = structlog.get_logger(__name__)
 
 router = APIRouter()
 
@@ -224,6 +227,31 @@ def decide(
     # WS-I: a staff decision resolves any pending vendor reprocessing request,
     # so the admin queue's reprocessing lane only shows unhandled requests.
     app.vendor_reprocessing_requested = False
+
+    # RISK-SCORE PERSISTENCE (migration 073). Records the UNDERWRITER half of the
+    # dual decision against the score the underwriter actually saw (the current
+    # row's score/checks/rules are carried forward verbatim). ⚠️ DECISION-PATH:
+    # runs after the outcome is decided and written, feeds nothing back, and is
+    # guarded so a recording failure can never fail a decision.
+    try:
+        from app.services import risk_scores
+
+        risk_scores.record_underwriter_decision(
+            db,
+            app,
+            outcome=body.outcome,
+            actor=actor,
+            reason_codes=body.reason_codes,
+            note=body.note,
+            decided_at=app.decision_at,
+            is_override=bool(body.override),
+        )
+    except Exception as exc:  # noqa: BLE001 — decision integrity over recording
+        logger.warning(
+            "risk_score_underwriter_recording_failed",
+            application_id=str(app.id),
+            error=str(exc),
+        )
 
     loan_id = None
     if body.outcome == "approved":

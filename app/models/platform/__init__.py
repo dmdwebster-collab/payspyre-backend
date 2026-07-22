@@ -62,6 +62,7 @@ from app.models.platform.collections_work import (
     PlatformInsolvencyMaintenanceFee,
 )
 from app.models.platform.loan_offer import PlatformLoanOffer
+from app.models.platform.risk_score import PlatformApplicationRiskScore
 from app.models.platform.scorecard import (
     PlatformScorecard,
     PlatformVendorScorecard,
@@ -101,6 +102,7 @@ from app.models.platform.application_process_config import (
 from app.models.platform.credit_report import PlatformCreditReportPull
 
 __all__ = [
+    "PlatformApplicationRiskScore",
     "PlatformPatient",
     "PlatformPatientField",
     "PlatformCreditProduct",
