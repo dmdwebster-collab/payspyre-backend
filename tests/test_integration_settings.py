@@ -173,11 +173,26 @@ def test_upsert_updates_existing_row_without_add():
 
 
 def test_upsert_defaults_config_and_secrets_to_empty_dicts():
+    """Providers with no typed behaviour schema keep the free-form empty dict."""
+    db = MagicMock()
+    db.query.return_value.filter.return_value.first.return_value = None
+    setting = service.upsert(db, provider="zumrails")
+    assert setting.config == {}
+    assert setting.secrets == {}
+
+
+def test_upsert_materializes_defaults_for_typed_providers():
+    """`equifax` / `flinks` now carry a typed behaviour config (Settings →
+    Integrations depth), so an empty upsert stores the shipped defaults rather
+    than `{}` — that is what makes the admin block renderable."""
     db = MagicMock()
     db.query.return_value.filter.return_value.first.return_value = None
     setting = service.upsert(db, provider="equifax")
-    assert setting.config == {}
+    assert setting.config["environment"] == "test"
+    assert setting.config["automatic_request"] is False
     assert setting.secrets == {}
+    # Credentials never leak into the readable config half.
+    assert "security_code" not in setting.config
 
 
 # --------------------------------------------------------------------------
