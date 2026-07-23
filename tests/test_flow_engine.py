@@ -89,8 +89,8 @@ async def test_low_score_declined():
         bureau=MockBureauAdapter(forced_score=560, forced_bankruptcy=False, forced_fraud_high_risk=False)
     )
     decision = await run_flow(make_application(), make_product(), make_patient(), adapters)
-    assert decision.decision == "declined"
-    assert decision.next_state == "declined"
+    assert decision.decision == "declined"  # decision OUTCOME token unchanged
+    assert decision.next_state == "rejected"  # STATUS renamed declined->rejected
     assert "bureau_below_minimum" in decision.decision_reasons
     # Soft score below floor must NOT trigger a hard pull (conserve bureau calls).
     methods = {(v["type"], v["method"]) for v in decision.verifications_performed}

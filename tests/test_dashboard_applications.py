@@ -82,7 +82,7 @@ def _wire_created(app_under_test, created_rows, decided_rows=None):
 class TestOutcomeBucket:
     def test_terminal_decisions(self):
         assert dash._outcome_bucket("approved") == "approved"
-        assert dash._outcome_bucket("declined") == "declined"
+        assert dash._outcome_bucket("rejected") == "rejected"
 
     def test_started_stands_alone(self):
         assert dash._outcome_bucket("started") == "started"
@@ -124,7 +124,7 @@ class TestBuildTimeseries:
         d2 = datetime(2026, 6, 2, 9, 0, tzinfo=timezone.utc)
         rows = [
             _fake_app(status="approved", amount=100, created_at=d1),
-            _fake_app(status="declined", amount=200, created_at=d1),
+            _fake_app(status="rejected", amount=200, created_at=d1),
             _fake_app(status="under_review", amount=300, created_at=d1),
             _fake_app(status="started", amount=400, created_at=d2),
             _fake_app(status="withdrawn", amount=500, created_at=d2),  # amount only
@@ -134,10 +134,10 @@ class TestBuildTimeseries:
         assert [p.bucket for p in ts.points] == ["2026-06-01", "2026-06-02"]
 
         p1, p2 = ts.points
-        assert (p1.approved, p1.declined, p1.in_review, p1.started) == (1, 1, 1, 0)
+        assert (p1.approved, p1.rejected, p1.in_review, p1.started) == (1, 1, 1, 0)
         assert p1.requested_amount_cents == 600
         # withdrawn contributes amount but no outcome count
-        assert (p2.started, p2.approved, p2.declined, p2.in_review) == (1, 0, 0, 0)
+        assert (p2.started, p2.approved, p2.rejected, p2.in_review) == (1, 0, 0, 0)
         assert p2.requested_amount_cents == 900
 
     def test_empty(self):
@@ -148,12 +148,12 @@ class TestBuildTimeseries:
         rows = [
             _fake_app(status="approved", created_at=datetime(2026, 5, 3, tzinfo=timezone.utc)),
             _fake_app(status="approved", created_at=datetime(2026, 5, 28, tzinfo=timezone.utc)),
-            _fake_app(status="declined", created_at=datetime(2026, 6, 1, tzinfo=timezone.utc)),
+            _fake_app(status="rejected", created_at=datetime(2026, 6, 1, tzinfo=timezone.utc)),
         ]
         ts = dash.build_timeseries(rows, "month")
         assert [p.bucket for p in ts.points] == ["2026-05-01", "2026-06-01"]
         assert ts.points[0].approved == 2
-        assert ts.points[1].declined == 1
+        assert ts.points[1].rejected == 1
 
 
 # --- applications_block (pure, mocked DB) -----------------------------------
@@ -170,7 +170,7 @@ class TestApplicationsBlock:
     def test_exact_keys(self):
         block = self._block([], [])
         assert set(block.keys()) == {
-            "total", "approved", "declined", "in_review", "started",
+            "total", "approved", "rejected", "in_review", "started",
             "approval_rate", "avg_requested_amount_cents",
             "total_requested_amount_cents",
         }
@@ -178,7 +178,7 @@ class TestApplicationsBlock:
     def test_counts_and_amounts_over_created(self):
         created = [
             _fake_app(status="approved", amount=1_000),
-            _fake_app(status="declined", amount=2_000),
+            _fake_app(status="rejected", amount=2_000),
             _fake_app(status="verifying", amount=3_000),
             _fake_app(status="under_review", amount=1_000),
             _fake_app(status="started", amount=0),
@@ -187,7 +187,7 @@ class TestApplicationsBlock:
         block = self._block(created, [])
         assert block["total"] == 6
         assert block["approved"] == 1
-        assert block["declined"] == 1
+        assert block["rejected"] == 1
         assert block["in_review"] == 2  # verifying + under_review
         assert block["started"] == 1
         assert block["total_requested_amount_cents"] == 11_000
@@ -199,7 +199,7 @@ class TestApplicationsBlock:
             _fake_app(status="approved"),
             _fake_app(status="approved"),
             _fake_app(status="approved"),
-            _fake_app(status="declined"),
+            _fake_app(status="rejected"),
         ]
         block = self._block([], decided)
         assert block["approval_rate"] == 0.75
@@ -223,7 +223,7 @@ class TestTimeseriesEndpoint:
     def test_default_window_day(self, app_under_test):
         rows = [
             _fake_app(status="approved", amount=100, created_at=_NOW),
-            _fake_app(status="declined", amount=200, created_at=_NOW),
+            _fake_app(status="rejected", amount=200, created_at=_NOW),
         ]
         self._wire = _wire_created(app_under_test, rows)
         client = TestClient(app_under_test)
@@ -233,7 +233,7 @@ class TestTimeseriesEndpoint:
         assert body["granularity"] == "day"
         assert len(body["points"]) == 1
         pt = body["points"][0]
-        assert pt["approved"] == 1 and pt["declined"] == 1
+        assert pt["approved"] == 1 and pt["rejected"] == 1
         assert pt["requested_amount_cents"] == 300
 
     def test_granularity_passthrough(self, app_under_test):
@@ -336,12 +336,12 @@ class TestRealDbScoping:
         c1 = now - timedelta(days=5)
         c2 = now - timedelta(days=3)
 
-        # My vendor: 1 approved + 1 declined (decided in window) + 1 in_review.
+        # My vendor: 1 approved + 1 rejected (decided in window) + 1 in_review.
         _seed_app(db, vendor_id=mine, patient_id=patient_id, product_id=product_id,
                   product_version=product_version, status="approved", amount=1_000,
                   created_at=c1, decision_at=c1)
         _seed_app(db, vendor_id=mine, patient_id=patient_id, product_id=product_id,
-                  product_version=product_version, status="declined", amount=3_000,
+                  product_version=product_version, status="rejected", amount=3_000,
                   created_at=c2, decision_at=c2)
         _seed_app(db, vendor_id=mine, patient_id=patient_id, product_id=product_id,
                   product_version=product_version, status="under_review", amount=2_000,
@@ -359,7 +359,7 @@ class TestRealDbScoping:
 
         assert block["total"] == 3
         assert block["approved"] == 1
-        assert block["declined"] == 1
+        assert block["rejected"] == 1
         assert block["in_review"] == 1
         assert block["total_requested_amount_cents"] == 6_000  # NOT polluted by other
         assert block["approval_rate"] == 0.5  # 1 approved / (1+1) decided

@@ -1,4 +1,4 @@
-"""WS-E reason-directory validation + adverse-action wording flow — pure (no DB).
+"""WS-E reason-directory validation + decision-notice wording flow — pure (no DB).
 
 Covers:
 * slug/field validation used by the admin CRUD endpoint;
@@ -6,10 +6,10 @@ Covers:
   truth consumed by BOTH migration 048 and the test-DB fixture in conftest):
   every seed passes validation, codes are unique per kind, and the seeded
   borrower-facing wording for engine codes is consistent with the
-  adverse-action notice's built-in wording (so the directory taking over the
+  notice of decision's built-in wording (so the directory taking over the
   wording changes nothing until an admin edits it);
 * migration 048 chains correctly and delegates to the shared seeder;
-* directory borrower_facing_text overriding the adverse-action notice content;
+* directory borrower_facing_text overriding the notice of decision content;
 * the cancellation email template rendering.
 """
 from __future__ import annotations
@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from app.services import adverse_action
+from app.services import decision_notice
 from app.services.decision_reasons import (
     CANCEL_REASON_SEEDS,
     CODE_RE,
@@ -108,7 +108,7 @@ def test_seed_codes_unique_per_kind():
 
 def test_engine_decline_codes_are_seeded_as_reject_reasons():
     """Every stable engine code that can accompany a DECLINE has a directory row,
-    so its adverse-action wording is admin-editable."""
+    so its decision-notice wording is admin-editable."""
     seeded = {c for c, _, _ in REJECT_REASON_SEEDS}
     for engine_code in (
         REASON_BUREAU_BELOW_MINIMUM,
@@ -121,12 +121,12 @@ def test_engine_decline_codes_are_seeded_as_reject_reasons():
         assert engine_code in seeded, engine_code
 
 
-def test_seed_wording_matches_adverse_action_builtin_wording():
+def test_seed_wording_matches_decision_notice_builtin_wording():
     """The seeds start out IDENTICAL to the notice's built-in fallback wording —
     applying migration 048 changes no applicant-facing text until an admin edits
     the directory."""
     for code, _, text in REJECT_REASON_SEEDS:
-        builtin = adverse_action._REASON_TEXT.get(code)
+        builtin = decision_notice._REASON_TEXT.get(code)
         if builtin is not None:
             assert text == builtin, code
 
@@ -154,12 +154,12 @@ def test_migration_delegates_to_shared_seeder():
 
 
 # ---------------------------------------------------------------------------
-# Directory wording flows into the adverse-action notice
+# Directory wording flows into the notice of decision
 # ---------------------------------------------------------------------------
 
 
 def test_humanize_reasons_prefers_directory_override():
-    out = adverse_action.humanize_reasons(
+    out = decision_notice.humanize_reasons(
         ["bureau_below_minimum", "some_new_staff_code"],
         {"bureau_below_minimum": "Directory-edited wording.",
          "some_new_staff_code": "Wording for the new staff reason."},
@@ -169,29 +169,29 @@ def test_humanize_reasons_prefers_directory_override():
 
 
 def test_humanize_reasons_falls_back_without_override():
-    out = adverse_action.humanize_reasons(["bureau_below_minimum"], {})
+    out = decision_notice.humanize_reasons(["bureau_below_minimum"], {})
     assert out == ["Your credit score did not meet our minimum requirement."]
     # unknown code with no override → safe generic line, never a KeyError
-    out2 = adverse_action.humanize_reasons(["mystery_code"], None)
+    out2 = decision_notice.humanize_reasons(["mystery_code"], None)
     assert out2 == ["Your application did not meet our current lending criteria."]
 
 
 def test_notice_content_and_render_carry_override_text():
-    content = adverse_action.build_notice_content(
+    content = decision_notice.build_notice_content(
         applicant_name="Jordan Lee",
         application_id="app-123",
         reasons=["bankruptcy_discharge_recent"],
         reason_texts={"bankruptcy_discharge_recent": "Custom vetted wording."},
     )
     assert content["principal_reasons"] == ["Custom vetted wording."]
-    html = adverse_action.render_notice_html(content)
-    text = adverse_action.render_notice_text(content)
+    html = decision_notice.render_notice_html(content)
+    text = decision_notice.render_notice_text(content)
     assert "Custom vetted wording." in html
     assert "Custom vetted wording." in text
 
 
 def test_new_bankruptcy_code_has_builtin_notice_wording():
-    out = adverse_action.humanize_reasons([REASON_BANKRUPTCY_DISCHARGE_RECENT])
+    out = decision_notice.humanize_reasons([REASON_BANKRUPTCY_DISCHARGE_RECENT])
     assert out != ["Your application did not meet our current lending criteria."]
     assert "discharged" in out[0]
 
@@ -216,6 +216,6 @@ def test_application_cancelled_email_renders():
     assert "Jordan Lee" in html
     assert "Your application was cancelled at your request." in html
     # NON-CREDIT closure: the cancellation notice must never read as an
-    # adverse-action / credit-decision notice.
+    # credit-decision notice.
     assert "Notice of Action Taken" not in html
     assert "not a credit decision" in html

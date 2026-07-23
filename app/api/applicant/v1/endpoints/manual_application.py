@@ -77,7 +77,7 @@ def submit_manual_application(
     Idempotent/defensive: re-submitting while already ``under_review`` refreshes
     the captured fields and re-stamps the marker. A manual application is refused
     (409) once the application has reached a terminal decision
-    (approved/declined/withdrawn/expired) — those must not be silently reopened.
+    (approved/rejected/withdrawn/expired) — those must not be silently reopened.
     """
     require_app_scope(application_id, claims)
 

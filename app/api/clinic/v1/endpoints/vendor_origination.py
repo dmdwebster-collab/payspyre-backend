@@ -17,7 +17,7 @@ narrated over the Turnkey admin backend):
   ``loan_quote``), and the full amortization schedule preview.
 * ``POST /clinic/v1/applications/{id}/request-reprocessing`` — the ONLY vendor
   underwriting action (Dave: "they should have one button that says 'request
-  reprocessing'"). Valid on declined / in-adjudication applications belonging
+  reprocessing'"). Valid on rejected / in-adjudication applications belonging
   to THIS vendor; flips the file to ``under_review`` with a
   ``vendor_reprocessing_requested`` flag the admin queue filters on; audited
   via ``platform_events``.
@@ -573,7 +573,7 @@ def request_reprocessing(
     """The ONLY vendor underwriting action (Dave's mandate).
 
     Asks PaySpyre to send the deal back / take another look. Valid on a
-    ``declined`` file (including a silently-escalated auto-decline) or one in
+    ``rejected`` file (including a silently-escalated auto-rejection) or one in
     adjudication (``under_review`` / ``underwriting``); the file moves to
     ``under_review`` with ``vendor_reprocessing_requested=True`` so the admin
     queue can lane it. Cross-vendor access is a 404. Audited.

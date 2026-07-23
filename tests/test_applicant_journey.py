@@ -194,7 +194,7 @@ class TestApplicantJourney:
     def test_journey_decline_path(self, client, db_session, dispatcher):
         app_id, headers = _drive(client, db_session, dispatcher, score=550)
         r = client.get(f"{_BASE}/applications/{app_id}", headers=headers)
-        assert r.json()["status"] == "declined"
+        assert r.json()["status"] == "rejected"
 
     def test_journey_manual_review_path(self, client, db_session, dispatcher):
         app_id, headers = _drive(client, db_session, dispatcher, score=640)

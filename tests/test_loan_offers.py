@@ -265,7 +265,7 @@ def test_create_offers_enforces_cap():
 
 def test_create_offers_rejects_bad_status():
     session = FakeSession(offers=[], loan_row=None)
-    app = make_application(status="declined")
+    app = make_application(status="rejected")
     with pytest.raises(loan_offers.OfferError):
         loan_offers.create_offers(
             session, app,

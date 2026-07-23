@@ -215,7 +215,7 @@ def test_finalize_routing_uses_orchestrator_transitions(use_real, expected_statu
 
 
 def test_finalizable_statuses_exclude_terminal():
-    terminal = {"approved", "declined", "withdrawn", "expired"}
+    terminal = {"approved", "rejected", "withdrawn", "expired"}
     assert terminal.isdisjoint(set(finalize_module._FINALIZABLE))
 
 

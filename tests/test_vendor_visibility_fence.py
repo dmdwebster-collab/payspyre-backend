@@ -165,7 +165,7 @@ EXPECTED_MODEL_FIELDS: dict[str, list[str]] = {
         "patient_name", "product_name", "status",
     ],
     "ClinicDashboardSummary": [
-        "approved", "declined", "manual_review", "started", "total",
+        "approved", "manual_review", "rejected", "started", "total",
     ],
     "CreateFinancingLinkBody": [
         "amount_cents", "credit_product_id", "patient_contact", "patient_name",
@@ -214,7 +214,7 @@ EXPECTED_MODEL_FIELDS: dict[str, list[str]] = {
     "OverviewVendor": ["business_name", "id", "status"],
     "AppTimeseries": ["granularity", "points"],
     "AppTimeseriesPoint": [
-        "approved", "bucket", "declined", "in_review",
+        "approved", "bucket", "in_review", "rejected",
         "requested_amount_cents", "started",
     ],
     "VendorLoanBook": ["next_cursor", "rows"],

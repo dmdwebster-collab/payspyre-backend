@@ -69,7 +69,7 @@ PROFILE_PHOTO_DOC_TYPE = "profile_photo"
 _PHOTO_CONTENT_TYPES = ("image/jpeg", "image/png", "image/heic", "image/webp")
 
 #: Statuses where the file is closed and neither edits nor offer changes apply.
-_CLOSED_STATUSES = ("declined", "withdrawn", "expired")
+_CLOSED_STATUSES = ("rejected", "withdrawn", "expired")
 
 
 def _actor_id(user) -> str:
@@ -775,7 +775,7 @@ def unlink_co_borrower(
 #
 # DECISION PATH: neither route touches the automated decision engine. Both are
 # refused on every status the registry does not list them for, which excludes
-# ``approved`` / ``declined`` / ``withdrawn`` / ``expired`` / ``active`` and the
+# ``approved`` / ``rejected`` / ``withdrawn`` / ``expired`` / ``active`` and the
 # six closed states, so no already-decided file can be moved by them.
 # ---------------------------------------------------------------------------
 
@@ -880,17 +880,17 @@ def return_for_reprocessing(
     Origination so missing/incorrect information can be corrected and re-submitted.
 
     Available at most stages of Dave's table (the three verification gates, Credit
-    Underwriting and Offer Acceptance). A ``declined`` file is deliberately NOT
+    Underwriting and Offer Acceptance). A ``rejected`` file is deliberately NOT
     reopened here: reversing a credit decision is the decision endpoint's job
     (``POST /admin/applications/{id}/decision`` with ``override=true``), which
     carries the reason-code and orphan-loan guards this route does not.
     """
     app_row = _get_application(db, application_id)
-    if str(app_row.status) == "declined":
+    if str(app_row.status) == "rejected":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
-                "A declined application is reopened through "
+                "A rejected application is reopened through "
                 "POST /admin/applications/{id}/decision with override=true, which "
                 "enforces the decision-override permission, the reason codes and "
                 "the orphan-loan guard."

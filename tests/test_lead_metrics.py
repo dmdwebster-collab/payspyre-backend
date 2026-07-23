@@ -70,7 +70,9 @@ def test_apply_decision_sets_terminal(db_session):
     assert p.verification_depth == "id_verified"  # captured during the deciding flow
 
     p2 = _patient(db_session)
-    lead_metrics.apply_decision(db_session, p2, "declined")
+    # apply_decision takes the application STATUS ("rejected"); the marketplace
+    # lead_state terminal value stays "declined" (separate enum, not renamed).
+    lead_metrics.apply_decision(db_session, p2, "rejected")
     assert p2.lead_state == "declined"
 
 

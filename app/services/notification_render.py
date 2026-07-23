@@ -92,14 +92,16 @@ NOTIFICATION_TYPES: dict[str, NotificationSpec] = {
         email_subject='PaySpyre - Loan Pre-Approved - Acceptance Required',
         sms_template='PaySpyre: Great news {{ full_name }} - your loan application {{ loan_id }} is pre-approved! Sign in to review and accept your offer (expires in 10 days): {{ dashboard_url }}',
     ),
-    # Declines go out as the adverse-action notice (compliance-critical delivery).
+    # DORMANT registry entry (legacy key). No notice auto-fires on a rejection —
+    # the US "adverse-action notice" auto-send was removed (Dave 2026-07-22); what
+    # notice a rejected Canadian applicant receives is an open counsel/Dave item.
     "application_declined": NotificationSpec(
-        email_template="adverse_action_notice.html",
+        email_template="decision_notice.html",
         email_subject="Your PaySpyre application decision",
-        sms_template=None,  # adverse-action content does not fit / belong in SMS
+        sms_template=None,  # long-form notice content does not fit / belong in SMS
     ),
-    # Registered for cockpit use; NOT wired to decisions (adverse_action owns
-    # declines). Dave's softer "Rejected" copy, pending counsel alignment.
+    # Registered for cockpit use; NOT wired to decisions. Dave's softer "Rejected"
+    # copy, pending counsel alignment.
     "application_rejected": NotificationSpec(
         email_template="application_rejected_v2.html",
         email_subject='PaySpyre - Application Rejection',

@@ -1,4 +1,4 @@
-"""Unit tests for the Canadian notice-of-decision (declined) service.
+"""Unit tests for the Canadian notice-of-decision (rejected) service.
 
 Fully mocked: a MagicMock dispatcher + a MagicMock DB session — NO live DB, NO
 network. We control the idempotency query (``_already_sent``) and the patient
@@ -10,9 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 from uuid import uuid4
 
-import pytest
-
-from app.services import adverse_action
+from app.services import decision_notice
 
 
 # ---------------------------------------------------------------------------
@@ -21,7 +19,7 @@ from app.services import adverse_action
 
 
 def _make_application():
-    return SimpleNamespace(id=uuid4(), patient_id=uuid4(), status="declined")
+    return SimpleNamespace(id=uuid4(), patient_id=uuid4(), status="rejected")
 
 
 def _make_patient(email="applicant@example.com", first="Jane", last="Doe"):
@@ -47,12 +45,12 @@ def _make_db(*, already_sent: bool, patient):
 
 
 def test_content_includes_reasons_and_canadian_disclosures():
-    content = adverse_action.build_notice_content(
+    content = decision_notice.build_notice_content(
         applicant_name="Jane Doe",
         application_id="app-123",
         reasons=["bureau_below_minimum", "verification_failed:identity"],
     )
-    html = adverse_action.render_notice_html(content)
+    html = decision_notice.render_notice_html(content)
 
     # Principal reasons translated to applicant-facing text.
     assert "minimum requirement" in html
@@ -77,35 +75,35 @@ def test_content_includes_reasons_and_canadian_disclosures():
 
 
 def test_unknown_reason_code_falls_back_safely():
-    lines = adverse_action.humanize_reasons(["totally_unknown_code"])
+    lines = decision_notice.humanize_reasons(["totally_unknown_code"])
     assert lines == ["Your application did not meet our current lending criteria."]
 
 
 def test_empty_reasons_still_yields_a_principal_reason():
-    lines = adverse_action.humanize_reasons([])
+    lines = decision_notice.humanize_reasons([])
     assert len(lines) == 1
     assert lines[0]
 
 
 def test_generic_cra_disclosure_when_no_real_bureau(monkeypatch):
-    monkeypatch.setattr(adverse_action.settings, "USE_REAL_ADAPTERS", False, raising=False)
-    content = adverse_action.build_notice_content(
+    monkeypatch.setattr(decision_notice.settings, "USE_REAL_ADAPTERS", False, raising=False)
+    content = decision_notice.build_notice_content(
         applicant_name="Jane Doe", application_id="x", reasons=["bureau_below_minimum"]
     )
     assert content["bureau"]["bureau_used"] is False
-    html = adverse_action.render_notice_html(content)
+    html = decision_notice.render_notice_html(content)
     assert "consumer reporting agency" in html.lower()
 
 
 def test_named_bureau_disclosure_when_real_bureau(monkeypatch):
-    monkeypatch.setattr(adverse_action.settings, "USE_REAL_ADAPTERS", True, raising=False)
-    monkeypatch.setattr(adverse_action.settings, "EQUIFAX_API_KEY", "live-key", raising=False)
-    content = adverse_action.build_notice_content(
+    monkeypatch.setattr(decision_notice.settings, "USE_REAL_ADAPTERS", True, raising=False)
+    monkeypatch.setattr(decision_notice.settings, "EQUIFAX_API_KEY", "live-key", raising=False)
+    content = decision_notice.build_notice_content(
         applicant_name="Jane Doe", application_id="x", reasons=["bureau_below_minimum"]
     )
     assert content["bureau"]["bureau_used"] is True
     assert content["bureau"]["name"] == "Equifax Canada Co."
-    html = adverse_action.render_notice_html(content)
+    html = decision_notice.render_notice_html(content)
     assert "Equifax Canada Co." in html
     assert "1-800-465-7166" in html
 
@@ -121,7 +119,7 @@ def test_sends_to_patient_email_and_records_event():
     db = _make_db(already_sent=False, patient=patient)
     dispatcher = MagicMock()
 
-    sent = adverse_action.send_adverse_action_notice(
+    sent = decision_notice.send_decision_notice(
         db, application, ["bureau_below_minimum"], dispatcher
     )
 
@@ -137,7 +135,7 @@ def test_sends_to_patient_email_and_records_event():
     # An audit event was added + flushed.
     assert db.add.called
     added = db.add.call_args.args[0]
-    assert added.event_type == adverse_action.ADVERSE_ACTION_EVENT_TYPE
+    assert added.event_type == decision_notice.DECISION_NOTICE_EVENT_TYPE
     assert added.application_id == application.id
     assert added.patient_id == application.patient_id
     # No PII in the event payload — only ids + reason codes + bureau name.
@@ -153,7 +151,7 @@ def test_idempotent_does_not_send_twice():
     db = _make_db(already_sent=True, patient=patient)
     dispatcher = MagicMock()
 
-    sent = adverse_action.send_adverse_action_notice(
+    sent = decision_notice.send_decision_notice(
         db, application, ["bureau_below_minimum"], dispatcher
     )
 
@@ -168,7 +166,7 @@ def test_no_email_skips_send():
     db = _make_db(already_sent=False, patient=patient)
     dispatcher = MagicMock()
 
-    sent = adverse_action.send_adverse_action_notice(
+    sent = decision_notice.send_decision_notice(
         db, application, ["bureau_below_minimum"], dispatcher
     )
 
@@ -185,7 +183,7 @@ def test_swallows_dispatcher_error_and_does_not_record():
     dispatcher.send_email.side_effect = RuntimeError("vendor down")
 
     # Must NOT raise into the caller.
-    sent = adverse_action.send_adverse_action_notice(
+    sent = decision_notice.send_decision_notice(
         db, application, ["bureau_below_minimum"], dispatcher
     )
 
@@ -200,7 +198,7 @@ def test_missing_patient_is_swallowed():
     db = _make_db(already_sent=False, patient=None)
     dispatcher = MagicMock()
 
-    sent = adverse_action.send_adverse_action_notice(
+    sent = decision_notice.send_decision_notice(
         db, application, ["bureau_below_minimum"], dispatcher
     )
 
@@ -217,14 +215,14 @@ def test_undelivered_send_records_failure_event_not_sent():
     dispatcher = MagicMock()
     dispatcher.send_email.return_value = False
 
-    sent = adverse_action.send_adverse_action_notice(
+    sent = decision_notice.send_decision_notice(
         db, application, ["bureau_below_minimum"], dispatcher
     )
 
     assert sent is False
     added_types = [getattr(c.args[0], "event_type", None) for c in db.add.call_args_list]
-    assert adverse_action.ADVERSE_ACTION_FAILED_EVENT_TYPE in added_types
-    assert adverse_action.ADVERSE_ACTION_EVENT_TYPE not in added_types
+    assert decision_notice.DECISION_NOTICE_FAILED_EVENT_TYPE in added_types
+    assert decision_notice.DECISION_NOTICE_EVENT_TYPE not in added_types
 
 
 def test_default_dispatcher_routes_to_sendgrid_when_configured(monkeypatch):
@@ -240,9 +238,9 @@ def test_default_dispatcher_routes_to_sendgrid_when_configured(monkeypatch):
         captured.update(kw)
         return True
 
-    monkeypatch.setattr(adverse_action, "_send_via_sendgrid", _fake_send)
+    monkeypatch.setattr(decision_notice, "_send_via_sendgrid", _fake_send)
 
-    ok = adverse_action._EmailServiceDispatcher().send_email(
+    ok = decision_notice._EmailServiceDispatcher().send_email(
         to="x@example.com", subject="s", html_content="<p>h</p>", text_content="t"
     )
 

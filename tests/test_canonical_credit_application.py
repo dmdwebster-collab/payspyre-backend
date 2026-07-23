@@ -128,7 +128,7 @@ def test_named_workflow_transitions_set_expected_status():
     assert app.status == "under_review"
 
 
-@pytest.mark.parametrize("terminal", ["approved", "declined", "withdrawn", "expired"])
+@pytest.mark.parametrize("terminal", ["approved", "rejected", "withdrawn", "expired"])
 @pytest.mark.parametrize("transition", [mark_origination, mark_verification, mark_underwriting])
 def test_workflow_transitions_refuse_terminal_states(terminal, transition):
     app = _fake_app(terminal)
@@ -143,4 +143,4 @@ def test_new_status_values_present_in_model_enum():
     enum_values = set(PlatformCreditApplication.__table__.c.status.type.enums)
     assert {"origination", "underwriting"}.issubset(enum_values)
     # the original values are retained (additive-only)
-    assert {"started", "verifying", "under_review", "approved", "declined"}.issubset(enum_values)
+    assert {"started", "verifying", "under_review", "approved", "rejected"}.issubset(enum_values)

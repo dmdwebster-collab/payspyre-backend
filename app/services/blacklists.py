@@ -2,8 +2,8 @@
 
 Staff-maintained lists of suspicious values, checked at application decision
 time. THE RULE (Dave): a match FLAGS the file — an auto-APPROVE is downgraded
-to MANUAL REVIEW so a human looks at it. A match NEVER auto-declines, and a
-declined file stays declined (the screen only ever moves approvals toward
+to MANUAL REVIEW so a human looks at it. A match NEVER auto-rejects, and a
+rejected file stays rejected (the screen only ever moves approvals toward
 review, nothing else).
 
 Design:
@@ -119,8 +119,8 @@ def apply_screen(
     * match + APPROVED      → downgraded to manual review (``under_review``) —
                               a human must look before money moves.
     * match + anything else → flagged only; the decision is NEVER worsened.
-      In particular a match never turns anything into a decline (never
-      auto-reject, per Dave), and a declined file stays declined.
+      In particular a match never turns anything into a rejection (never
+      auto-reject, per Dave), and a rejected file stays rejected.
     """
     reasons = tuple(decision_reasons)
     if not matches:

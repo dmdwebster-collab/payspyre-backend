@@ -96,13 +96,13 @@ def to_clinic_application(row: PlatformCreditApplication) -> ClinicApplication:
 def _summary_from_status_counts(triples) -> ClinicDashboardSummary:
     """Fold ``(platform_status, decision_by, count)`` triples into the 4 clinic
     buckets, through the VENDOR-VISIBLE mapping (WS-I silent-escalation rule —
-    the cards must agree with the table, so an auto-decline pending human
-    review counts as manual_review, not declined).
+    the cards must agree with the table, so an auto-rejection pending human
+    review counts as manual_review, not rejected).
 
     Pure (no DB) so the bucketing — and the fact that it counts *all* rows, not a
     capped slice — is unit-testable.
     """
-    counts = {"started": 0, "approved": 0, "declined": 0, "manual_review": 0}
+    counts = {"started": 0, "approved": 0, "rejected": 0, "manual_review": 0}
     total = 0
     for status, decision_by, n in triples:
         total += n

@@ -40,7 +40,7 @@ D = date
 
 
 def test_close_reason_for_application():
-    assert archive.close_reason_for_application("declined", None) == "rejected"
+    assert archive.close_reason_for_application("rejected", None) == "rejected"
     assert archive.close_reason_for_application("withdrawn", {}) == "cancelled"
     assert archive.close_reason_for_application("expired", {}) == "expired"
     assert (
@@ -82,7 +82,7 @@ def test_close_reasons_vocabulary_is_complete():
     """The vocabulary is Dave's registry (9 closed/terminal statuses) plus the
     archive-only ``bank_verification_expired`` refinement of ``expired``."""
     assert set(archive.CLOSE_REASONS) == {
-        "rejected",  # canonical 'declined' keeps its shipped wire key
+        "rejected",  # canonical 'rejected' status wire key
         "cancelled",
         "expired",
         "bank_verification_expired",
@@ -208,10 +208,12 @@ def test_apply_screen_match_downgrades_approval_to_manual_review():
 
 
 def test_apply_screen_never_auto_rejects():
-    # A declined file stays declined — a match NEVER worsens a non-approval.
-    out = blacklists.apply_screen("declined", "declined", ["low_score"], [_match()])
+    # A rejected file stays rejected — a match NEVER worsens a non-approval.
+    # arg1 is the decision-outcome token (stays "declined"); arg2/next_state is
+    # the STATUS (now "rejected").
+    out = blacklists.apply_screen("declined", "rejected", ["low_score"], [_match()])
     assert out.decision == "declined"
-    assert out.next_state == "declined"
+    assert out.next_state == "rejected"
     assert out.flagged is True
     assert out.downgraded is False
     # manual_review file also unchanged (already going to a human).

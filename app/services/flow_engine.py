@@ -75,9 +75,14 @@ DEFAULT_TIMEOUT_SECONDS = 10.0
 
 # decision -> application status (platform_application_status enum). The engine
 # returns this; it does not set it (Hard Rule #3).
+#
+# NOTE (Dave 2026-07-22): the STATUS was renamed ``declined`` -> ``rejected``
+# (migration 076). The engine's internal decision-OUTCOME token stays ``declined``
+# (its scoring vocabulary, the risk-score override machinery, and the stored
+# decision JSON all use it) — only the persisted STATUS it maps to is ``rejected``.
 DECISION_TO_STATE: dict[str, str] = {
     "approved": "approved",
-    "declined": "declined",
+    "declined": "rejected",
     "manual_review": "under_review",
 }
 

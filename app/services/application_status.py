@@ -25,7 +25,7 @@ TWO LAYERS, DELIBERATELY
    and write. It is a *superset* of Dave's model: it keeps three legacy values
    that carry engine meaning Dave's model does not name (``started``,
    ``verifying``, ``under_review``) and three terminal outcomes his forward flow
-   has no slot for (``declined``, ``withdrawn``, ``expired``).
+   has no slot for (``rejected``, ``withdrawn``, ``expired``).
 2. **Canonical status** (this module) — Dave's named status, with its
    preconditions, owning workplace(s), permitted actions and external API. Every
    engine value maps onto exactly one canonical status (``LEGACY_TO_CANONICAL``);
@@ -50,11 +50,16 @@ regression, not a rename:
   the underwriting workplace's explicit, per-gate transitions; ``verifying``
   remains the automated path's band-level value and maps to the same band here.
 
-Nothing is dropped: ``declined`` / ``withdrawn`` / ``expired`` are preserved as
+Nothing is dropped: ``rejected`` / ``withdrawn`` / ``expired`` are preserved as
 first-class terminal canonical statuses ALONGSIDE Dave's model (see
 ``OFF_MODEL_TERMINALS``), because a real lending system must record a credit
-decline, an administrative cancellation and a lapsed offer, and Dave's forward
+rejection, an administrative cancellation and a lapsed offer, and Dave's forward
 flow only describes the happy path plus per-status "Cancel"/"Reject" actions.
+
+Dave (2026-07-22, stated twice): the credit-decision status is **Rejected**, NOT
+"Declined". ``Rejected`` and ``Cancelled`` are independent statuses with their
+own reason lists (``platform_decision_reasons`` kinds ``reject`` / ``cancel``).
+The engine enum value was renamed ``declined`` -> ``rejected`` in migration 076.
 """
 from __future__ import annotations
 
@@ -130,7 +135,7 @@ class CanonicalStatus(str, Enum):
     SETTLEMENT = "settlement"
     WRITTEN_OFF = "written_off"
     # --- off-model terminals (ours, preserved — see module docstring) ---
-    DECLINED = "declined"
+    REJECTED = "rejected"
     CANCELLED = "cancelled"
     EXPIRED = "expired"
 
@@ -154,7 +159,7 @@ CLOSED_STATUSES: tuple[CanonicalStatus, ...] = (
 
 #: Terminal outcomes Dave's forward flow does not name; preserved, not dropped.
 OFF_MODEL_TERMINALS: tuple[CanonicalStatus, ...] = (
-    CanonicalStatus.DECLINED,
+    CanonicalStatus.REJECTED,
     CanonicalStatus.CANCELLED,
     CanonicalStatus.EXPIRED,
 )
@@ -337,7 +342,7 @@ _SPECS: tuple[StatusSpec, ...] = (
             Action.RETURN_FOR_REPROCESSING,
         ),
         engine_statuses=("underwriting", "under_review"),
-        next_statuses=(CanonicalStatus.OFFER_ACCEPTANCE, CanonicalStatus.DECLINED),
+        next_statuses=(CanonicalStatus.OFFER_ACCEPTANCE, CanonicalStatus.REJECTED),
         note=(
             "Two engine values map here and must stay distinct: 'underwriting' is "
             "pre-decision, 'under_review' is the automated core's manual-review "
@@ -461,22 +466,24 @@ _CLOSED_SPECS: tuple[StatusSpec, ...] = (
 
 _OFF_MODEL_SPECS: tuple[StatusSpec, ...] = (
     StatusSpec(
-        status=CanonicalStatus.DECLINED,
-        label="Declined",
+        status=CanonicalStatus.REJECTED,
+        label="Rejected",
         order=10,
         preconditions=("The application was rejected by the system or an underwriter",),
         description=(
-            "A credit decision was made to decline. An adverse-action notice is "
-            "issued (Canadian notice of decision).",
+            "A credit decision was made to reject the application. The principal "
+            "reasons are captured from the reject reason directory.",
         ),
         workplaces=(Workplace.UNDERWRITING, Workplace.ARCHIVE),
         actions=(Action.RETURN_FOR_REPROCESSING,),
-        engine_statuses=("declined",),
+        engine_statuses=("rejected",),
         is_terminal=True,
         note=(
             "Not in Dave's forward flow — it is the outcome of his 'Reject the "
             "application' action. Preserved as a first-class terminal status: a "
-            "credit decline is legally distinct from a cancellation."
+            "credit rejection is distinct from a cancellation. FLAGGED FOR "
+            "COUNSEL/DAVE: what notice (if any) a rejected Canadian applicant "
+            "receives is an open legal question — no notice is auto-sent."
         ),
     ),
     StatusSpec(
@@ -486,7 +493,7 @@ _OFF_MODEL_SPECS: tuple[StatusSpec, ...] = (
         preconditions=("An authorized user cancelled the application",),
         description=(
             "Administrative termination (customer request, duplicate, vendor "
-            "request). NOT a credit decision — no adverse-action notice.",
+            "request). NOT a credit decision — its own cancel reason list applies.",
         ),
         workplaces=(Workplace.ARCHIVE,),
         actions=(),

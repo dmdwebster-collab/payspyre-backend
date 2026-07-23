@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 # The clinic console only distinguishes four buckets (clinicMock.ts
 # ClinicApplicationStatus). The platform application status enum has nine
 # values; ``app.api.clinic.v1.status_map`` collapses them into these.
-ClinicApplicationStatus = Literal["started", "approved", "declined", "manual_review"]
+ClinicApplicationStatus = Literal["started", "approved", "rejected", "manual_review"]
 
 
 # --- products --------------------------------------------------------------
@@ -60,7 +60,7 @@ class ClinicDashboardSummary(BaseModel):
 
     started: int = 0
     approved: int = 0
-    declined: int = 0
+    rejected: int = 0
     manual_review: int = 0
     total: int = 0
 

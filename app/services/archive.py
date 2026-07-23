@@ -12,12 +12,12 @@ Close-reason vocabulary (the archive "S" column) — REGISTRY-DRIVEN.
 The vocabulary is no longer a hand-written list. It is derived from Dave's
 status registry (``app.services.application_status``): every member of
 ``CLOSED_STATUSES`` (the six closed states hanging off Active) and
-``OFF_MODEL_TERMINALS`` (declined / cancelled / expired) must appear in
+``OFF_MODEL_TERMINALS`` (rejected / cancelled / expired) must appear in
 ``_CANONICAL_TO_REASON`` or this module raises at import — the two lists can no
 longer drift. Adding a closed status to the registry is what adds an Archive
 chip; the UI renders chips from the ``close_reasons`` array we return.
 
-    rejected                   ← canonical declined     (engine: declined)
+    rejected                   ← canonical rejected     (engine: rejected)
     cancelled                  ← canonical cancelled    (engine: withdrawn,
                                  or loan.status = cancelled)
     expired                    ← canonical expired      (offer expired)
@@ -40,8 +40,8 @@ knows paid_off / charged_off / cancelled. They are recorded on the APPLICATION
 Dave's closed states is archived under that reason even when its own status is
 still ``active``. The application status wins whenever it names a closed state.
 
-``rejected`` is kept as the wire key for the canonical ``declined`` status: the
-Archive UI already ships that key, and the API contract is additive-only.
+``rejected`` is the wire key for the canonical ``rejected`` status (the engine
+value, the wire key and the label now all read "rejected" after migration 076).
 
 POLYMORPHIC DETAIL (Dave: "if it was a paid account, it would have the amount
 of information that would be in the servicing workplace; if it's just an
@@ -91,9 +91,8 @@ from app.services.application_status import (
 # ---------------------------------------------------------------------------
 
 #: Canonical closed/terminal status -> the Archive's wire key for it.
-#: ``declined`` keeps the legacy wire key ``rejected`` (already shipped in the UI).
 _CANONICAL_TO_REASON: dict[CanonicalStatus, str] = {
-    CanonicalStatus.DECLINED: "rejected",
+    CanonicalStatus.REJECTED: "rejected",
     CanonicalStatus.CANCELLED: "cancelled",
     CanonicalStatus.EXPIRED: "expired",
     CanonicalStatus.REPAID: "repaid",
@@ -156,7 +155,7 @@ _REASON_TO_CANONICAL: dict[str, CanonicalStatus] = {
 }
 
 # Terminal status sets (the archive's population).
-TERMINAL_APPLICATION_STATUSES = ("declined", "withdrawn", "expired")
+TERMINAL_APPLICATION_STATUSES = ("rejected", "withdrawn", "expired")
 TERMINAL_LOAN_STATUSES = ("paid_off", "charged_off", "cancelled")
 #: Engine values of Dave's six closed states, as written by
 #: ``flow_orchestrator.mark_closed`` onto the APPLICATION.
@@ -191,7 +190,7 @@ UNASSIGNED = "unassigned"
 def close_reason_for_application(status: str, flow_state: Optional[dict]) -> Optional[str]:
     """Pure close-reason derivation for an application row (None = not terminal).
 
-    Handles the legacy engine values (``declined``/``withdrawn``/``expired``)
+    Handles the terminal engine values (``rejected``/``withdrawn``/``expired``)
     AND Dave's six closed states, which the flow orchestrator writes onto the
     application. Registry-driven: an unmapped status returns ``None`` rather
     than raising, so an enum addition can never 500 the queue.
@@ -297,7 +296,7 @@ def _application_query(db: Session, close_reason: Optional[str], assignee_id):
         == "bank_verification"
     )
     if close_reason == "rejected":
-        q = q.filter(PlatformCreditApplication.status == "declined")
+        q = q.filter(PlatformCreditApplication.status == "rejected")
     elif close_reason == "cancelled":
         q = q.filter(PlatformCreditApplication.status == "withdrawn")
     elif close_reason == "expired":

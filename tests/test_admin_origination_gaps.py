@@ -246,7 +246,7 @@ def _app(status: str):
 #: Statuses the decision engine owns or produces. A new origination transition
 #: must never be able to move a file in one of these.
 _DECISION_OWNED = (
-    "approved", "declined", "withdrawn", "expired", "active", *flow.CLOSED_STATUSES,
+    "approved", "rejected", "withdrawn", "expired", "active", *flow.CLOSED_STATUSES,
 )
 
 
@@ -337,9 +337,9 @@ class TestRegistryActionsHaveEndpoints:
             if sm.Action.RETURN_FOR_REPROCESSING in sm.STATUS_REGISTRY[c].actions
         }
         # Everything the registry offers it on is accepted by the orchestrator,
-        # except `declined` — deliberately routed to the decision-override
+        # except `rejected` — deliberately routed to the decision-override
         # endpoint, which carries the reason-code and orphan-loan guards.
-        assert returnable - {"declined"} <= set(flow._RETURNABLE_STATUSES)
+        assert returnable - {"rejected"} <= set(flow._RETURNABLE_STATUSES)
 
 
 class TestDecisionPathUnchanged:
@@ -365,12 +365,12 @@ class TestDecisionPathUnchanged:
             flow.mark_returned_for_reprocessing(app)
         assert app.status == status
 
-    def test_declined_is_not_reopened_by_the_return_transition(self):
+    def test_rejected_is_not_reopened_by_the_return_transition(self):
         """A credit decision is reversed only through the decision endpoint."""
-        app = _app("declined")
+        app = _app("rejected")
         with pytest.raises(flow.InvalidStateTransition):
             flow.mark_returned_for_reprocessing(app)
-        assert app.status == "declined"
+        assert app.status == "rejected"
 
     def test_submit_default_lands_on_the_pre_existing_band_status(self):
         """No gate named -> 'verifying', the value the automated journey already

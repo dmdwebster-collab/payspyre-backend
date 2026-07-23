@@ -8,8 +8,12 @@ Compliance intent (Dave, 02__WP_Underwriting.md §5): rejection reasons must be
 "standardized ... compliant with all regulations ... not discriminatory and
 defensible" — so staff decisions can only carry codes from the vetted directory,
 and the directory's ``borrower_facing_text`` is the single source of the wording
-the applicant reads (adverse-action notice for rejects, cancellation notice for
-cancels).
+the applicant reads (the rejection reasons and the cancellation reasons — two
+separate lists, one per status).
+
+NOTE (Dave 2026-07-22): no notice auto-fires on a rejection. What notice, if any,
+a rejected Canadian applicant receives is an open counsel/Dave question; the
+reason CAPTURE here is unchanged either way.
 """
 from __future__ import annotations
 
@@ -35,10 +39,10 @@ CODE_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 # Default directory contents — the SINGLE source of truth for the seeds.
 #
 # Reject codes intentionally MATCH the engine's stable decision_reasons codes
-# where one exists, so the directory's borrower_facing_text can override the
-# adverse-action notice wording for both automated and staff declines. Wording
-# mirrors adverse_action._REASON_TEXT so seeding changes no applicant-facing
-# text until an admin edits the directory.
+# where one exists, so the directory's borrower_facing_text is the vetted wording
+# for both automated and staff rejections. Wording mirrors
+# decision_notice._REASON_TEXT so seeding changes no applicant-facing text until
+# an admin edits the directory.
 #
 # Consumed by migration 048 AND the test-DB fixture (tests/conftest.py) via
 # :func:`seed_defaults` — the conftest TRUNCATE wipes migration-inserted rows
