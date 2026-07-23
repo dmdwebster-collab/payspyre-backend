@@ -32,6 +32,16 @@ class PlatformIntegrationSettings(Base):
     # Provider slug, e.g. 'sendgrid', 'flinks', 'zumrails'. Unique.
     provider = Column(String, nullable=False, unique=True)
 
+    # SIMULATOR / LIVE — the single, first-class integration mode (Dave's
+    # Integration SIMULATOR mandate). ``simulator`` = a real, reviewable
+    # simulation of the vendor's behaviour (never a no-op); ``live`` = the real
+    # vendor call. Default ``simulator`` so a fresh/unconfigured integration is
+    # always exercisable without credentials. This UNIFIES the mode concept and
+    # subsumes #207's Flinks ``config.test_mode`` (kept mirrored by the service
+    # layer for back-compat; this column is authoritative). See
+    # ``app.services.integration_mode``.
+    mode = Column(String, nullable=False, default="simulator", server_default="simulator")
+
     # Non-secret configuration — safe to return in API responses.
     config = Column(JSONB, nullable=False, default=dict)
 

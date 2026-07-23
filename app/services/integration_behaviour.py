@@ -94,16 +94,19 @@ def equifax_config(db: Optional[Session]) -> EquifaxConfig:
 
 
 def flinks_forces_simulator(db: Optional[Session]) -> bool:
-    """True when an ADMIN-CONFIGURED Flinks row asks for test mode.
+    """True when an ADMIN-CONFIGURED Flinks row is in simulator mode.
 
-    ``test_mode`` defaults to True (Dave's screen), so it is honoured only when
-    a settings row actually exists — otherwise merely enabling
-    ``USE_REAL_ADAPTERS`` on a tenant that never touched the Integrations page
-    would silently flip back to the simulator, which would be a behaviour
-    change rather than a wiring fix.
+    Reconciled with the unified ``mode`` concept (Dave's Integration SIMULATOR
+    mandate): the authoritative signal is now the per-integration ``mode``
+    column (``app.services.integration_mode``), which SUBSUMED the legacy
+    ``FlinksConfig.test_mode`` knob from #207. As before, it is honoured only
+    when a settings row actually exists — so a tenant that never touched the
+    Integrations page still falls through to ``USE_REAL_ADAPTERS`` unchanged,
+    while a saved row in simulator mode authoritatively forces the simulator.
     """
-    resolved = resolve_flinks(db)
-    return resolved.has_row and bool(resolved.config.test_mode)
+    from app.services import integration_mode
+
+    return integration_mode.forces_simulator(db, "flinks")
 
 
 def bank_verification_policy(db: Optional[Session]) -> dict:

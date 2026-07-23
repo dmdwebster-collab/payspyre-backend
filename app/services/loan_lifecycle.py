@@ -56,6 +56,7 @@ from app.models.platform.credit_application import PlatformCreditApplication
 from app.models.platform.event import PlatformEvent
 from app.models.platform.loan import PlatformLoan
 from app.services import archive
+from app.services import integration_mode
 from app.services import integration_settings
 from app.services import loan_servicing
 from app.services.esign.signnow_adapter import SignerInput
@@ -96,6 +97,12 @@ LOAN_CHARGED_OFF_EVENT = "loan_charged_off"
 # (Dave's Customer notification spec) off the same event stream.
 LOAN_AGREEMENT_SENT_EVENT = "loan_agreement_sent"
 LOAN_AGREEMENT_SIGNED_EVENT = "loan_agreement_signed"
+
+# Marker prefix for the SignNow document ref created by the SIMULATOR (Dave's
+# Integration SIMULATOR mandate). A simulated agreement really transitions to
+# ``sent`` / ``signed`` and drives the flow, but its ref is unmistakably NOT a
+# real SignNow document id, and its events carry ``"simulated": true``.
+SIMULATED_AGREEMENT_REF_PREFIX = "SIMULATED-"
 
 
 def _record_loan_event(db: Session, loan: PlatformLoan, event_type: str, after: dict) -> None:
@@ -147,7 +154,14 @@ def _build_signnow_adapter(db: Session):
 
     config:  base_url, (optional) template_id
     secrets: api_key (bearer token), (optional) webhook_secret
+
+    LIVE-ONLY: a real SignNow adapter is built only when the integration is in
+    ``live`` mode. In ``simulator`` mode this returns ``None`` and the caller
+    runs the labelled simulator instead — so a simulator-mode loan can never
+    make a live SignNow call.
     """
+    if not integration_mode.is_live(db, _SIGNNOW_PROVIDER):
+        return None
     setting = integration_settings.get(db, _SIGNNOW_PROVIDER)
     if setting is None or not setting.enabled:
         return None
@@ -188,7 +202,14 @@ def _build_zumrails_adapter(db: Session):
 
     config:  base_url, (optional) funding_source_id, currency, auth_mode
     secrets: api_key, api_secret, (optional) webhook_secret
+
+    LIVE-ONLY: built only when the Zumrails integration is in ``live`` mode. In
+    ``simulator`` mode this returns ``None`` and disbursement is a graceful
+    no-op (``not_started``), so a simulator-mode signing never pushes real
+    money. Tests inject a fake ``zumrails=`` adapter, which bypasses this gate.
     """
+    if not integration_mode.is_live(db, _ZUMRAILS_PROVIDER):
+        return None
     setting = integration_settings.get(db, _ZUMRAILS_PROVIDER)
     if setting is None or not setting.enabled:
         return None
@@ -326,15 +347,24 @@ def send_agreement(
     signer: Optional[SignerInput] = None,
     signnow=None,
 ) -> PlatformLoan:
-    """Send the loan agreement to the borrower for e-signature (→ SignNow).
+    """Send the loan agreement to the borrower for e-signature.
 
     Forward-only: a no-op if ``agreement_status`` is already past ``not_sent``
-    (sent/signed/declined). On success sets ``agreement_status=sent`` and stores
-    the SignNow document id in ``agreement_ref``.
+    (sent/signed/declined).
 
-    Graceful no-op: if no SignNow adapter can be built (provider disabled /
-    unconfigured), logs and leaves the loan in ``not_sent`` — booking is not
-    blocked by a turned-off integration.
+    MODE-AWARE (Dave's Integration SIMULATOR mandate):
+      * SIMULATOR (the default) — transitions ``agreement_status`` to ``sent``
+        with a clearly-labelled simulated ``agreement_ref``
+        (``SIMULATED-<loan id>``) and records a ``simulated: true`` event. This
+        is NOT a no-op: the agreement is really "sent / awaiting signature", so
+        the flow can be reviewed end to end and completed via
+        :func:`simulate_signing`.
+      * LIVE — the real SignNow invite. If no adapter can be built (live but
+        un-credentialed), it is a graceful no-op leaving ``not_sent`` for a
+        retry once creds land — live is legitimately gated behind credentials.
+
+    An explicitly injected ``signnow=`` adapter always takes the real path (the
+    test / live seam), regardless of mode.
     """
     if loan.agreement_status != "not_sent":
         logger.info(
@@ -344,10 +374,35 @@ def send_agreement(
         )
         return loan
 
+    # SIMULATOR path: no injected adapter + simulator mode -> labelled simulation.
+    if signnow is None and integration_mode.is_simulator(db, _SIGNNOW_PROVIDER):
+        loan.agreement_status = "sent"
+        loan.agreement_ref = f"{SIMULATED_AGREEMENT_REF_PREFIX}{loan.id}"
+        _record_loan_event(
+            db,
+            loan,
+            LOAN_AGREEMENT_SENT_EVENT,
+            {
+                "agreement_status": "sent",
+                "agreement_ref": loan.agreement_ref,
+                "simulated": True,
+            },
+        )
+        db.commit()
+        db.refresh(loan)
+        logger.info(
+            "loan_agreement_sent_simulated",
+            loan_id=str(loan.id),
+            agreement_ref=loan.agreement_ref,
+        )
+        return loan
+
     adapter = signnow if signnow is not None else _build_signnow_adapter(db)
     if adapter is None:
+        # LIVE mode but no adapter could be built (creds absent). Live is gated
+        # behind credentials; leave ``not_sent`` for a retry once they land.
         logger.warning(
-            "loan_agreement_send_noop_provider_disabled",
+            "loan_agreement_send_noop_live_unconfigured",
             loan_id=str(loan.id),
             provider=_SIGNNOW_PROVIDER,
         )
@@ -394,6 +449,7 @@ def on_agreement_signed(
     *,
     recipient_id: Optional[str] = None,
     zumrails=None,
+    simulated: bool = False,
 ) -> PlatformLoan:
     """Handle the SignNow "signed" callback → trigger the Zumrails disbursement.
 
@@ -424,19 +480,70 @@ def on_agreement_signed(
 
     if loan.agreement_status != "signed":
         loan.agreement_status = "signed"
+        signed_after = {"agreement_status": "signed", "agreement_ref": loan.agreement_ref}
+        if simulated:
+            signed_after["simulated"] = True
         _record_loan_event(
             db,
             loan,
             LOAN_AGREEMENT_SIGNED_EVENT,
-            {"agreement_status": "signed", "agreement_ref": loan.agreement_ref},
+            signed_after,
         )
         db.commit()
         db.refresh(loan)
-        logger.info("loan_agreement_signed", loan_id=str(loan.id))
+        logger.info(
+            "loan_agreement_signed", loan_id=str(loan.id), simulated=simulated
+        )
 
     # Disbursement is its own hardened entry point so the lender/admin cockpit can
     # release a signed loan through the SAME locked, audited, idempotent path.
     return initiate_disbursement(db, loan, recipient_id=recipient_id, zumrails=zumrails)
+
+
+class ESignModeError(ValueError):
+    """A signing action was attempted in the wrong e-sign mode."""
+
+
+def simulate_signing(
+    db: Session,
+    loan: PlatformLoan,
+    *,
+    actor: Optional[str] = None,
+    zumrails=None,
+) -> PlatformLoan:
+    """Complete a SIMULATED e-signature so the loan can proceed (SIMULATOR mode).
+
+    Dave's mandate: in simulator mode the agreement dialog shows the ACTUAL loan
+    agreement with a "Simulate Signing" button that completes the signature.
+    This is that button's backend — it drives the SAME state transition the real
+    SignNow completion webhook drives (``agreement → signed`` then the disbursement
+    entry point), but is only available in simulator mode and is labelled
+    ``simulated: true`` on its events.
+
+    Guards:
+      * LIVE mode -> :class:`ESignModeError` (the real SignNow flow applies; this
+        path is disabled), surfaced by the endpoint as a 409.
+      * Idempotent — already ``signed`` returns unchanged; ``declined`` is
+        rejected. If the agreement was never "sent" (e.g. live-unconfigured left
+        it ``not_sent``) it is accepted out-of-order, mirroring the real webhook.
+
+    Disbursement follows via ``on_agreement_signed`` only if the Zumrails
+    integration is itself live-and-configured; in a fully-simulated environment
+    it is a graceful no-op, leaving the loan ``signed`` and ready.
+    """
+    if integration_mode.is_live(db, _SIGNNOW_PROVIDER):
+        raise ESignModeError(
+            "Simulate Signing is only available while SignNow is in simulator "
+            "mode. This integration is set to live — use the real SignNow "
+            "signing flow, or switch it back to simulator."
+        )
+    if loan.agreement_status == "declined":
+        raise ESignModeError(
+            "This agreement was declined and cannot be signed. Re-send it first."
+        )
+    return on_agreement_signed(
+        db, loan, recipient_id=None, zumrails=zumrails, simulated=True
+    )
 
 
 def initiate_disbursement(

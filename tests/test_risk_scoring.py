@@ -551,12 +551,12 @@ def test_alembic_history_has_a_single_head():
     assert not duplicated, f"forked alembic chain — shared down_revision(s): {duplicated}"
 
     heads = [r for r in revisions if r not in set(parents)]
-    # The head moves with every merge. 075_write_off_permission was the tip;
-    # 076_rejected_status (the declined->rejected rename) now chains onto 075.
+    # The head moves with every merge. 076_rejected_status was the tip;
+    # 077_integration_mode (the Simulator/Live mode column) now chains onto 076.
     # Whoever adds the next migration updates this line — that edit is the
     # point, because it forces the author to look at the chain.
-    assert heads == ["076_rejected_status"], (
-        f"expected a single head at 076, got {heads}"
+    assert heads == ["077_integration_mode"], (
+        f"expected a single head at 077, got {heads}"
     )
 
 

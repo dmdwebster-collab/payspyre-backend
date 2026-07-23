@@ -30,9 +30,26 @@ class IntegrationSettingsUpsert(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
     secrets: dict[str, Any] = Field(default_factory=dict)
     enabled: bool = False
+    # SIMULATOR / LIVE. Omitted -> keep the existing row's mode (else simulator).
+    # Switching to "live" requires the provider's credentials to be present or
+    # the write is rejected 400.
+    mode: Optional[str] = Field(
+        default=None,
+        description="Integration mode: 'simulator' or 'live'. Omit to keep the current mode.",
+    )
 
     class Config:
         from_attributes = True
+
+
+class IntegrationModeUpdate(BaseModel):
+    """Request body for PUT /integration-settings/{provider}/mode.
+
+    The focused Simulator/Live toggle — flips the mode without touching config or
+    secrets. Switching to 'live' requires stored credentials or returns 400.
+    """
+
+    mode: str = Field(description="'simulator' or 'live'.")
 
 
 class IntegrationSettingsRead(BaseModel):
@@ -43,6 +60,13 @@ class IntegrationSettingsRead(BaseModel):
     """
 
     provider: str
+    # SIMULATOR / LIVE — the first-class integration mode the UI toggle binds to.
+    mode: str = "simulator"
+    # Whether the Live position is selectable yet (all required creds present).
+    can_enable_live: bool = True
+    # Which required secret keys are still missing for Live (labels the "why not"
+    # when can_enable_live is false). Empty when live is available.
+    missing_live_credentials: list[str] = Field(default_factory=list)
     # Readable BEHAVIOUR config. For flinks/equifax this is the typed shape from
     # app.schemas.integration_config with defaults resolved, so the admin UI
     # renders every knob even on a row saved before the schema landed.
