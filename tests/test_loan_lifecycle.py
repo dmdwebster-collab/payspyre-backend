@@ -196,15 +196,50 @@ def test_send_agreement_idempotent_when_already_sent():
     assert db.commits == 0
 
 
-def test_send_agreement_noop_when_provider_disabled():
+def test_send_agreement_simulates_when_no_adapter_and_simulator_mode():
+    # Dave's Integration SIMULATOR mandate: with no adapter injected and the
+    # default (simulator) mode, send is NOT a no-op — it really transitions the
+    # agreement to "sent" with a clearly-labelled simulated ref.
     loan = _Loan()
-    db = _FakeSession()
-    # No adapter injected and _build_signnow_adapter returns None (no row).
+    db = _FakeSession(query_results={"first": None})  # no signnow row -> simulator
     out = loan_lifecycle.send_agreement(db, loan)
 
-    assert out.agreement_status == "not_sent"
-    assert out.agreement_ref is None
-    assert db.commits == 0
+    assert out.agreement_status == "sent"
+    assert out.agreement_ref == f"{loan_lifecycle.SIMULATED_AGREEMENT_REF_PREFIX}{loan.id}"
+    assert db.commits == 1
+    # The recorded event is labelled simulated.
+    sent_events = [
+        e for e in db.added
+        if getattr(e, "event_type", None) == loan_lifecycle.LOAN_AGREEMENT_SENT_EVENT
+    ]
+    assert sent_events and sent_events[0].payload["after"]["simulated"] is True
+
+
+def test_simulate_signing_completes_signature_in_simulator_mode():
+    # The "Simulate Signing" button backend: a simulated signature really moves
+    # the agreement to "signed" (so the loan can proceed to activation).
+    loan = _Loan(agreement_status="sent")
+    loan.agreement_ref = f"{loan_lifecycle.SIMULATED_AGREEMENT_REF_PREFIX}{loan.id}"
+    db = _FakeSession(query_results={"first": None})  # simulator; no zumrails row
+
+    out = loan_lifecycle.simulate_signing(db, loan)
+
+    assert out.agreement_status == "signed"
+    # Disbursement stays not_started (Zumrails also simulated / unconfigured):
+    # signing completed without any live money movement.
+    assert out.disbursement_status == "not_started"
+    signed_events = [
+        e for e in db.added
+        if getattr(e, "event_type", None) == loan_lifecycle.LOAN_AGREEMENT_SIGNED_EVENT
+    ]
+    assert signed_events and signed_events[0].payload["after"]["simulated"] is True
+
+
+def test_simulate_signing_idempotent_when_already_signed():
+    loan = _Loan(agreement_status="signed")
+    db = _FakeSession(query_results={"first": None})
+    out = loan_lifecycle.simulate_signing(db, loan)
+    assert out.agreement_status == "signed"
 
 
 # ===========================================================================

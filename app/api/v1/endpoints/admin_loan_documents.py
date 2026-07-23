@@ -26,7 +26,7 @@ from app.models.platform.document_template import (
     PlatformLoanDocument,
 )
 from app.models.platform.loan import PlatformLoan
-from app.services import document_engine, loan_lifecycle
+from app.services import document_engine, integration_mode, loan_lifecycle
 from app.services.document_engine import DocumentEngineError
 
 router = APIRouter(dependencies=[Depends(require_roles("admin", "staff"))])
@@ -62,6 +62,19 @@ class SendForSignatureResponse(BaseModel):
     loan_id: UUID
     agreement_status: str
     agreement_ref: Optional[str] = None
+    # SIMULATOR / LIVE — so the UI labels a simulated send honestly and shows the
+    # "Simulate Signing" control only in simulator mode.
+    mode: str = "simulator"
+    simulated: bool = False
+
+
+class SimulateSigningResponse(BaseModel):
+    loan_id: UUID
+    agreement_status: str
+    agreement_ref: Optional[str] = None
+    disbursement_status: str
+    mode: str = "simulator"
+    simulated: bool = True
 
 
 def _get_loan(db: Session, loan_id: UUID) -> PlatformLoan:
@@ -183,18 +196,55 @@ def send_for_signature(
     loan_id: UUID,
     db: Session = Depends(get_db),
 ) -> SendForSignatureResponse:
-    """Send the loan agreement into the existing SignNow e-sign flow.
+    """Send the loan agreement into the e-sign flow.
 
     Delegates to the hardened ``loan_lifecycle.send_agreement`` entry point
-    (forward-only, idempotent). While SignNow creds are absent this is a
-    graceful no-op — ``agreement_status`` stays ``not_sent`` — which is the
-    expected simulator/test-mode behavior; flipping to live is a credential
-    change, not a build.
+    (forward-only, idempotent).
+
+    MODE-AWARE (Dave's Integration SIMULATOR mandate): in SIMULATOR mode this
+    really transitions the agreement to ``sent`` (awaiting signature) with a
+    labelled simulated ref, so the flow can be reviewed and then completed via
+    ``simulate-signing``. In LIVE mode it fires the real SignNow invite (a
+    graceful no-op if creds are absent — live is gated behind credentials).
     """
     loan = _get_loan(db, loan_id)
     loan = loan_lifecycle.send_agreement(db, loan)
+    mode = integration_mode.resolve_mode(db, "signnow")
     return SendForSignatureResponse(
         loan_id=loan.id,
         agreement_status=loan.agreement_status,
         agreement_ref=loan.agreement_ref,
+        mode=mode,
+        simulated=bool(
+            loan.agreement_ref
+            and loan.agreement_ref.startswith(loan_lifecycle.SIMULATED_AGREEMENT_REF_PREFIX)
+        ),
+    )
+
+
+@router.post("/{loan_id}/documents/simulate-signing", response_model=SimulateSigningResponse)
+def simulate_signing(
+    loan_id: UUID,
+    db: Session = Depends(get_db),
+) -> SimulateSigningResponse:
+    """Complete a SIMULATED e-signature (the "Simulate Signing" button backend).
+
+    Simulator mode only — drives the SAME state transition the real SignNow
+    completion webhook drives (``agreement → signed`` then the disbursement
+    entry point) so the loan can proceed. Rejected 409 when SignNow is in LIVE
+    mode (the real signing flow applies there). The result is labelled
+    ``simulated: true``.
+    """
+    loan = _get_loan(db, loan_id)
+    try:
+        loan = loan_lifecycle.simulate_signing(db, loan)
+    except loan_lifecycle.ESignModeError as exc:
+        raise HTTPException(status_code=http_status.HTTP_409_CONFLICT, detail=str(exc))
+    return SimulateSigningResponse(
+        loan_id=loan.id,
+        agreement_status=loan.agreement_status,
+        agreement_ref=loan.agreement_ref,
+        disbursement_status=loan.disbursement_status,
+        mode=integration_mode.resolve_mode(db, "signnow"),
+        simulated=True,
     )

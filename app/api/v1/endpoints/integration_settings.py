@@ -23,6 +23,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.api.schemas.integration_settings import (
+    IntegrationModeUpdate,
     IntegrationSettingsRead,
     IntegrationSettingsUpsert,
 )
@@ -145,6 +146,39 @@ async def upsert_integration_settings(
             secrets=data.secrets,
             enabled=data.enabled,
             updated_by=updated_by,
+            mode=data.mode,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
+    return service.redact(setting)
+
+
+@router.put(
+    "/{provider}/mode",
+    response_model=IntegrationSettingsRead,
+    summary="Toggle a provider's Simulator/Live mode",
+    description=(
+        "Admin-only. Flips ONLY the Simulator/Live mode, leaving config and "
+        "secrets untouched. Switching to 'live' requires the provider's stored "
+        "credentials to be present — otherwise the request is rejected 400 with "
+        "the list of missing keys. Every change is audited to platform_events. "
+        "Simulator is the safe default: an integration in simulator mode returns "
+        "clearly-labelled simulated results, never a live vendor call."
+    ),
+    dependencies=[Depends(require_roles("admin"))],
+)
+async def set_integration_mode(
+    provider: str,
+    data: IntegrationModeUpdate,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    updated_by = getattr(user, "id", None)
+    try:
+        setting = service.set_mode(
+            db, provider=provider, mode=data.mode, updated_by=updated_by
         )
     except ValueError as exc:
         raise HTTPException(

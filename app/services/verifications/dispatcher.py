@@ -53,10 +53,10 @@ class VerificationDispatcher:
         from app.services import integration_behaviour
 
         self._flinks_behaviour = integration_behaviour.resolve_flinks(db)
-        self._flinks_test_mode = (
-            self._flinks_behaviour.has_row
-            and bool(self._flinks_behaviour.config.test_mode)
-        )
+        # Authoritative source is now the unified per-integration ``mode``
+        # (subsumes #207's ``test_mode``). ``flinks_forces_simulator`` delegates
+        # to ``integration_mode.forces_simulator``.
+        self._flinks_test_mode = integration_behaviour.flinks_forces_simulator(db)
         # Mock is always constructed — it's the flag-off path AND the bureau path.
         self._mock = MockVerificationDispatcher()
         if self._use_real:

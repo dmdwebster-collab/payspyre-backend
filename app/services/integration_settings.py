@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session
 
 from app.core.secret_crypto import decrypt_secrets, encrypt_secrets
 from app.models.platform.integration_settings import PlatformIntegrationSettings
+from app.services import integration_mode
 from app.schemas.integration_config import (
     SECRET_KEYS,
     IntegrationConfigError,
@@ -47,8 +48,18 @@ def redact(setting: PlatformIntegrationSettings) -> dict[str, Any]:
     chokepoint that guarantees credential values never reach API responses.
     """
     secrets = setting.secrets or {}
+    mode = integration_mode.normalize_mode(getattr(setting, "mode", None))
+    missing_live = integration_mode.missing_live_credentials(
+        None, setting.provider, secrets=secrets
+    )
     return {
         "provider": setting.provider,
+        # SIMULATOR / LIVE — the first-class integration mode. The UI renders a
+        # toggle bound to this; ``can_enable_live`` / ``missing_live_credentials``
+        # tell it whether the Live position is selectable yet and, if not, why.
+        "mode": mode,
+        "can_enable_live": not missing_live,
+        "missing_live_credentials": missing_live,
         # Behaviour config is READABLE and, for providers with a typed schema
         # (Flinks / Equifax), resolved against its defaults so the admin UI sees
         # every knob even on a row saved before the schema existed. Credentials
@@ -99,6 +110,20 @@ def list_all(db: Session) -> list[PlatformIntegrationSettings]:
     return [_decrypt_row(row) for row in rows]
 
 
+def _mirror_flinks_test_mode(provider: str, config: dict[str, Any], mode: str) -> dict[str, Any]:
+    """Keep #207's Flinks ``config.test_mode`` in lock-step with ``mode``.
+
+    ``mode`` is authoritative; ``test_mode`` is the legacy knob it subsumed. We
+    mirror so any lingering reader of ``test_mode`` sees the same truth as a
+    reader of ``mode`` (simulator -> test_mode True, live -> test_mode False).
+    """
+    if provider != "flinks":
+        return config
+    config = dict(config or {})
+    config["test_mode"] = mode == integration_mode.SIMULATOR
+    return config
+
+
 def upsert(
     db: Session,
     provider: str,
@@ -106,16 +131,42 @@ def upsert(
     secrets: Optional[dict[str, Any]] = None,
     enabled: bool = False,
     updated_by: Optional[UUID] = None,
+    mode: Optional[str] = None,
 ) -> PlatformIntegrationSettings:
     """Create or replace the settings row for a provider.
 
-    On update, config/secrets/enabled are fully replaced with the supplied
+    On update, config/secrets/enabled/mode are fully replaced with the supplied
     values (mirrors a PUT). `config` and `secrets` default to empty dicts.
+    ``mode`` defaults to the existing row's mode, else ``simulator``.
+
+    Switching to ``live`` requires the provider's credentials to be present (in
+    the supplied ``secrets``); this raises ``ValueError`` otherwise so the API
+    returns a clear 400 rather than silently enabling an un-credentialed live
+    integration. A mode CHANGE is audited to ``platform_events``.
 
     Supplied `secrets` are envelope-encrypted before persistence (no-op
     pass-through when no key is configured). The returned row carries the
     DECRYPTED secrets so internal callers see the values they just wrote.
     """
+    existing = get(db, provider)
+    prior_mode = (
+        integration_mode.normalize_mode(getattr(existing, "mode", None))
+        if existing is not None
+        else integration_mode.DEFAULT_MODE
+    )
+    # Resolve the target mode: explicit value wins, else keep the prior mode.
+    try:
+        new_mode = integration_mode.normalize_mode(mode) if mode is not None else prior_mode
+    except integration_mode.IntegrationModeError as exc:
+        raise ValueError(str(exc)) from exc
+
+    # Live requires credentials — validate against the secrets being written.
+    if new_mode == integration_mode.LIVE:
+        try:
+            integration_mode.assert_live_allowed(db, provider, secrets=secrets or {})
+        except integration_mode.IntegrationModeError as exc:
+            raise ValueError(str(exc)) from exc
+
     # Providers with a typed behaviour schema (Flinks / Equifax) are validated
     # and stored with defaults materialised; every other provider keeps the
     # free-form dict exactly as before.
@@ -123,16 +174,18 @@ def upsert(
         config = validate_provider_config(provider, config)
     except IntegrationConfigError as exc:
         raise ValueError(str(exc)) from exc
+    config = _mirror_flinks_test_mode(provider, config, new_mode)
     # Encrypt the plaintext credential values before they ever touch the DB.
     encrypted_secrets = encrypt_secrets(secrets or {})
 
-    setting = get(db, provider)
+    setting = existing
     if setting is None:
         setting = PlatformIntegrationSettings(
             provider=provider,
             config=config,
             secrets=encrypted_secrets,
             enabled=enabled,
+            mode=new_mode,
             updated_by=updated_by,
         )
         db.add(setting)
@@ -140,7 +193,17 @@ def upsert(
         setting.config = config
         setting.secrets = encrypted_secrets
         setting.enabled = enabled
+        setting.mode = new_mode
         setting.updated_by = updated_by
+
+    if new_mode != prior_mode:
+        integration_mode.record_mode_change(
+            db,
+            provider,
+            old_mode=prior_mode,
+            new_mode=new_mode,
+            actor=str(updated_by) if updated_by else None,
+        )
 
     try:
         db.commit()
@@ -151,4 +214,76 @@ def upsert(
         ) from exc
     db.refresh(setting)
     # Return decrypted secrets to the caller (refresh reloaded ciphertext).
+    return _decrypt_row(setting)
+
+
+def set_mode(
+    db: Session,
+    provider: str,
+    mode: str,
+    updated_by: Optional[UUID] = None,
+) -> PlatformIntegrationSettings:
+    """Flip ONLY a provider's Simulator/Live mode, leaving config/secrets intact.
+
+    The focused toggle behind ``PUT /integration-settings/{provider}/mode``.
+    Reuses the stored credentials to validate a switch to live and audits the
+    change. Creating a brand-new row this way is allowed (defaults elsewhere);
+    switching a not-yet-configured provider to live fails the credential check
+    with a clear error, exactly as Dave requires.
+    """
+    try:
+        target = integration_mode.normalize_mode(mode)
+    except integration_mode.IntegrationModeError as exc:
+        raise ValueError(str(exc)) from exc
+
+    existing = get(db, provider)
+    prior_mode = (
+        integration_mode.normalize_mode(getattr(existing, "mode", None))
+        if existing is not None
+        else integration_mode.DEFAULT_MODE
+    )
+    stored_secrets = dict(getattr(existing, "secrets", None) or {}) if existing else {}
+
+    if target == integration_mode.LIVE:
+        try:
+            integration_mode.assert_live_allowed(db, provider, secrets=stored_secrets)
+        except integration_mode.IntegrationModeError as exc:
+            raise ValueError(str(exc)) from exc
+
+    if existing is None:
+        setting = PlatformIntegrationSettings(
+            provider=provider,
+            config=_mirror_flinks_test_mode(provider, {}, target),
+            secrets={},
+            enabled=False,
+            mode=target,
+            updated_by=updated_by,
+        )
+        db.add(setting)
+    else:
+        existing.mode = target
+        existing.config = _mirror_flinks_test_mode(provider, existing.config or {}, target)
+        existing.updated_by = updated_by
+        # Re-encrypt is unnecessary — secrets untouched; but `get` decrypted them
+        # in place, so re-encrypt to avoid persisting plaintext on commit.
+        existing.secrets = encrypt_secrets(stored_secrets)
+        setting = existing
+
+    if target != prior_mode:
+        integration_mode.record_mode_change(
+            db,
+            provider,
+            old_mode=prior_mode,
+            new_mode=target,
+            actor=str(updated_by) if updated_by else None,
+        )
+
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise ValueError(
+            f"Could not update mode for provider '{provider}'"
+        ) from exc
+    db.refresh(setting)
     return _decrypt_row(setting)
