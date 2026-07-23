@@ -289,4 +289,4 @@ def mock_complete_application(
 
 
 # Terminal states a mock-complete must not reopen (mirrors the orchestrator).
-_TERMINAL = ("approved", "declined", "withdrawn", "expired")
+_TERMINAL = ("approved", "rejected", "withdrawn", "expired")

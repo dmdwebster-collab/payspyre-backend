@@ -98,13 +98,33 @@ class TestDecision:
         assert body["status"] == "approved"
         assert body["loan_id"]  # a loan was booked
 
-    def test_decline_sets_status(self, app_client, db_session):
+    def test_reject_sets_status(self, app_client, db_session):
         app, client = app_client
         application = _seed_application(db_session)
         r = client.post(f"{_BASE}/applications/{application.id}/decision",
                         json={"outcome": "declined", "reason_codes": ["insufficient_income"]})
         assert r.status_code == 200, r.text
-        assert r.json()["status"] == "declined"
+        # The decision OUTCOME token stays "declined"; the persisted STATUS is now "rejected".
+        assert r.json()["status"] == "rejected"
+
+    def test_reject_does_not_fire_a_decision_notice(self, app_client, db_session):
+        """Behaviour change (Dave 2026-07-22): a rejection NO LONGER auto-sends a
+        US-style adverse-action notice. Reasons are still captured on the decision;
+        no notice event is written."""
+        app, client = app_client
+        application = _seed_application(db_session)
+        r = client.post(f"{_BASE}/applications/{application.id}/decision",
+                        json={"outcome": "declined", "reason_codes": ["insufficient_income"]})
+        assert r.status_code == 200, r.text
+        db_session.refresh(application)
+        assert application.status == "rejected"
+        # reason capture is preserved on the decision snapshot
+        assert application.decision["reasons"] == ["insufficient_income"]
+        # no decision-notice event fired
+        notice = db_session.query(PlatformEvent).filter(
+            PlatformEvent.event_type == "decision_notice_sent",
+            PlatformEvent.application_id == application.id).first()
+        assert notice is None
 
     def test_already_decided_409_without_override(self, app_client, db_session):
         app, client = app_client
@@ -250,7 +270,7 @@ class TestAuditFixes:
     def test_override_declined_app_without_loan_still_works(self, app_client, db_session):
         """The guard must only fire for APPROVED-with-loan, not block normal overrides."""
         app, client = app_client
-        application = _seed_application(db_session, status="declined")
+        application = _seed_application(db_session, status="rejected")
         r = client.post(f"{_BASE}/applications/{application.id}/decision",
                         json={"outcome": "refer", "override": True})
         assert r.status_code == 200, r.text
@@ -327,7 +347,7 @@ class TestMoneyEventDelegation:
 
 class TestCancelAction:
     """WS-E: staff Cancel — a NON-CREDIT closure (reason-coded, audited, no
-    adverse-action notice)."""
+    credit-decision notice)."""
 
     def test_cancel_moves_to_withdrawn_and_audits(self, app_client, db_session):
         app, client = app_client
@@ -344,9 +364,9 @@ class TestCancelAction:
         assert ev is not None
         assert ev.payload["reason_code"] == "customer_request"
         assert ev.payload["borrower_facing_text"]  # snapshot for the notice
-        # NON-CREDIT closure: no adverse-action notice event for this application.
+        # NON-CREDIT closure: no credit-decision notice event for this application.
         aa = db_session.query(PlatformEvent).filter(
-            PlatformEvent.event_type == "adverse_action_notice_sent",
+            PlatformEvent.event_type == "decision_notice_sent",
             PlatformEvent.application_id == application.id).first()
         assert aa is None
 

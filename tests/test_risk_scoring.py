@@ -448,8 +448,10 @@ def test_decision_path_outcomes_unchanged(
         )
     )
     assert decision.decision == expected, label
+    # The decision OUTCOME token is unchanged ("declined"); only the STATUS it
+    # maps to was renamed declined->rejected (Dave 2026-07-22, migration 076).
     assert decision.next_state == {
-        "approved": "approved", "declined": "declined", "manual_review": "under_review",
+        "approved": "approved", "declined": "rejected", "manual_review": "under_review",
     }[expected]
 
 
@@ -549,13 +551,12 @@ def test_alembic_history_has_a_single_head():
     assert not duplicated, f"forked alembic chain — shared down_revision(s): {duplicated}"
 
     heads = [r for r in revisions if r not in set(parents)]
-    # The head moves with every merge. 073 was the tip when this test was
-    # written (PR #204); 074_staff_comments (PR #205) re-chained onto 073, and
-    # 075_write_off_permission (the admin-origination-gaps PR) now chains onto
-    # 074. Whoever adds the next migration updates this line — that edit is the
+    # The head moves with every merge. 075_write_off_permission was the tip;
+    # 076_rejected_status (the declined->rejected rename) now chains onto 075.
+    # Whoever adds the next migration updates this line — that edit is the
     # point, because it forces the author to look at the chain.
-    assert heads == ["075_write_off_permission"], (
-        f"expected a single head at 075, got {heads}"
+    assert heads == ["076_rejected_status"], (
+        f"expected a single head at 076, got {heads}"
     )
 
 

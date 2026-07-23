@@ -43,7 +43,7 @@ from app.services.loan_quote import (
 logger = get_logger(__name__)
 
 # Application statuses from which an underwriter may create offers. Terminal
-# closures (declined/withdrawn/expired) and the pre-submission states are out;
+# closures (rejected/withdrawn/expired) and the pre-submission states are out;
 # "approved" is allowed so an underwriter can extend an additional offer while
 # earlier ones are still open (the cap still applies).
 OFFERABLE_STATUSES = ("verifying", "underwriting", "under_review", "approved")

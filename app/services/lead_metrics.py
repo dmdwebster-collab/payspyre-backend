@@ -97,7 +97,12 @@ def apply_decision(db: Session, patient: PlatformPatient, application_status: st
     refresh_from_verifications(db, patient)
     if application_status == "approved":
         patient.lead_state = "approved"
-    elif application_status == "declined":
+    elif application_status == "rejected":
+        # ``lead_state`` is a SEPARATE marketplace enum (``platform_patients``);
+        # its terminal value stays ``declined`` (not renamed by migration 076,
+        # which only touched ``platform_application_status``). FLAGGED for Dave:
+        # rename the marketplace lead_state enum too, or leave it as internal
+        # marketplace vocabulary?
         patient.lead_state = "declined"
     else:
         return

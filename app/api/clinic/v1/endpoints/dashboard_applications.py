@@ -45,7 +45,7 @@ Granularity = Literal["day", "week", "month"]
 
 # Full 9-value platform application status vocab (spec §2 gotcha #3).
 # We map each raw status into ONE performance bucket. ``approved`` and
-# ``declined`` are terminal decisions; the four in-flight review states collapse
+# ``rejected`` are terminal decisions; the four in-flight review states collapse
 # to ``in_review``; ``started`` stands alone; ``withdrawn``/``expired`` are dead
 # and counted in neither a positive bucket nor in_review (they still count toward
 # ``total``).
@@ -78,7 +78,7 @@ class AppTimeseriesPoint(BaseModel):
     bucket: str  # ISO date at bucket start
     started: int = 0
     approved: int = 0
-    declined: int = 0
+    rejected: int = 0
     in_review: int = 0
     requested_amount_cents: int = 0
 
@@ -178,20 +178,20 @@ def _bucket_start(dt: datetime, granularity: Granularity) -> datetime:
 def _outcome_bucket(status: str, decision_by: Optional[str] = None) -> Optional[str]:
     """Map a raw 9-value platform status to a timeseries outcome key, or None.
 
-    Returns one of ``started | approved | declined | in_review`` — or ``None`` for
+    Returns one of ``started | approved | rejected | in_review`` — or ``None`` for
     dead states (``withdrawn``/``expired``) which contribute amount but no
     outcome count. Unknown statuses also return ``None`` (forward-compatible: a
     new enum value never 500s the chart).
 
-    WS-I silent escalation (10__Vendor_Access.md): an AUTO decline pending human
-    review must not be shown to the vendor as a final decline anywhere on the
+    WS-I silent escalation (10__Vendor_Access.md): an AUTO rejection pending human
+    review must not be shown to the vendor as a final rejection anywhere on the
     vendor surface — it buckets as ``in_review`` until a human confirms
     (``decision_by`` becomes the human actor).
     """
     if status in _APPROVED_STATUSES:
         return "approved"
-    if status == "declined":
-        return "in_review" if decision_by == "auto" else "declined"
+    if status == "rejected":
+        return "in_review" if decision_by == "auto" else "rejected"
     if status == "started":
         return "started"
     if status in _IN_REVIEW_STATUSES:
@@ -214,7 +214,7 @@ def build_timeseries(
         key = _bucket_start(row.created_at, granularity)
         point = buckets.setdefault(
             key,
-            {"started": 0, "approved": 0, "declined": 0, "in_review": 0,
+            {"started": 0, "approved": 0, "rejected": 0, "in_review": 0,
              "requested_amount_cents": 0},
         )
         point["requested_amount_cents"] += row.requested_amount_cents or 0
@@ -249,11 +249,11 @@ def applications_block(
     Returns a dict with EXACTLY these keys:
         total                       — apps created in window (count)
         approved                    — created-in-window with status 'approved'
-        declined                    — created-in-window with status 'declined'
+        rejected                    — created-in-window with status 'rejected'
         in_review                   — created-in-window in {verifying, pre_qualified,
                                       awaiting_hard_pull, under_review}
         started                     — created-in-window with status 'started'
-        approval_rate               — approved/(approved+declined) over apps whose
+        approval_rate               — approved/(approved+rejected) over apps whose
                                       DECISION_AT ∈ window (spec §4); None if no
                                       decisions in window
         avg_requested_amount_cents  — mean requested_amount_cents over created-in-
@@ -268,19 +268,19 @@ def applications_block(
 
     total = len(created)
     approved = 0
-    declined = 0
+    rejected = 0
     in_review = 0
     started = 0
     total_amount = 0
     for row in created:
         total_amount += row.requested_amount_cents or 0
-        # WS-I silent escalation: an auto-decline pending human review buckets
-        # as in_review on the vendor surface, never as a final decline.
+        # WS-I silent escalation: an auto-rejection pending human review buckets
+        # as in_review on the vendor surface, never as a final rejection.
         outcome = _outcome_bucket(row.status, getattr(row, "decision_by", None))
         if outcome == "approved":
             approved += 1
-        elif outcome == "declined":
-            declined += 1
+        elif outcome == "rejected":
+            rejected += 1
         elif outcome == "started":
             started += 1
         elif outcome == "in_review":
@@ -289,23 +289,23 @@ def applications_block(
 
     avg_amount = total_amount // total if total else 0
 
-    # approval_rate: over apps DECIDED in the window (spec §4). Auto-declines
+    # approval_rate: over apps DECIDED in the window (spec §4). Auto-rejections
     # pending human review are NOT vendor-visible as decided (WS-I), so they are
     # excluded from the denominator until a human confirms.
     decided = query_decided_in_window(db, vendor_id, frm, to)
     dec_approved = sum(1 for r in decided if r.status == "approved")
-    dec_declined = sum(
+    dec_rejected = sum(
         1
         for r in decided
-        if r.status == "declined" and getattr(r, "decision_by", None) != "auto"
+        if r.status == "rejected" and getattr(r, "decision_by", None) != "auto"
     )
-    denom = dec_approved + dec_declined
+    denom = dec_approved + dec_rejected
     approval_rate = (dec_approved / denom) if denom else None
 
     return {
         "total": total,
         "approved": approved,
-        "declined": declined,
+        "rejected": rejected,
         "in_review": in_review,
         "started": started,
         "approval_rate": approval_rate,

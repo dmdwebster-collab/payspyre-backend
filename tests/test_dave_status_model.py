@@ -167,7 +167,7 @@ class TestLegacyMapping:
         "underwriting": CanonicalStatus.CREDIT_UNDERWRITING,
         "under_review": CanonicalStatus.CREDIT_UNDERWRITING,
         "approved": CanonicalStatus.APPROVED,
-        "declined": CanonicalStatus.DECLINED,
+        "rejected": CanonicalStatus.REJECTED,
         "withdrawn": CanonicalStatus.CANCELLED,
         "expired": CanonicalStatus.EXPIRED,
     }
@@ -186,9 +186,9 @@ class TestLegacyMapping:
         assert not unmapped, f"unmapped application statuses: {sorted(unmapped)}"
 
     def test_off_model_terminals_are_preserved_not_folded(self):
-        """declined / withdrawn(cancelled) / expired have no slot in Dave's
+        """rejected / withdrawn(cancelled) / expired have no slot in Dave's
         forward flow and must NOT be collapsed into one another."""
-        assert len({sm.canonical_for(s) for s in ("declined", "withdrawn", "expired")}) == 3
+        assert len({sm.canonical_for(s) for s in ("rejected", "withdrawn", "expired")}) == 3
         for canonical in sm.OFF_MODEL_TERMINALS:
             assert sm.STATUS_REGISTRY[canonical].is_terminal
             assert sm.STATUS_REGISTRY[canonical].note  # reasoning is documented
@@ -218,7 +218,7 @@ class TestLegacyMapping:
         assert {
             "started", "origination", "verifying", "pre_qualified",
             "awaiting_hard_pull", "underwriting", "under_review", "approved",
-            "declined", "withdrawn", "expired",
+            "rejected", "withdrawn", "expired",
         }.issubset(enum_values)
 
 
@@ -229,7 +229,7 @@ class TestActionLookup:
         assert not sm.is_action_permitted("approved", Action.SUBMIT_FOR_CREDIT_UNDERWRITING)
 
     def test_terminal_lookup(self):
-        assert sm.is_terminal("declined")
+        assert sm.is_terminal("rejected")
         assert sm.is_terminal("written_off")
         assert not sm.is_terminal("active")
         assert not sm.is_terminal("started")
@@ -268,7 +268,7 @@ class TestVerificationGates:
             mark_verification_gate(app, "not_a_gate")
         assert app.status == "origination"
 
-    @pytest.mark.parametrize("terminal", ["approved", "declined", "withdrawn", "expired",
+    @pytest.mark.parametrize("terminal", ["approved", "rejected", "withdrawn", "expired",
                                           "active", "repaid", "written_off"])
     def test_gates_refuse_terminal_files(self, terminal):
         app = _app(terminal)
@@ -299,7 +299,7 @@ class TestOfferAndAgreement:
             mark_agreement_signed(app)
 
     def test_mark_agreement_signature_refuses_terminal(self):
-        app = _app("declined")
+        app = _app("rejected")
         with pytest.raises(InvalidStateTransition):
             mark_agreement_signature(app)
 
@@ -311,7 +311,7 @@ class TestActivationAndClosure:
         assert app.status == "active"
 
     @pytest.mark.parametrize("source", ["started", "under_review", "agreement_signature",
-                                        "active", "declined"])
+                                        "active", "rejected"])
     def test_activate_only_from_approved(self, source):
         app = _app(source)
         with pytest.raises(InvalidStateTransition):
@@ -352,7 +352,7 @@ class TestReturnForReprocessing:
         assert app.status == "origination"
 
     @pytest.mark.parametrize("source", ["started", "origination", "approved",
-                                        "agreement_signature", "active", "declined"])
+                                        "agreement_signature", "active", "rejected"])
     def test_refused_where_dave_does_not_offer_it(self, source):
         app = _app(source)
         with pytest.raises(InvalidStateTransition):
@@ -367,7 +367,7 @@ class TestReturnForReprocessing:
         for engine_status, canonical in sm.LEGACY_TO_CANONICAL.items():
             offered = Action.RETURN_FOR_REPROCESSING in sm.STATUS_REGISTRY[canonical].actions
             accepted = engine_status in flow_orchestrator._RETURNABLE_STATUSES
-            if offered and canonical is not CanonicalStatus.DECLINED:
+            if offered and canonical is not CanonicalStatus.REJECTED:
                 assert accepted, f"{engine_status} offers the action but has no transition"
 
 
@@ -392,7 +392,7 @@ class TestBackwardCompatibility:
     def test_terminal_guard_still_covers_the_original_four(self):
         from app.services.flow_orchestrator import _TERMINAL_STATUSES
 
-        assert {"approved", "declined", "withdrawn", "expired"}.issubset(_TERMINAL_STATUSES)
+        assert {"approved", "rejected", "withdrawn", "expired"}.issubset(_TERMINAL_STATUSES)
         # plus the servicing terminals introduced with Dave's model
         assert "active" in _TERMINAL_STATUSES
         assert set(CLOSED_STATUSES).issubset(_TERMINAL_STATUSES)

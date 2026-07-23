@@ -18,13 +18,13 @@ from app.models.platform.loan import PlatformLoan
 
 router = APIRouter(dependencies=[Depends(require_roles("admin", "staff"))])
 
-_DECIDED = ("approved", "declined")
+_DECIDED = ("approved", "rejected")
 
 
 class ApplicationsBlock(BaseModel):
     total: int
     by_status: dict[str, int]
-    approval_rate: float | None  # approved / (approved + declined); None if no decisions
+    approval_rate: float | None  # approved / (approved + rejected); None if no decisions
 
 
 class LoanBookBlock(BaseModel):
@@ -57,8 +57,8 @@ def overview(db: Session = Depends(get_db), _user=Depends(get_current_user)):
     app_counts = _counts_by(db, PlatformCreditApplication, PlatformCreditApplication.status)
     app_total = sum(app_counts.values())
     approved = app_counts.get("approved", 0)
-    declined = app_counts.get("declined", 0)
-    approval_rate = (approved / (approved + declined)) if (approved + declined) else None
+    rejected = app_counts.get("rejected", 0)
+    approval_rate = (approved / (approved + rejected)) if (approved + rejected) else None
 
     loan_counts = _counts_by(db, PlatformLoan, PlatformLoan.status)
     loan_total = sum(loan_counts.values())

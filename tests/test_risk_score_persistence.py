@@ -118,7 +118,7 @@ def _flow_decision(decision="approved", total=160, natural=(0, 200)):
             {"type": "bureau", "method": "soft_pull", "result": "passed",
              "confidence": 1.0},
         ],
-        "next_state": {"approved": "approved", "declined": "declined",
+        "next_state": {"approved": "approved", "declined": "rejected",
                        "manual_review": "under_review"}[decision],
         "events_to_emit": [],
         "scorecard_result": {
@@ -268,7 +268,7 @@ def test_backfill_reconstructs_what_it_can_and_nulls_the_rest(db_session):
     when = datetime.now(timezone.utc) - timedelta(days=90)
     # (a) an automated decision with no scorecard payload — score is unknowable.
     plain = _application(
-        db_session, status="declined",
+        db_session, status="rejected",
         decision={"decision": "declined", "decision_reasons": ["bureau_below_minimum"]},
         decision_by="auto", decision_at=when,
     )

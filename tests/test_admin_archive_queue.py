@@ -150,7 +150,7 @@ def test_close_reasons_exposed_are_registry_driven(client):
 
 def test_pagination_total_and_window(client, db_session):
     for day in (1, 2, 3, 4, 5):
-        _application(db_session, status="declined", closed_at=_dt(day))
+        _application(db_session, status="rejected", closed_at=_dt(day))
 
     first = client.get(_BASE, params={"limit": 2, "offset": 0}).json()
     assert first["total"] >= 5
@@ -165,7 +165,7 @@ def test_pagination_total_and_window(client, db_session):
 
 
 def test_offset_beyond_total_is_empty_not_an_error(client, db_session):
-    _application(db_session, status="declined", closed_at=_dt(1))
+    _application(db_session, status="rejected", closed_at=_dt(1))
     body = client.get(_BASE, params={"limit": 10, "offset": 10_000}).json()
     assert body["records"] == []
     assert body["total"] >= 1
@@ -178,7 +178,7 @@ def test_offset_beyond_total_is_empty_not_an_error(client, db_session):
 
 def test_sort_close_date_both_directions(client, db_session):
     made = [
-        _application(db_session, status="declined", closed_at=_dt(day)).id
+        _application(db_session, status="rejected", closed_at=_dt(day)).id
         for day in (7, 9, 8)
     ]
     wanted = {str(i) for i in made}
@@ -199,8 +199,8 @@ def test_sort_close_date_both_directions(client, db_session):
 
 
 def test_sort_by_id(client, db_session):
-    _application(db_session, status="declined", closed_at=_dt(3))
-    _application(db_session, status="declined", closed_at=_dt(4))
+    _application(db_session, status="rejected", closed_at=_dt(3))
+    _application(db_session, status="rejected", closed_at=_dt(4))
     rows = client.get(_BASE, params={"sort": "id", "limit": 500}).json()["records"]
     ids = [r["record_id"] for r in rows]
     assert ids == sorted(ids, reverse=True)
@@ -219,8 +219,8 @@ def test_unknown_sort_is_422(client):
 
 def test_assignee_on_rows_and_filter(client, db_session):
     user = _user(db_session)
-    mine = _application(db_session, status="declined", closed_at=_dt(11), assignee=user)
-    theirs = _application(db_session, status="declined", closed_at=_dt(12))
+    mine = _application(db_session, status="rejected", closed_at=_dt(11), assignee=user)
+    theirs = _application(db_session, status="rejected", closed_at=_dt(12))
 
     body = client.get(_BASE, params={"assignee_id": str(user.id), "limit": 500}).json()
     ids = {r["record_id"] for r in body["records"]}

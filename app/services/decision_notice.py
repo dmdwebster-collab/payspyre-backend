@@ -1,10 +1,19 @@
-"""Notice-of-decision (declined application) service — audit §7 (launch blocker).
+"""Notice-of-decision (rejected application) service.
+
+⚠️ DORMANT (Dave 2026-07-22). This module is NOT wired into any decision path.
+The former US "adverse-action notice" auto-fire on rejection was removed — that
+is a US regulatory concept and is not applicable in Canada. The reason CAPTURE
+is untouched (it lives on the application's decision snapshot and the risk-score
+row, not here). What notice (if any) a rejected Canadian applicant receives is an
+OPEN COUNSEL/DAVE question — the builder below is preserved as a reusable seam
+but its legal wording must NOT be treated as settled. Do not re-wire it until
+Dave/counsel decide; the disclosure content has not been redesigned here.
 
 CANADA-ONLY. PaySpyre operates solely in Canada; this notice is built to the
 Canadian regime (federal + provincial), NOT US ECOA/FCRA. When a credit
-application is **declined**, the applicant is sent a notice explaining the
+application is **rejected**, the applicant may be sent a notice explaining the
 decision. This module builds + sends it as a **standalone, side-effect-only**
-module (mirrors ``loan_lifecycle``): no decisioning logic, only the post-decline
+module (mirrors ``loan_lifecycle``): no decisioning logic, only the
 notification + audit.
 
 What the notice contains:
@@ -27,12 +36,12 @@ Operational contract (mirrors the ``book_loan`` hook in
 
 * **Idempotent.** A second call for the same application short-circuits — we
   check the ``platform_events`` log for an existing
-  ``adverse_action_notice_sent`` row before sending.
+  ``decision_notice_sent`` row before sending.
 * **Defensive / never raises into the caller.** A notice-send failure (bad
   email, vendor down, missing patient) is logged and swallowed. Decisioning must
   never break because a notice could not be sent. The function returns a bool so
   a caller *can* inspect the outcome, but it never propagates an exception.
-* **No PII in the event.** The recorded ``adverse_action_notice_sent`` event
+* **No PII in the event.** The recorded ``decision_notice_sent`` event
   carries only application_id / patient_id + the (non-PII) reason codes and the
   bureau *name*. The SIN, raw bureau data, and the rendered letter body are
   NEVER written to the event log.
@@ -58,7 +67,7 @@ from app.models.platform.patient import PlatformPatient
 
 logger = get_logger(__name__)
 
-ADVERSE_ACTION_EVENT_TYPE = "adverse_action_notice_sent"
+DECISION_NOTICE_EVENT_TYPE = "decision_notice_sent"
 
 EMAIL_SUBJECT = "Important information about your PaySpyre application"
 
@@ -238,12 +247,12 @@ def build_notice_content(
 
 
 def render_notice_html(content: dict[str, Any]) -> str:
-    """Render the adverse-action notice to HTML.
+    """Render the notice of decision to HTML.
 
     Templates in this repo (``app/templates/emails/*.html``) are jinja-style
     placeholder files with no wired renderer, so we render inline here (the
     pattern ``email_service`` already uses for verification / reset mails). A
-    static ``app/templates/emails/adverse_action_notice.html`` companion ships
+    static ``app/templates/emails/decision_notice.html`` companion ships
     for reference / future jinja wiring.
     """
     reasons_html = "".join(f"<li>{r}</li>" for r in content["principal_reasons"])
@@ -369,7 +378,7 @@ def render_notice_text(content: dict[str, Any]) -> str:
 
 
 def _already_sent(db: Session, application_id: UUID | str) -> bool:
-    """True when an ``adverse_action_notice_sent`` event already exists for this
+    """True when an ``decision_notice_sent`` event already exists for this
     application (idempotency guard)."""
     row = db.execute(
         text(
@@ -380,7 +389,7 @@ def _already_sent(db: Session, application_id: UUID | str) -> bool:
             LIMIT 1
             """
         ),
-        {"etype": ADVERSE_ACTION_EVENT_TYPE, "app_id": str(application_id)},
+        {"etype": DECISION_NOTICE_EVENT_TYPE, "app_id": str(application_id)},
     ).first()
     return row is not None
 
@@ -392,7 +401,7 @@ def _record_event(
     reasons: list[str] | None,
     bureau_name: Optional[str],
 ) -> None:
-    """Append an ``adverse_action_notice_sent`` audit row. No PII: only ids, the
+    """Append an ``decision_notice_sent`` audit row. No PII: only ids, the
     (non-PII) reason codes, and the bureau name."""
     payload = {
         "v": 1,
@@ -400,13 +409,13 @@ def _record_event(
         "application_id": str(application.id),
         "patient_id": str(application.patient_id),
         "after": {
-            "notice_type": "adverse_action",
+            "notice_type": "decision_notice",
             "reason_codes": list(reasons or []),
             "bureau_disclosed": bureau_name,
         },
     }
     event = PlatformEvent(
-        event_type=ADVERSE_ACTION_EVENT_TYPE,
+        event_type=DECISION_NOTICE_EVENT_TYPE,
         actor="system",
         patient_id=application.patient_id,
         application_id=application.id,
@@ -419,7 +428,7 @@ def _record_event(
 def _record_failure_event(
     db: Session, *, application: Any, reasons: list[str] | None
 ) -> None:
-    """Append an ``adverse_action_notice_failed`` audit row so an undelivered notice
+    """Append an ``decision_notice_failed`` audit row so an undelivered notice
     is provable + actionable (compliance: we must show we attempted to notify). No PII."""
     payload = {
         "v": 1,
@@ -427,13 +436,13 @@ def _record_failure_event(
         "application_id": str(application.id),
         "patient_id": str(application.patient_id),
         "after": {
-            "notice_type": "adverse_action",
+            "notice_type": "decision_notice",
             "delivered": False,
             "reason_codes": list(reasons or []),
         },
     }
     event = PlatformEvent(
-        event_type=ADVERSE_ACTION_FAILED_EVENT_TYPE,
+        event_type=DECISION_NOTICE_FAILED_EVENT_TYPE,
         actor="system",
         patient_id=application.patient_id,
         application_id=application.id,
@@ -448,7 +457,7 @@ def _record_failure_event(
 # ---------------------------------------------------------------------------
 
 
-ADVERSE_ACTION_FAILED_EVENT_TYPE = "adverse_action_notice_failed"
+DECISION_NOTICE_FAILED_EVENT_TYPE = "decision_notice_failed"
 
 
 def _send_via_sendgrid(
@@ -471,13 +480,13 @@ def _send_via_sendgrid(
 
 
 class _EmailServiceDispatcher:
-    """Default dispatcher for the adverse-action notice.
+    """Default dispatcher for the notice of decision.
 
     Routes through the CONFIGURED email provider (``EMAIL_PROVIDER``) — SendGrid for
-    the business, Resend as fallback — so the legally-required decline notice
+    the business, Resend as fallback — so the notice of decision
     actually delivers. The previous implementation only ever hit the Resend
     singleton, which no-ops silently when ``RESEND_API_KEY`` is empty (it always is,
-    since the business uses SendGrid) — so declined applicants got no notice.
+    since the business uses SendGrid) — so rejected applicants got no notice.
 
     Returns True only when the provider accepted the message; the caller treats a
     falsy result as "not sent" and records a failure event rather than success."""
@@ -508,13 +517,13 @@ class _EmailServiceDispatcher:
         )
 
 
-def send_adverse_action_notice(
+def send_decision_notice(
     db: Session,
     application: Any,
     reasons: list[str] | None,
     dispatcher: Any = None,
 ) -> bool:
-    """Build + send the adverse-action notice for a declined application.
+    """Build + send the notice of decision for a rejected application.
 
     Idempotent, defensive, audit-logged. Returns True when a notice was sent on
     this call, False when it was skipped (already sent / no email / send failed).
@@ -531,7 +540,7 @@ def send_adverse_action_notice(
 
         if _already_sent(db, application_id):
             logger.info(
-                "adverse_action_notice_skipped_already_sent",
+                "decision_notice_skipped_already_sent",
                 application_id=str(application_id),
             )
             return False
@@ -544,7 +553,7 @@ def send_adverse_action_notice(
         email = getattr(patient, "email", None) if patient else None
         if not email:
             logger.warning(
-                "adverse_action_notice_no_email",
+                "decision_notice_no_email",
                 application_id=str(application_id),
                 patient_id=str(application.patient_id),
             )
@@ -581,7 +590,7 @@ def send_adverse_action_notice(
         )
         if not sent:
             logger.error(
-                "adverse_action_notice_not_delivered",
+                "decision_notice_not_delivered",
                 application_id=str(application_id),
                 patient_id=str(application.patient_id),
             )
@@ -595,7 +604,7 @@ def send_adverse_action_notice(
             bureau_name=content["bureau"].get("name"),
         )
         logger.info(
-            "adverse_action_notice_sent",
+            "decision_notice_sent",
             application_id=str(application_id),
             patient_id=str(application.patient_id),
             bureau_disclosed=content["bureau"].get("name"),
@@ -603,7 +612,7 @@ def send_adverse_action_notice(
         return True
     except Exception as exc:  # noqa: BLE001 — notice send must never break decisioning
         logger.error(
-            "adverse_action_notice_failed",
+            "decision_notice_failed",
             application_id=str(getattr(application, "id", None)),
             error=str(exc),
         )

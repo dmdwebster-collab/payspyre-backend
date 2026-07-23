@@ -554,7 +554,7 @@ def report_applications(f: ReportFilters = Depends(), db: Session = Depends(get_
     by_status = {s: int(c) for s, c in status_rows}
     total_apps = sum(by_status.values())
     approved = by_status.get("approved", 0)
-    rejected = by_status.get("declined", 0)
+    rejected = by_status.get("rejected", 0)
 
     # "Activated" = approved applications that produced a funded loan.
     activated = _scope_loans(

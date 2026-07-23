@@ -57,7 +57,7 @@ class TestSimulationService:
 
     def test_decline_run_makes_no_loan(self, db_session):
         trace = demo_simulation.run_demo_application(db_session, score=540)
-        assert trace["status"] == "declined", trace
+        assert trace["status"] == "rejected", trace
         assert "loan" not in trace
 
 

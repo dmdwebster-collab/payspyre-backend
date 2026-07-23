@@ -172,7 +172,7 @@ _TERMINAL_RESULT_TO_STATUS = {
     "manual_review": "manual_review",
 }
 _PRE_DECISION_STATUSES = ("started", "verifying")
-_DECISION_STATUSES = ("approved", "declined", "under_review")
+_DECISION_STATUSES = ("approved", "rejected", "under_review")
 
 
 def mark_manual_review(application: PlatformCreditApplication) -> None:
@@ -219,7 +219,7 @@ VERIFICATION_GATE_STATUSES = ("credit_report", "bank_verification", "application
 # the origination/underwriting state machine's reach (it moves only through the
 # servicing transitions below).
 _TERMINAL_STATUSES = (
-    "approved", "declined", "withdrawn", "expired", "active", *CLOSED_STATUSES,
+    "approved", "rejected", "withdrawn", "expired", "active", *CLOSED_STATUSES,
 )
 
 
@@ -257,13 +257,13 @@ def mark_vendor_reprocessing(application: PlatformCreditApplication) -> None:
 
     Dave (10__Vendor_Access.md): vendors get exactly one lever while a deal is
     with PaySpyre — a request to send it back. Valid while the deal is in
-    adjudication (``under_review`` / ``underwriting``) and on a ``declined``
-    file (an auto-decline must route to a human, never hard-reject to the
+    adjudication (``under_review`` / ``underwriting``) and on a ``rejected``
+    file (an auto-rejection must route to a human, never hard-reject to the
     vendor); the request re-opens the file into ``under_review`` for a human
     underwriter. It must never re-open ``approved``/``withdrawn``/``expired``
     (those stay behind the standard terminal guard).
     """
-    reprocessable = ("declined", "under_review", "underwriting")
+    reprocessable = ("rejected", "under_review", "underwriting")
     if application.status not in reprocessable:
         raise InvalidStateTransition(
             f"Cannot request reprocessing from status '{application.status}' "
@@ -277,10 +277,10 @@ def mark_cancelled(application: PlatformCreditApplication) -> None:
     """Terminal NON-CREDIT closure — the staff "Cancel" action (WS-E).
 
     Cancellation is an administrative termination (customer request, duplicate,
-    vendor request, expired offer/verification), distinct from a credit decline:
-    it maps onto the existing ``withdrawn`` terminal status and therefore never
-    triggers the adverse-action path (which fires only on ``declined``). The
-    caller owns the reason-code validation, audit event, and notification.
+    vendor request, expired offer/verification), distinct from a credit
+    rejection: it maps onto the existing ``withdrawn`` terminal status (surfaced
+    to users as "Cancelled") and carries its own cancel reason list. The caller
+    owns the reason-code validation, audit event, and notification.
     """
     _assert_not_terminal(application, "withdrawn")
     application.status = "withdrawn"
@@ -318,7 +318,7 @@ def mark_offers_expired(application: PlatformCreditApplication) -> None:
 # preconditions, owning workplace(s), permitted actions, external API. These are
 # the WRITES for the statuses that had no transition before. Everything above
 # stays exactly as it was: the automated decision path (verifying → decide →
-# approved / declined / under_review) is untouched, so current behaviour and the
+# approved / rejected / under_review) is untouched, so current behaviour and the
 # existing suite are preserved.
 # ---------------------------------------------------------------------------
 
@@ -1227,7 +1227,7 @@ class FlowOrchestrator:
                 error=str(exc),
             )
 
-        # Stamp the terminal marketplace lead_state (approved/declined) + capture
+        # Stamp the terminal marketplace lead_state (approved/rejected) + capture
         # any verification depth gained in this flow. Non-terminal (under_review)
         # is left on the forward ladder maintained at verification time.
         if patient is not None:
@@ -1278,18 +1278,15 @@ class FlowOrchestrator:
                     loan_lifecycle.send_agreement(self.db, loan)
 
                 self._pending_outbound.append(("send_agreement", _send_agreement))
-        # P9.x — on a decline, send the Canadian notice of decision (audit §7).
-        # The notice is an OUTBOUND email (SendGrid HTTP) + its own DB event write, so
-        # it is deferred to post-commit for the same lock/latency reason as the e-sign
-        # invite above. It is internally DEFENSIVE + idempotent (dedupes on its own
-        # event) and never raises; the post-commit runner also guards it.
-        if application.status == "declined":
-            def _send_adverse_action(reasons=flow_decision.decision_reasons) -> None:
-                from app.services import adverse_action
-
-                adverse_action.send_adverse_action_notice(self.db, application, reasons)
-
-            self._pending_outbound.append(("adverse_action_notice", _send_adverse_action))
+        # SEAM (Dave 2026-07-22): on an auto-rejection we NO LONGER auto-send a
+        # US-style "adverse-action notice" — that is a US regulatory concept and
+        # is not applicable in Canada. The reason capture is untouched: the
+        # principal reasons remain on ``flow_decision.decision_reasons`` and on
+        # the application's decision snapshot. What notice (if any) a rejected
+        # Canadian applicant receives is an OPEN COUNSEL/DAVE question; wire the
+        # replacement here once Dave/counsel decide.
+        if application.status == "rejected":
+            pass  # intentional no-op seam — see the comment above
         logger.info(
             "decision_made",
             application_id=str(application.id),

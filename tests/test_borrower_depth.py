@@ -204,7 +204,7 @@ def test_banner_loan_status_wins_over_application_status():
 
 def test_banner_lifecycle_stages():
     assert borrower_portal.banner_for("started", None)["stage"] == "in_progress"
-    assert borrower_portal.banner_for("declined", None)["stage"] == "declined"
+    assert borrower_portal.banner_for("rejected", None)["stage"] == "rejected"
     assert borrower_portal.banner_for("approved", "pending_disbursement")["stage"] == "funding"
     assert borrower_portal.banner_for("approved", "paid_off")["stage"] == "paid_off"
     assert borrower_portal.banner_for("approved", "delinquent")["stage"] == "past_due"

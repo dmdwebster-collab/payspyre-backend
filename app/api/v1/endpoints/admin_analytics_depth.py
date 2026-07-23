@@ -468,7 +468,7 @@ def report_vendor_overrides(
                     "vendor_id": str(vendor_id) if vendor_id is not None else None,
                     "requested": 0,
                     "approved": 0,
-                    "declined": 0,
+                    "rejected": 0,
                     "in_progress": 0,
                     "funded": 0,
                     "bad": 0,
@@ -478,8 +478,8 @@ def report_vendor_overrides(
             loan = loan_by_app.get(app_id)
             if app_status == "approved" or loan is not None:
                 v["approved"] += 1
-            elif app_status == "declined":
-                v["declined"] += 1
+            elif app_status == "rejected":
+                v["rejected"] += 1
             else:
                 v["in_progress"] += 1
             if loan is not None:

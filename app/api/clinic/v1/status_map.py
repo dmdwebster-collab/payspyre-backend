@@ -3,17 +3,17 @@ clinic console understands (clinicMock.ts ``ClinicApplicationStatus``).
 
 Platform enum (platform_application_status):
     started, verifying, pre_qualified, awaiting_hard_pull, under_review,
-    approved, declined, withdrawn, expired
+    approved, rejected, withdrawn, expired
 
 Clinic buckets:
-    started | approved | declined | manual_review
+    started | approved | rejected | manual_review
 
 Mapping rationale:
-    - approved / declined map 1:1 (terminal decisions the practice cares about).
+    - approved / rejected map 1:1 (terminal decisions the practice cares about).
     - under_review -> manual_review (a human is looking at it).
     - everything still in-flight (started, verifying, pre_qualified,
       awaiting_hard_pull) -> started (the patient hasn't finished yet).
-    - withdrawn / expired -> declined (dead from the practice's POV — no
+    - withdrawn / expired -> rejected (dead from the practice's POV — no
       financing will happen). This is a pragmatic default; if the console later
       grows a dedicated "closed" bucket, split these out.
 """
@@ -46,9 +46,9 @@ _CLINIC_STATUS: dict[str, str] = {
     "transferred": "approved",
     "settlement": "approved",
     "written_off": "approved",
-    "declined": "declined",
-    "withdrawn": "declined",
-    "expired": "declined",
+    "rejected": "rejected",
+    "withdrawn": "rejected",
+    "expired": "rejected",
 }
 
 
@@ -66,16 +66,16 @@ def to_vendor_visible_status(platform_status: str, decision_by: str | None = Non
 
     10__Vendor_Access.md: "if an automated response is an automated rejection
     then instead of being hard rejected it would get submitted to a human
-    underwriter for review" — the vendor must NOT be told an AUTO decline is
+    underwriter for review" — the vendor must NOT be told an AUTO rejection is
     final while that human escalation is pending. An application that is
-    ``declined`` with ``decision_by == 'auto'`` therefore surfaces as
+    ``rejected`` with ``decision_by == 'auto'`` therefore surfaces as
     ``manual_review`` ("in review"). Once a human confirms or overturns the
-    decline (the admin decision path stamps ``decision_by`` with the human
+    rejection (the admin decision path stamps ``decision_by`` with the human
     actor), the real bucket shows.
 
     Every clinic/vendor response that carries an application status MUST go
     through this function, never ``to_clinic_status`` directly.
     """
-    if platform_status == "declined" and decision_by == "auto":
+    if platform_status == "rejected" and decision_by == "auto":
         return "manual_review"
     return to_clinic_status(platform_status)

@@ -96,8 +96,8 @@ _APPLICATION_BANNERS: dict[str, tuple[str, str]] = {
                              "questions."),
     "written_off": ("closed", "This account is closed. Please contact us if you have any "
                               "questions."),
-    "declined": (
-        "declined",
+    "rejected": (
+        "rejected",
         "We were unable to approve your application at this time. Please contact us if you "
         "have any questions about this decision.",
     ),

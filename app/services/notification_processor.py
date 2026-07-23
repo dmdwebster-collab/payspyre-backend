@@ -22,10 +22,10 @@ Safety model:
   deduped). A permanent failure (no email, suppressed, email-only type on the
   SMS channel) writes a ``notification_skipped`` audit row and does NOT retry.
 
-Declines are deliberately NOT handled here: the adverse-action notice is already
-sent synchronously + idempotently by ``adverse_action.send_adverse_action_notice``
-from ``FlowOrchestrator._decide``. Routing declines through this processor too
-would double-send a legally-required notice.
+Rejections are deliberately NOT handled here. No notice auto-fires on a
+rejection: the former US "adverse-action notice" auto-send was removed (Dave
+2026-07-22) — what notice, if any, a rejected Canadian applicant receives is an
+open counsel/Dave question (``decision_notice`` is the dormant seam).
 """
 from __future__ import annotations
 
@@ -302,8 +302,8 @@ class NotificationProcessor:
             loan_id = ctx.get("_loan_id")
             ctx.pop("_loan_id", None)
             return [NotificationPlan("application_approved", "email", ctx, loan_id)]
-        # declined → owned by adverse_action (sent in _decide); never here.
-        # manual_review (under_review) → deferred: the under-review template
+        # rejected → no auto-notice (US adverse-action send removed 2026-07-22);
+        # never planned here. manual_review (under_review) → deferred: template
         # needs a review-SLA business input + bespoke fields. Tracked follow-up.
         return []
 

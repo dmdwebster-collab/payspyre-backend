@@ -93,9 +93,11 @@ class PlatformCreditApplication(Base):
     #   Approved / Active         -> approved / active
     #   closed off Active         -> repaid | renewed | refinanced | transferred |
     #                                settlement | written_off
-    #   off-model terminals       -> declined | withdrawn (cancelled) | expired
-    # Additive-only (migrations 043, 068): every prior value is retained, so no
-    # existing row or code path breaks. ``under_review`` (the automated core's
+    #   off-model terminals       -> rejected | withdrawn (cancelled) | expired
+    # ``rejected`` is the terminal credit-decision status (was ``declined`` until
+    # migration 076, which renamed the enum value per Dave's 2026-07-22 directive).
+    # Additive-only otherwise (migrations 043, 068): every prior value is retained,
+    # so no existing row or code path breaks. ``under_review`` (the automated core's
     # manual-review sink, flow_engine DECISION_TO_STATE) stays distinct from the
     # explicit ``underwriting`` workflow state — see the registry docstring.
     status = Column(
@@ -104,7 +106,7 @@ class PlatformCreditApplication(Base):
              "credit_report", "bank_verification", "application_verification",
              "offer_acceptance", "agreement_signature", "active",
              "repaid", "renewed", "refinanced", "transferred", "settlement", "written_off",
-             "approved", "declined", "withdrawn", "expired",
+             "approved", "rejected", "withdrawn", "expired",
              name="platform_application_status", create_type=False),
         nullable=False,
         default="started"

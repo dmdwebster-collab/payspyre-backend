@@ -26,7 +26,7 @@ from app.db.base import get_db
 _BASE = "/api/clinic/v1"
 _VENDOR_ID = uuid.uuid4()
 
-_APPS = {"total": 3, "approved": 2, "declined": 1, "in_review": 0, "started": 0,
+_APPS = {"total": 3, "approved": 2, "rejected": 1, "in_review": 0, "started": 0,
          "approval_rate": 0.6667, "avg_requested_amount_cents": 1_000_000,
          "total_requested_amount_cents": 3_000_000}
 _LOANS = {"active_count": 1, "active_principal_balance_cents": 500_000,

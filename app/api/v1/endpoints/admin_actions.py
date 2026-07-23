@@ -40,7 +40,6 @@ from app.models.platform.event import PlatformEvent
 from app.models.platform.loan import PlatformLoan, PlatformLoanPayment
 from app.models.user import User
 from app.services import decision_reasons, loan_ledger, loan_lifecycle, loan_servicing
-from app.services.adverse_action import send_adverse_action_notice
 from app.services.flow_orchestrator import (
     _TERMINAL_STATUSES,
     InvalidStateTransition,
@@ -112,24 +111,25 @@ def _audit(db: Session, *, event_type: str, actor: str, payload: dict,
 
 
 class DecisionBody(BaseModel):
+    # ``outcome`` is the internal credit-decision OUTCOME token (the scoring
+    # engine's vocabulary, kept for the risk-score override machinery and the
+    # stored decision JSON). ``declined`` here maps to the ``rejected`` STATUS.
     outcome: Literal["approved", "declined", "refer"]
     # For outcome="declined" these are REQUIRED and must be active REJECT codes
-    # from the platform_decision_reasons directory (WS-E): staff declines carry
-    # only vetted, defensible reasons, and the directory's borrower_facing_text
-    # flows into the adverse-action notice.
+    # from the platform_decision_reasons directory (WS-E): staff rejections carry
+    # only vetted, defensible reasons captured against the application.
     reason_codes: list[str] = []
     note: Optional[str] = None
     override: bool = False  # acknowledge overriding an existing automated decision
 
     @model_validator(mode="after")
-    def _declined_requires_reason_codes(self) -> "DecisionBody":
+    def _rejection_requires_reason_codes(self) -> "DecisionBody":
         # Schema-level enforcement (defense-in-depth alongside the endpoint's
-        # directory-validation 422): a decline can never even PARSE without at
-        # least one reason code — the adverse-action notice must state the
-        # principal reasons for the decision.
+        # directory-validation 422): a rejection can never even PARSE without at
+        # least one reason code — a rejection must record its principal reasons.
         if self.outcome == "declined" and not self.reason_codes:
             raise ValueError(
-                "a declined decision requires at least one reason_code from the "
+                "a rejection requires at least one reason_code from the "
                 "reject reason directory"
             )
         return self
@@ -142,7 +142,7 @@ def decide(
     db: Session = Depends(get_db),
     user=Depends(require_roles("admin")),
 ):
-    """Record a staff decision. approve → books a loan; decline → adverse action."""
+    """Record a staff decision. approve → books a loan; reject → captures reasons."""
     app = (
         db.query(PlatformCreditApplication)
         .filter(PlatformCreditApplication.id == application_id)
@@ -155,7 +155,7 @@ def decide(
     # this admin-only endpoint's existing behavior — or the explicit
     # applications/assignment_override permission). Override use is audited.
     assignment_override_used = require_assignment_or_override(app, user)
-    if app.status in ("approved", "declined") and not body.override:
+    if app.status in ("approved", "rejected") and not body.override:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Application already {app.status}; pass override=true to re-decide.",
@@ -173,7 +173,7 @@ def decide(
         )
 
     # Orphan-loan guard: overriding an APPROVED app away from "approved" would leave
-    # its already-booked loan live (a declined/referred application with a fundable
+    # its already-booked loan live (a rejected/referred application with a fundable
     # loan). Block it — the loan must be charged-off/cancelled first. (Re-approving
     # is separately backstopped by the uq_platform_loans_application unique constraint.)
     if body.override and app.status == "approved" and body.outcome != "approved":
@@ -191,15 +191,15 @@ def decide(
                 ),
             )
 
-    # WS-E: a staff DECLINE is a credit decision that must carry at least one
-    # vetted principal reason from the reject directory (the adverse-action
-    # notice states "the principal reasons for the decision" — a decline with no
-    # defensible coded reason is not permitted).
+    # WS-E: a staff REJECTION is a credit decision that must carry at least one
+    # vetted principal reason from the reject directory (a rejection records "the
+    # principal reasons for the decision" — a rejection with no defensible coded
+    # reason is not permitted).
     if body.outcome == "declined":
         if not body.reason_codes:
             raise HTTPException(
                 status_code=422,
-                detail="A decline requires at least one reason_code from the "
+                detail="A rejection requires at least one reason_code from the "
                        "reject reason directory (GET /admin/decision-reasons?kind=reject).",
             )
         unknown = decision_reasons.invalid_reject_codes(db, body.reason_codes)
@@ -211,7 +211,13 @@ def decide(
             )
 
     actor = _actor_id(user)
-    new_status = "under_review" if body.outcome == "refer" else body.outcome
+    # Map the internal decision OUTCOME token onto the persisted STATUS:
+    # approved->approved, declined->rejected (Dave's rename), refer->under_review.
+    new_status = {
+        "approved": "approved",
+        "declined": "rejected",
+        "refer": "under_review",
+    }[body.outcome]
     app.decision = {
         "outcome": body.outcome,
         "reasons": body.reason_codes,
@@ -268,7 +274,13 @@ def decide(
             db.rollback()
             raise HTTPException(status_code=409, detail=f"Could not book loan: {exc}")
     elif body.outcome == "declined":
-        send_adverse_action_notice(db, app, body.reason_codes)  # idempotent, never raises
+        # SEAM (Dave 2026-07-22): a staff rejection NO LONGER auto-sends a
+        # US-style "adverse-action notice" — that is a US regulatory concept, not
+        # applicable in Canada. The principal reasons are still captured (on
+        # ``app.decision`` above and via ``record_underwriter_decision``). What
+        # notice (if any) a rejected Canadian applicant receives is an OPEN
+        # COUNSEL/DAVE question; wire the replacement here once that is decided.
+        pass
 
     _audit(
         db, event_type="admin_application_decision", actor=actor, application_id=app.id,
@@ -297,9 +309,9 @@ def cancel_application(
 ):
     """Cancel an application — a NON-CREDIT administrative closure (WS-E).
 
-    Distinct from a decline: no adverse-action notice is sent (cancellation is
-    not a credit decision — Turnkey parity, 02__WP_Underwriting.md §4). Requires
-    an active CANCEL reason code from the directory; moves the application to the
+    Distinct from a rejection: cancellation is not a credit decision (Turnkey
+    parity, 02__WP_Underwriting.md §4) and carries its own CANCEL reason list.
+    Requires an active CANCEL reason code from the directory; moves the application to the
     existing ``withdrawn`` terminal state; audited via platform_events; the
     ``application_cancelled`` event also drives the applicant notification
     through the notification outbox processor.

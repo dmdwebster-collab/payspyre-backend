@@ -367,7 +367,7 @@ class TestDecisionPaths:
         app_id = _drive_to_decision(db_session, orch, score=550)
         app = db_session.get(PlatformCreditApplication, app_id)
         db_session.refresh(app)
-        assert app.status == "declined"
+        assert app.status == "rejected"
 
     def test_manual_review_band(self, db_session: Session):
         orch = _orch(db_session)

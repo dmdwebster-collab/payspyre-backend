@@ -86,7 +86,7 @@ def app_under_test():
 class TestStatusMap:
     def test_one_to_one(self):
         assert to_clinic_status("approved") == "approved"
-        assert to_clinic_status("declined") == "declined"
+        assert to_clinic_status("rejected") == "rejected"
 
     def test_under_review_is_manual_review(self):
         assert to_clinic_status("under_review") == "manual_review"
@@ -96,8 +96,8 @@ class TestStatusMap:
             assert to_clinic_status(s) == "started"
 
     def test_dead_states_collapse_to_declined(self):
-        assert to_clinic_status("withdrawn") == "declined"
-        assert to_clinic_status("expired") == "declined"
+        assert to_clinic_status("withdrawn") == "rejected"
+        assert to_clinic_status("expired") == "rejected"
 
     def test_unknown_defaults_to_started(self):
         assert to_clinic_status("brand_new_enum_value") == "started"
@@ -133,13 +133,13 @@ class TestShaping:
         # (platform_status, decision_by, count) triples as the GROUP BY returns them.
         triples = [
             ("approved", "auto", 2),
-            ("declined", "some-human-id", 1),
+            ("rejected", "some-human-id", 1),
             ("under_review", None, 1),
             ("verifying", None, 1),
         ]
         summary = apps_endpoint._summary_from_status_counts(triples)
         assert summary.approved == 2
-        assert summary.declined == 1
+        assert summary.rejected == 1
         assert summary.manual_review == 1
         assert summary.started == 1
         assert summary.total == 5
@@ -152,17 +152,17 @@ class TestShaping:
         )
         assert summary.approved == 5000
         assert summary.started == 1200
-        assert summary.declined == 7  # withdrawn -> declined bucket
+        assert summary.rejected == 7  # withdrawn -> rejected bucket
         assert summary.total == 6207
 
     def test_summary_auto_decline_is_silently_escalated(self):
         # WS-I (Dave): an AUTO decline pending human review must count as
         # manual_review on the vendor surface, never as a final decline.
         summary = apps_endpoint._summary_from_status_counts(
-            [("declined", "auto", 3), ("declined", "user-uuid", 2)]
+            [("rejected", "auto", 3), ("rejected", "user-uuid", 2)]
         )
         assert summary.manual_review == 3
-        assert summary.declined == 2
+        assert summary.rejected == 2
         assert summary.total == 5
 
 
@@ -245,7 +245,7 @@ class TestApplicationsEndpoint:
             db.query.return_value.filter.return_value.group_by.return_value.all
         ).return_value = [
             ("approved", "auto", 1),
-            ("declined", "human-actor", 1),
+            ("rejected", "human-actor", 1),
             ("under_review", None, 1),
             ("started", None, 1),
         ]
@@ -257,7 +257,7 @@ class TestApplicationsEndpoint:
         assert body == {
             "started": 1,
             "approved": 1,
-            "declined": 1,
+            "rejected": 1,
             "manual_review": 1,
             "total": 4,
         }

@@ -166,24 +166,24 @@ class TestVendorVisibleStatus:
     def test_auto_decline_is_silently_escalated(self):
         # Dave: the vendor must NOT be told an auto-decline is final while the
         # human escalation is pending — it reads as "in review".
-        assert to_vendor_visible_status("declined", "auto") == "manual_review"
+        assert to_vendor_visible_status("rejected", "auto") == "manual_review"
 
     def test_human_confirmed_decline_shows_declined(self):
-        assert to_vendor_visible_status("declined", "8ce1…user") == "declined"
-        assert to_vendor_visible_status("declined", None) == "declined"
+        assert to_vendor_visible_status("rejected", "8ce1…user") == "rejected"
+        assert to_vendor_visible_status("rejected", None) == "rejected"
 
     def test_other_statuses_unchanged(self):
         assert to_vendor_visible_status("approved", "auto") == "approved"
         assert to_vendor_visible_status("under_review", None) == "manual_review"
         assert to_vendor_visible_status("started", None) == "started"
-        assert to_vendor_visible_status("withdrawn", None) == "declined"
+        assert to_vendor_visible_status("withdrawn", None) == "rejected"
 
 
 class TestMarkVendorReprocessing:
     def _app(self, status):
         return SimpleNamespace(status=status, status_updated_at=None)
 
-    @pytest.mark.parametrize("status", ["declined", "under_review", "underwriting"])
+    @pytest.mark.parametrize("status", ["rejected", "under_review", "underwriting"])
     def test_reprocessable_states_move_to_under_review(self, status):
         app = self._app(status)
         mark_vendor_reprocessing(app)
@@ -450,7 +450,7 @@ class TestRequestReprocessing:
     def _wire(self, ctx, application):
         ctx.db.query.return_value.filter.return_value.first.return_value = application
 
-    def _app_row(self, status="declined", decision_by="auto", requested=False):
+    def _app_row(self, status="rejected", decision_by="auto", requested=False):
         return SimpleNamespace(
             id=uuid.uuid4(),
             patient_id=uuid.uuid4(),
@@ -462,7 +462,7 @@ class TestRequestReprocessing:
 
     def test_auto_declined_app_moves_to_review_and_is_audited(self, harness):
         client, ctx = harness
-        row = self._app_row(status="declined", decision_by="auto")
+        row = self._app_row(status="rejected", decision_by="auto")
         self._wire(ctx, row)
 
         resp = client.post(f"{_BASE}/applications/{row.id}/request-reprocessing")
@@ -480,7 +480,7 @@ class TestRequestReprocessing:
         ]
         assert [e.event_type for e in events] == ["vendor_reprocessing_requested"]
         payload = events[0].payload
-        assert payload["before"] == {"status": "declined"}
+        assert payload["before"] == {"status": "rejected"}
         assert payload["after"]["vendor_reprocessing_requested"] is True
         ctx.db.commit.assert_called()
 
@@ -535,9 +535,9 @@ class TestDashboardSilentEscalation:
     def test_outcome_bucket_hides_pending_auto_decline(self):
         from app.api.clinic.v1.endpoints.dashboard_applications import _outcome_bucket
 
-        assert _outcome_bucket("declined", "auto") == "in_review"
-        assert _outcome_bucket("declined", "human-id") == "declined"
-        assert _outcome_bucket("declined", None) == "declined"
+        assert _outcome_bucket("rejected", "auto") == "in_review"
+        assert _outcome_bucket("rejected", "human-id") == "rejected"
+        assert _outcome_bucket("rejected", None) == "rejected"
         assert _outcome_bucket("approved", "auto") == "approved"
 
 
