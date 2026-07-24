@@ -17,6 +17,24 @@ The flow::
 with the six closed states hanging off ``Active``: Repaid, Renewed, Refinanced,
 Transferred, Settlement, Write off.
 
+ACTIVATION-REWORK LIFECYCLE (Wave 3 registry alignment)
+-------------------------------------------------------
+The loan is now CREATED at activation, not at approval. In the new lifecycle the
+Offer -> Accept -> Agreement -> Sign -> Activate ladder runs entirely pre-loan::
+
+    Offer Acceptance -> Agreement Signature -> [Activate] -> Active
+
+``Activate Loan`` therefore resolves PRIMARILY from ``agreement_signature`` (the
+signed-agreement, pre-loan state where ``application.agreement_status == 'signed'``
+but no loan row exists yet). It stays resolvable from ``approved`` too for the
+flag-OFF / grandfathered world, where the loan is still booked at approval and the
+loan surface's disburse action governs it. The linear ``order`` below is left on
+the legacy ladder (... -> Agreement Signature -> Approved -> Active) so the flag-OFF
+path stays coherent and the golden order test holds; the per-status *actions* and
+*notes* are what carry the new lifecycle (activation-rework Wave 2 behaviour,
+flag ``ACTIVATION_BOOKS_LOAN``). The registry only describes the actions available
+per status — it never flips behaviour.
+
 TWO LAYERS, DELIBERATELY
 ------------------------
 1. **Engine status** — the value persisted in
@@ -379,11 +397,27 @@ _SPECS: tuple[StatusSpec, ...] = (
             "AND the loan agreement has been sent to the applicant(s) for review "
             "and signature",
         ),
-        description=("Waiting for the applicant(s) to review and sign the loan agreement",),
-        workplaces=(Workplace.UNDERWRITING,),
-        actions=(Action.CONTACT_APPLICANT, Action.CANCEL),
+        description=(
+            "Waiting for the applicant(s) to review and sign the loan agreement",
+            "Once every applicant has signed, the file is ready to ACTIVATE: "
+            "activation books the loan and virtually disburses it — no loan row "
+            "exists before this step in the activation-rework lifecycle",
+        ),
+        workplaces=(Workplace.UNDERWRITING, Workplace.SERVICING),
+        actions=(Action.CONTACT_APPLICANT, Action.ACTIVATE_LOAN, Action.CANCEL),
         engine_statuses=("agreement_signature",),
-        next_statuses=(CanonicalStatus.APPROVED,),
+        next_statuses=(CanonicalStatus.ACTIVE,),
+        note=(
+            "Activation-rework: the loan is CREATED at activation, not approval, so "
+            "this signed-agreement / pre-loan state is where 'Activate Loan' lives "
+            "in the new lifecycle. The action is offered here, but the maker-checker "
+            "'activate' only fires once application.agreement_status == 'signed' "
+            "(loan_lifecycle.activate_loan then books the loan and advances the file "
+            "straight to 'active'). Cancel here simply closes the application — no "
+            "loan has been booked yet, so there is nothing to unwind. In the flag-OFF "
+            "/ grandfathered world the file instead advances to 'approved' (loan "
+            "already booked) and activation governs from there."
+        ),
     ),
     StatusSpec(
         status=CanonicalStatus.APPROVED,
@@ -403,9 +437,14 @@ _SPECS: tuple[StatusSpec, ...] = (
         engine_statuses=("approved",),
         next_statuses=(CanonicalStatus.ACTIVE,),
         note=(
-            "Dave permits Cancel/Reject here. Our approve path already books the "
-            "loan and sends the agreement, so POST /admin/applications/{id}/cancel "
-            "still 409s on 'approved' pending a loan-unwind path. Open question."
+            "Activation-rework: the PRIMARY 'Activate Loan' step now lives at "
+            "'agreement_signature' (the loan is booked at activation, not approval). "
+            "'approved' is retained as the flag-OFF / grandfathered pre-activation "
+            "state, so 'Activate Loan' stays resolvable here too. Resolved open "
+            "question: because a pre-activation file has no booked loan, Cancel/Reject "
+            "here just closes the application — there is no loan to unwind. When the "
+            "flag is OFF the loan IS booked at approval and the loan surface's "
+            "disburse action governs that grandfathered loan."
         ),
     ),
     StatusSpec(
