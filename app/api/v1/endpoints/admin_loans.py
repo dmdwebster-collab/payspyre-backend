@@ -14,6 +14,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status as http_status
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.auth import get_current_user, require_roles, user_has_permission_or_admin
@@ -22,6 +23,7 @@ from app.models.loan import Vendor
 from app.models.platform.credit_application import PlatformCreditApplication
 from app.models.platform.event import PlatformEvent
 from app.models.platform.loan import (
+    PlatformCollectionAttempt,
     PlatformLoan,
     PlatformLoanCustomTransaction,
     PlatformLoanDelinquencySnapshot,
@@ -162,6 +164,47 @@ def _delinquency_block(
     }
 
 
+def _maximum_dpd(db: Session, loan_id: UUID, live_dpd: int) -> int:
+    """Lifetime peak days-past-due for one loan, computed ON READ (never waits
+    on the nightly aging job).
+
+    ``max(`` every persisted ``platform_loan_delinquency_snapshots`` DPD for the
+    loan ``,`` the CURRENT live DPD ``)``. The live value is the same
+    ``servicing_status`` (Account-Due-As-Of) basis the delinquency block already
+    uses — DPD is never recomputed a third way here; the caller passes it in.
+    0 when the loan has never been past due (no snapshots, no live DPD)."""
+    snapshot_max = (
+        db.query(func.max(PlatformLoanDelinquencySnapshot.days_past_due))
+        .filter(PlatformLoanDelinquencySnapshot.loan_id == loan_id)
+        .scalar()
+    )
+    return max(int(snapshot_max or 0), int(live_dpd or 0), 0)
+
+
+def _nsf_payment_count(db: Session, loan_id: UUID) -> int:
+    """Count of NSF / returned-payment events on the loan.
+
+    Counted off a TYPED source — ``platform_collection_attempts`` the payment
+    rail dishonoured: ``outcome='failed'`` with an ``external_ref`` (the Zumrails
+    transaction id, set only once a pull was actually placed on the rail). The
+    ``(schedule_item_id, attempt_number)`` uniqueness makes each such row exactly
+    one returned pull. Adapter rejections where the rail never pulled are
+    excluded — ``auto_collection`` itself sets those to ``failed`` with a NULL
+    ``external_ref`` and documents them as "NOT an NSF event". No comment-string
+    parsing."""
+    return int(
+        db.query(func.count())
+        .select_from(PlatformCollectionAttempt)
+        .filter(
+            PlatformCollectionAttempt.loan_id == loan_id,
+            PlatformCollectionAttempt.outcome == "failed",
+            PlatformCollectionAttempt.external_ref.isnot(None),
+        )
+        .scalar()
+        or 0
+    )
+
+
 @router.get("/{loan_id}")
 def get_loan(
     loan_id: UUID,
@@ -210,6 +253,13 @@ def get_loan(
         for s in snapshots
     ]
     detail["delinquency"] = block
+    # Lifetime performance counters the frontend's loan-performance panel reads
+    # off the loan detail (``ctx.loan``) — the two figures it cannot derive from
+    # the ledger/schedule alone. Both are always numbers here (the loan exists,
+    # its schedule/ledger are readable); they mirror the panel's other figures'
+    # convention of null only when nothing is readable.
+    detail["maximum_dpd"] = _maximum_dpd(db, loan_id, block["days_past_due"])
+    detail["nsf_payment_count"] = _nsf_payment_count(db, loan_id)
     detail["auto_charge"] = {
         # Raw per-loan switch: True / False / None (None = inherit platform default).
         "enabled": loan.auto_charge_enabled,
