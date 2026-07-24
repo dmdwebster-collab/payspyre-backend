@@ -705,7 +705,22 @@ class PlatformLoanDelinquencySnapshot(Base):
     snapshot_month = Column(Date, nullable=False)
 
     bucket = Column(
-        ENUM(name="platform_delinquency_bucket", create_type=False),
+        # Must carry the same value list as PlatformLoan.current_bucket — an
+        # ENUM declared without its values can't map DB rows back on read, so
+        # serializing a loan that HAS snapshots would raise (a 500 on the loan
+        # detail endpoint). Mirror the full list; DB type already exists.
+        ENUM(
+            "current",
+            "current_month_late",
+            "pot_30",
+            "pot_60",
+            "pot_90",
+            "default",
+            "insolvency",
+            "written_off",
+            name="platform_delinquency_bucket",
+            create_type=False,
+        ),
         nullable=False,
     )
     days_past_due = Column(Integer, nullable=False, default=0)
