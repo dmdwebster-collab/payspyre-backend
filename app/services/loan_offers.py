@@ -27,13 +27,14 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.logging import get_logger
 from app.models.platform.credit_application import PlatformCreditApplication
 from app.models.platform.event import PlatformEvent
 from app.models.platform.loan import PlatformLoan
 from app.models.platform.loan_offer import PlatformLoanOffer
 from app.schemas.pricing_config import parse_pricing_config, quote_fees_cents
-from app.services.flow_orchestrator import mark_approved, mark_offers_expired
+from app.services.flow_orchestrator import _set_status, mark_approved, mark_offers_expired
 from app.services.loan_quote import (
     CRIMINAL_RATE_CAP_BPS,
     compute_apr_bps,
@@ -375,13 +376,21 @@ def accept_offer(
     *,
     actor: str,
     now: Optional[datetime] = None,
-) -> tuple[PlatformLoanOffer, PlatformLoan]:
+) -> tuple[PlatformLoanOffer, Optional[PlatformLoan]]:
     """Borrower accepts ONE offer → siblings void → loan books with its terms.
 
     Row-locks the application's offers so two concurrent acceptances serialize;
-    the partial unique index (058) backstops. ``book_loan`` commits — after
-    this returns, the acceptance is durable. The e-sign invite is the CALLER's
-    post-commit step (cost control: send only after a confirmed acceptance).
+    the partial unique index (058) backstops.
+
+    Booking behaviour is flag-gated (activation-rework Wave 2):
+      * ``ACTIVATION_BOOKS_LOAN`` OFF (default) — UNCHANGED: ``book_loan`` books
+        the loan now with the accepted terms and commits; the returned loan is
+        non-None. The e-sign invite is the CALLER's post-commit step.
+      * ``ACTIVATION_BOOKS_LOAN`` ON — the acceptance does NOT book a loan. The
+        application is advanced to Agreement Signature (the agreement is sent +
+        signed on the APPLICATION), and the loan is booked later at ACTIVATION.
+        The returned loan is ``None``; the caller sends the application-level
+        agreement post-commit.
     """
     now = now or datetime.now(timezone.utc)
 
@@ -450,6 +459,21 @@ def accept_offer(
         },
     )
     db.flush()
+
+    if settings.ACTIVATION_BOOKS_LOAN:
+        # Wave 2 (flag ON): acceptance does NOT book a loan. Advance the file to
+        # Agreement Signature; the agreement is sent + signed on the APPLICATION
+        # and the loan is booked later at activation. _set_status is the low-level
+        # setter — 'approved' is terminal to the mark_* ladder-guards, but this
+        # deliberate routing into the pre-loan agreement stage is what the flag
+        # turns on. The caller sends the application-level agreement post-commit.
+        _set_status(application, "agreement_signature")
+        logger.info(
+            "loan_offer_accepted_no_book",
+            application_id=str(application.id),
+            offer_id=str(target.id),
+        )
+        return target, None
 
     from app.services import loan_lifecycle  # local import — avoids cycle at import time
 

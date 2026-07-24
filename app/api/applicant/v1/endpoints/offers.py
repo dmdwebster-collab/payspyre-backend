@@ -68,8 +68,12 @@ class AcceptOfferBody(BaseModel):
 class AcceptOfferResponse(BaseModel):
     application_id: UUID
     offer_id: UUID
-    loan_id: UUID
-    loan_status: str
+    # ``loan_id`` / ``loan_status`` are populated on the classic path (a loan is
+    # booked at acceptance). Under the activation-rework (Wave 2, flag ON) the loan
+    # is booked later at activation, so acceptance returns no loan yet and both are
+    # None; ``agreement_status`` then reflects the APPLICATION-level agreement.
+    loan_id: Optional[UUID] = None
+    loan_status: Optional[str] = None
     agreement_status: str
     message: str
 
@@ -167,9 +171,41 @@ def accept_offer(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
     db.commit()
 
-    # E-sign AFTER the durable acceptance (cost control: one envelope, only for
-    # the picked offer). Graceful no-op when SignNow is unconfigured; a send
-    # failure never rolls back the booked acceptance.
+    if loan is None:
+        # Activation-rework (Wave 2, flag ON): no loan is booked at acceptance —
+        # the agreement is now sent + signed on the APPLICATION, and the loan is
+        # booked later at activation. Send the application-level agreement AFTER
+        # the durable acceptance (cost control), mirroring the classic path's
+        # post-commit send. Graceful no-op when SignNow is unconfigured / in
+        # simulator mode; a send failure never rolls back the acceptance.
+        from app.services import application_agreement
+
+        try:
+            application = application_agreement.send_agreement_for_application(
+                db, application, actor=f"patient:{claims.patient_id}"
+            )
+        except Exception as exc:  # noqa: BLE001 — send is retryable, acceptance is done
+            logger.error(
+                "offer_accept_application_agreement_send_failed",
+                application_id=str(application_id),
+                error=str(exc),
+            )
+        return AcceptOfferResponse(
+            application_id=application_id,
+            offer_id=offer.id,
+            loan_id=None,
+            loan_status=None,
+            agreement_status=str(application.agreement_status),
+            message=(
+                "Offer accepted. Your loan agreement is being prepared for signature."
+                if application.agreement_status == "sent"
+                else "Offer accepted."
+            ),
+        )
+
+    # Classic path (flag OFF): the loan is booked. E-sign AFTER the durable
+    # acceptance (cost control: one envelope, only for the picked offer). Graceful
+    # no-op when SignNow is unconfigured; a send failure never rolls back it.
     from app.services import loan_lifecycle
 
     try:
