@@ -34,6 +34,7 @@ from app.services import auto_collection
 from app.services import delinquency_buckets
 from app.services import loan_ledger as ledger_service
 from app.services import schedule_surgery
+from app.services import servicing_status as servicing_status_service
 from app.services.loan_servicing import get_loan_status
 
 router = APIRouter(dependencies=[Depends(require_roles("admin", "staff"))])
@@ -113,7 +114,11 @@ def list_loans(
     ]
 
 
-def _delinquency_block(loan: PlatformLoan, today: date) -> dict:
+def _delinquency_block(
+    loan: PlatformLoan,
+    today: date,
+    servicing: Optional["servicing_status_service.ServicingStatus"] = None,
+) -> dict:
     """WS-H: live delinquency view for one loan (no extra queries — walks the
     loaded schedule).
 
@@ -122,8 +127,13 @@ def _delinquency_block(loan: PlatformLoan, today: date) -> dict:
     * ``effective_bucket`` — what collections should treat the loan as right
       now: insolvency/written_off override immediately, and a FULL catch-up
       (no past-due unpaid installment) cures to ``current`` immediately.
-    * ``days_past_due`` / ``amount_past_due_cents`` — LIVE values (shown
-      separately from the month-end bucket by design).
+    * ``days_past_due`` — the LIVE DPD. BASIS: Dave's Account-Due-As-Of
+      (``servicing_status``) when available, which advances the account per
+      the product's ``amount_to_move_pct`` (default 1.0 = strict full
+      installment, closely preserving the prior oldest-installment DPD). Falls
+      back to the oldest-unpaid-installment DPD only when no schedule anchors
+      the account (pre-disbursement).
+    * ``amount_past_due_cents`` — LIVE (how far behind contract, unchanged).
     """
     items = sorted(loan.schedule or [], key=lambda s: s.installment_number)
     not_owed = delinquency_buckets.NOT_OWED_STATUSES
@@ -132,7 +142,10 @@ def _delinquency_block(loan: PlatformLoan, today: date) -> dict:
         for s in items
         if s.status not in not_owed and s.paid_cents < s.total_cents and s.due_date < today
     ]
-    dpd = max(((today - s.due_date).days for s in past_due), default=0)
+    if servicing is not None and servicing.days_past_due is not None:
+        dpd = servicing.days_past_due
+    else:
+        dpd = max(((today - s.due_date).days for s in past_due), default=0)
     amount_past_due = sum(s.total_cents - s.paid_cents for s in past_due)
     return {
         "current_bucket": loan.current_bucket,
@@ -168,7 +181,15 @@ def get_loan(
     # Added on the ADMIN detail only (not in loan_servicing.get_loan_status,
     # which archive.py also feeds) so no other surface's payload changes.
     detail["patient_id"] = str(loan.patient_id) if loan.patient_id else None
-    block = _delinquency_block(loan, date.today())
+
+    # Dave's Account-Due-As-Of / Amount-to-Move servicing status (additive
+    # fields; drives the live-DPD basis in the delinquency block below).
+    today = date.today()
+    servicing = servicing_status_service.build_servicing_status(db, loan, today)
+    if servicing is not None:
+        detail["servicing_status"] = servicing.to_api_fields()
+
+    block = _delinquency_block(loan, today, servicing)
     snapshots = (
         db.query(PlatformLoanDelinquencySnapshot)
         .filter(PlatformLoanDelinquencySnapshot.loan_id == loan_id)
