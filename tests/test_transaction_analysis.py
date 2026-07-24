@@ -32,10 +32,14 @@ def _txn(d: date, desc: str, *, credit=None, debit=None):
     return t
 
 
-def _account(transactions, *, current_balance=None):
+def _account(transactions, *, current_balance=None, open_date=None, detail=None):
     acct = {"Transactions": transactions}
     if current_balance is not None:
         acct["Balance"] = {"Current": current_balance}
+    if open_date is not None:
+        acct["OpeningDate"] = open_date
+    if detail is not None:
+        acct["Detail"] = detail
     return acct
 
 
@@ -203,6 +207,93 @@ def test_two_keyworded_deposits_still_count_as_income():
     txns = [_txn(d, "PAYROLL DEPOSIT EMPLOYER", credit=1200.00) for d in _biweekly_dates(2)]
     out = analyze_accounts([_account(txns)], today=TODAY)
     assert out["monthly_income_cents"] > 0
+
+
+# ---------------------------------------------------------------------------
+# Raise across amount buckets (fragmentation must not drop income)
+# ---------------------------------------------------------------------------
+
+
+def test_raise_across_buckets_still_counts_as_income():
+    # Biweekly payroll that got a raise partway through the window: $1,500 ->
+    # $1,650. Amount bucketing splits this into two buckets; without the merge
+    # neither half reaches the recurrence threshold and income drops to $0.
+    txns = []
+    dates = _biweekly_dates(7)  # most-recent first
+    for i, d in enumerate(dates):
+        amt = 1650.00 if i < 3 else 1500.00  # recent 3 deposits at the raised rate
+        txns.append(_txn(d, "PAYROLL DEP ACME CORP 0099", credit=amt))
+
+    out = analyze_accounts([_account(txns)], today=TODAY)
+    # Must register positive income, normalized on the CURRENT (raised) band so we
+    # don't overstate: ~1650 * 26/12 = ~$3,575/mo.
+    assert out["monthly_income_cents"] > 0
+    assert 330000 <= out["monthly_income_cents"] <= 380000
+
+
+def test_unkeyworded_raise_does_not_inflate_via_short_recent_band():
+    # No income keyword, and only TWO deposits at the recent (raised) level: the
+    # recent band alone has just one corroborating gap, so the unkeyworded >=3
+    # guard must keep it from registering — conservatism over the raise rescue.
+    txns = []
+    dates = _biweekly_dates(4)
+    for i, d in enumerate(dates):
+        amt = 2000.00 if i < 2 else 1500.00  # only 2 recent deposits raised
+        txns.append(_txn(d, "ACME WIDGETS 8842", credit=amt))
+
+    out = analyze_accounts([_account(txns)], today=TODAY)
+    assert out["monthly_income_cents"] == 0
+
+
+def test_two_unrelated_amount_streams_not_merged():
+    # Same merchant token but amounts far apart (>RAISE_MAX_STEP_PCT): a $500
+    # recurring transfer-sized credit and a $1,500 one must not be coalesced into
+    # a single inflated stream.
+    txns = []
+    for d in _biweekly_dates(3, step_days=30):
+        txns.append(_txn(d, "GENERIC CREDIT CO", credit=500.00))
+    txns.append(_txn(TODAY - timedelta(days=2), "GENERIC CREDIT CO", credit=1500.00))
+    out = analyze_accounts([_account(txns)], today=TODAY)
+    # The $500 monthly stream (3 deposits, unkeyworded, regular) qualifies on its
+    # own; the lone $1,500 must NOT merge in to balloon the figure.
+    assert out["monthly_income_cents"] <= 60000
+
+
+# ---------------------------------------------------------------------------
+# Account age from metadata (not understated by the 90-day txn span)
+# ---------------------------------------------------------------------------
+
+
+def test_account_age_uses_open_date_metadata():
+    # Only 90 days of transactions, but the account was opened ~3 years ago.
+    txns = [_txn(d, "PAYROLL CO", credit=1000.00) for d in _biweekly_dates(6)]
+    accounts = [_account(txns, open_date="2023-06-01")]
+    out = analyze_accounts(accounts, today=TODAY)
+    # (2026-06-19 - 2023-06-01) / 30 ~= 36 months, vs ~2-3 from the txn span.
+    assert out["account_age_months"] >= 36
+
+
+def test_account_age_open_date_in_detail_object():
+    txns = [_txn(d, "PAYROLL CO", credit=1000.00) for d in _biweekly_dates(4)]
+    accounts = [_account(txns, detail={"DateOpened": "2024-12-19"})]
+    out = analyze_accounts(accounts, today=TODAY)
+    # ~18 months from the nested Detail.DateOpened.
+    assert out["account_age_months"] >= 17
+
+
+def test_account_age_falls_back_to_txn_span_without_metadata():
+    txns = [_txn(d, "PAYROLL CO", credit=1000.00) for d in _biweekly_dates(6)]
+    out = analyze_accounts([_account(txns)], today=TODAY)
+    # No metadata: earliest deposit ~70 days ago => ~2 months.
+    assert out["account_age_months"] == 2
+
+
+def test_account_age_ignores_implausible_future_open_date():
+    # A garbage/future metadata date must not beat the real transaction span.
+    txns = [_txn(d, "PAYROLL CO", credit=1000.00) for d in _biweekly_dates(6)]
+    accounts = [_account(txns, open_date="2099-01-01")]
+    out = analyze_accounts(accounts, today=TODAY)
+    assert out["account_age_months"] == 2
 
 
 # ---------------------------------------------------------------------------
