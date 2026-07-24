@@ -380,11 +380,50 @@ class TestCancelAction:
         assert application.status == "under_review"
 
     def test_cancel_terminal_application_is_409(self, app_client, db_session):
+        # A truly terminal file with no cancellable pre-activation exception
+        # (rejected) still cannot be cancelled.
         app, client = app_client
-        application = _seed_application(db_session, status="approved")
+        application = _seed_application(db_session, status="rejected")
         r = client.post(f"{_BASE}/applications/{application.id}/cancel",
                         json={"reason_code": "customer_request"})
         assert r.status_code == 409, r.text
+
+    @pytest.mark.parametrize("status", ["approved", "offer_acceptance", "agreement_signature"])
+    def test_cancel_preactivation_without_loan_closes_application(
+        self, app_client, db_session, status
+    ):
+        """Activation-rework Wave 5: cancelling BEFORE activation just closes the
+        application — no loan exists, so nothing is created or unwound. ``approved``
+        is otherwise terminal; with no booked loan it is now cancellable."""
+        app, client = app_client
+        application = _seed_application(db_session, status=status)
+        r = client.post(f"{_BASE}/applications/{application.id}/cancel",
+                        json={"reason_code": "customer_request", "note": "pre-activation"})
+        assert r.status_code == 200, r.text
+        assert r.json()["status"] == "withdrawn"
+        db_session.refresh(application)
+        assert application.status == "withdrawn"
+        # No loan was created or unwound.
+        assert db_session.query(PlatformLoan).filter(
+            PlatformLoan.application_id == application.id).first() is None
+        # The WORM cancel event was recorded.
+        ev = db_session.query(PlatformEvent).filter(
+            PlatformEvent.event_type == "application_cancelled",
+            PlatformEvent.application_id == application.id).first()
+        assert ev is not None
+        assert ev.payload["before"]["status"] == status
+
+    def test_cancel_blocked_when_loan_exists(self, app_client, db_session):
+        """Grandfathered / flag-OFF world: a loan IS booked at approval. Cancel is
+        blocked (409) so a live loan is never cancelled out from under servicing."""
+        app, client = app_client
+        loan = _seed_loan(db_session, status="active")
+        r = client.post(f"{_BASE}/applications/{loan.application_id}/cancel",
+                        json={"reason_code": "customer_request"})
+        assert r.status_code == 409, r.text
+        # The loan is untouched.
+        db_session.refresh(loan)
+        assert loan.status == "active"
 
 
 class TestAssignment:
