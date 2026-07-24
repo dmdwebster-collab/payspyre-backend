@@ -2,6 +2,7 @@
 from fastapi import APIRouter
 
 from app.api.applicant.v1.endpoints import (
+    agreement,
     applications,
     auth,
     bank_accounts,
@@ -37,6 +38,11 @@ applicant_router.include_router(documents.router)
 # the same reason as finalize: applications.router has a GET /{application_id}
 # and a catch-all POST /consents/{purpose} that must not shadow these literals.
 applicant_router.include_router(offers.router)
+# Borrower-facing application agreement (activation rework Wave 4a): review +
+# Simulate-Sign the pre-loan agreement. Registered BEFORE applications for the
+# same shadowing reason as offers/finalize (applications has GET /{application_id}
+# + a catch-all POST /consents/{purpose}).
+applicant_router.include_router(agreement.router)
 applicant_router.include_router(applications.router)
 applicant_router.include_router(products.router)
 applicant_router.include_router(marketplace.router)
