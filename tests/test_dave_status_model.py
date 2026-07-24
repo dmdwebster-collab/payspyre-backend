@@ -100,8 +100,11 @@ class TestRegistryMatchesDavesTable:
             (CanonicalStatus.OFFER_ACCEPTANCE,
              (Action.CONTACT_APPLICANT, Action.REGISTER_OFFER_ACCEPTANCE,
               Action.CANCEL, Action.RETURN_FOR_REPROCESSING)),
+            # Activation-rework (Wave 3): Activate Loan is surfaced here — the loan
+            # is booked at activation off the signed application agreement, so this
+            # signed-agreement / pre-loan state is where Activate primarily lives.
             (CanonicalStatus.AGREEMENT_SIGNATURE,
-             (Action.CONTACT_APPLICANT, Action.CANCEL)),
+             (Action.CONTACT_APPLICANT, Action.ACTIVATE_LOAN, Action.CANCEL)),
             (CanonicalStatus.APPROVED,
              (Action.ACTIVATE_LOAN, Action.REJECT, Action.CANCEL)),
             (CanonicalStatus.ACTIVE,
@@ -233,6 +236,62 @@ class TestActionLookup:
         assert sm.is_terminal("written_off")
         assert not sm.is_terminal("active")
         assert not sm.is_terminal("started")
+
+
+# ---------------------------------------------------------------------------
+# Activation-rework (Wave 3): the served model describes the new Offer -> Accept
+# -> Agreement -> Sign -> Activate ladder, with Activate resolving from the
+# signed-agreement / pre-loan state.
+# ---------------------------------------------------------------------------
+
+
+class TestActivationReworkLadder:
+    def test_activate_resolves_from_agreement_signature(self):
+        """New-world primary path: Activate Loan is offered on the pre-loan,
+        signed-agreement state (engine status 'agreement_signature')."""
+        assert Action.ACTIVATE_LOAN in sm.actions_for("agreement_signature")
+        assert sm.is_action_permitted("agreement_signature", Action.ACTIVATE_LOAN)
+
+    def test_activate_still_resolves_from_approved_for_grandfathered_world(self):
+        """Flag-OFF / grandfathered: Activate Loan stays available on 'approved'."""
+        assert Action.ACTIVATE_LOAN in sm.actions_for("approved")
+        assert sm.is_action_permitted("approved", Action.ACTIVATE_LOAN)
+
+    def test_agreement_signature_next_is_active(self):
+        """The new happy path activates straight to Active (loan booked at
+        activation), not via a separate post-approval booking step."""
+        spec = sm.STATUS_REGISTRY[CanonicalStatus.AGREEMENT_SIGNATURE]
+        assert spec.next_statuses == (CanonicalStatus.ACTIVE,)
+
+    def test_served_ladder_offer_accept_agreement_sign_activate(self):
+        """Offer -> Accept -> Agreement -> Sign -> Activate, per the served model."""
+        offer = sm.STATUS_REGISTRY[CanonicalStatus.OFFER_ACCEPTANCE]
+        agreement = sm.STATUS_REGISTRY[CanonicalStatus.AGREEMENT_SIGNATURE]
+        assert offer.next_statuses == (CanonicalStatus.AGREEMENT_SIGNATURE,)
+        assert Action.REGISTER_OFFER_ACCEPTANCE in offer.actions
+        assert agreement.next_statuses == (CanonicalStatus.ACTIVE,)
+        assert Action.ACTIVATE_LOAN in agreement.actions
+
+    def test_stale_approved_open_question_note_is_gone(self):
+        """The pre-rework 'Open question' about unwinding a booked loan on cancel
+        is resolved — the loan is booked at activation, so there is nothing to
+        unwind pre-activation."""
+        note = sm.STATUS_REGISTRY[CanonicalStatus.APPROVED].note or ""
+        assert "Open question" not in note
+        assert "loan-unwind" not in note
+        assert "pending a loan-unwind path" not in note
+
+    def test_resolve_endpoint_surfaces_activate_at_agreement_signature(self):
+        """GET /status-model/resolve?status=agreement_signature returns the
+        'activate_loan' action so the data-driven admin action bar renders it.
+        The handler is DB-free (registry is a code constant)."""
+        from app.api.v1.endpoints.admin_status_model import resolve_status
+
+        payload = resolve_status(status="agreement_signature")
+        assert payload["engine_status"] == "agreement_signature"
+        assert "activate_loan" in payload["actions"]
+        # grandfathered path still resolves it too
+        assert "activate_loan" in resolve_status(status="approved")["actions"]
 
 
 # ---------------------------------------------------------------------------
