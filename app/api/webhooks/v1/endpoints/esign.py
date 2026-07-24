@@ -150,6 +150,16 @@ async def receive_signnow_agreement(
         )
 
     # 4. Resolve the loan by agreement_ref == SignNow document id.
+    #
+    # TODO (activation rework Stage C): once the cutover books the loan at
+    # ACTIVATION off a signed APPLICATION agreement, a live SignNow "signed"
+    # webhook may arrive while only a PRE-LOAN application agreement exists (its
+    # ``agreement_ref`` lives on ``PlatformCreditApplication`` — migration 078).
+    # This resolver must then ALSO look the ref up on the application and drive
+    # the application-level signed transition (and downstream booking) when no
+    # loan matches. Not needed in Wave 1: this wave is additive, nothing wires an
+    # application agreement into the live approve flow, and the exercised path is
+    # SIMULATOR mode (Simulate Signing), which never hits this webhook.
     loan = (
         db.query(PlatformLoan)
         .filter(PlatformLoan.agreement_ref == event.document_id)

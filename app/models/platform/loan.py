@@ -98,6 +98,15 @@ class PlatformLoan(Base):
 
     disbursed_at = Column(DateTime(timezone=True), nullable=True)
 
+    # Grandfathering flag (activation rework Wave 1, migration 078). ``false`` for
+    # every loan booked under the old approve-time path (the server default
+    # backfills existing rows); the future activation-time booking path will set
+    # this ``true`` so the two cohorts are distinguishable without another money-
+    # table migration. Inert this wave — nothing reads it yet.
+    booked_at_activation = Column(
+        Boolean, nullable=False, server_default=text("false"), default=False
+    )
+
     # ---- Lifecycle: e-signature (SignNow) --------------------------------
     # Where the loan-agreement signature is at. Advances forward only:
     # not_sent -> sent -> signed (or -> declined).
