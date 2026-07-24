@@ -41,6 +41,7 @@ from app.models.platform.loan import PlatformLoan, PlatformLoanPayment
 from app.models.user import User
 from app.services import decision_reasons, loan_ledger, loan_lifecycle, loan_servicing
 from app.services.flow_orchestrator import (
+    _PREACTIVATION_STATUSES,
     _TERMINAL_STATUSES,
     InvalidStateTransition,
     mark_cancelled,
@@ -324,6 +325,15 @@ def cancel_application(
     existing ``withdrawn`` terminal state; audited via platform_events; the
     ``application_cancelled`` event also drives the applicant notification
     through the notification outbox processor.
+
+    Activation-rework Wave 5: cancelling BEFORE activation just closes the
+    application — there is nothing to unwind. In the loan-at-activation lifecycle
+    a pre-activation file (``approved`` / ``offer_acceptance`` /
+    ``agreement_signature``) has no ``platform_loans`` row, so it can be
+    cancelled even though ``approved`` is otherwise terminal. The gate is loan
+    EXISTENCE (robust for both flag worlds), not the flag: if a loan DOES exist
+    (flag-OFF approve-time booking, or a post-activation loan) cancel stays
+    blocked so a live loan is never cancelled out from under servicing.
     """
     app = (
         db.query(PlatformCreditApplication)
@@ -334,10 +344,34 @@ def cancel_application(
         raise HTTPException(status_code=404, detail="Application not found")
     # WS-E assignment gate (see decide) — cancel is a decision action too.
     assignment_override_used = require_assignment_or_override(app, user)
-    if app.status in _TERMINAL_STATUSES:
+
+    # Does a loan exist for this application? This — not the feature flag — is the
+    # true "is there anything to unwind?" question, and it is correct in both the
+    # flag-ON (loan booked only at activation) and flag-OFF / grandfathered (loan
+    # booked at approval) worlds.
+    has_loan = (
+        db.query(PlatformLoan.id)
+        .filter(PlatformLoan.application_id == application_id)
+        .first()
+        is not None
+    )
+    # A pre-activation file with NO booked loan is cancellable even when its
+    # status (``approved``) is otherwise terminal — cancelling closes the
+    # application, nothing to unwind.
+    cancellable_preactivation = app.status in _PREACTIVATION_STATUSES and not has_loan
+
+    if app.status in _TERMINAL_STATUSES and not cancellable_preactivation:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Application is already terminal ({app.status}); cannot cancel.",
+        )
+    if has_loan:
+        # A real loan exists: cancelling the application would strand or silently
+        # close a live loan. Servicing must charge-off / close the loan first.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Application has a booked loan; cancel or charge-off the loan "
+                   "before cancelling the application.",
         )
 
     reason = decision_reasons.get_active_reason(db, "cancel", body.reason_code)
@@ -351,7 +385,10 @@ def cancel_application(
     actor = _actor_id(user)
     before_status = app.status
     try:
-        mark_cancelled(app)  # status transition owned by flow_orchestrator
+        # allow_preactivation lets an approved-but-not-booked file (terminal
+        # status, no loan) cancel; the guards above have already confirmed no
+        # loan exists.
+        mark_cancelled(app, allow_preactivation=cancellable_preactivation)
     except InvalidStateTransition as exc:  # belt — terminal check above
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
 

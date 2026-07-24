@@ -223,6 +223,14 @@ _TERMINAL_STATUSES = (
     "approved", "rejected", "withdrawn", "expired", "active", *CLOSED_STATUSES,
 )
 
+# Pre-activation states (activation-rework): the offer -> accept -> agreement ->
+# sign -> activate ladder runs entirely BEFORE the loan is booked, so a file in
+# one of these states may have no ``platform_loans`` row at all. ``approved`` is
+# also in ``_TERMINAL_STATUSES`` (the flag-OFF world books the loan at approval),
+# so cancelling from it is normally blocked; ``mark_cancelled`` opts back in only
+# when the caller has confirmed no loan exists (see ``allow_preactivation``).
+_PREACTIVATION_STATUSES = ("approved", "offer_acceptance", "agreement_signature")
+
 
 def _assert_not_terminal(application: PlatformCreditApplication, target: str) -> None:
     if application.status in _TERMINAL_STATUSES:
@@ -274,7 +282,9 @@ def mark_vendor_reprocessing(application: PlatformCreditApplication) -> None:
     application.status_updated_at = datetime.now(timezone.utc)
 
 
-def mark_cancelled(application: PlatformCreditApplication) -> None:
+def mark_cancelled(
+    application: PlatformCreditApplication, *, allow_preactivation: bool = False
+) -> None:
     """Terminal NON-CREDIT closure — the staff "Cancel" action (WS-E).
 
     Cancellation is an administrative termination (customer request, duplicate,
@@ -282,8 +292,20 @@ def mark_cancelled(application: PlatformCreditApplication) -> None:
     rejection: it maps onto the existing ``withdrawn`` terminal status (surfaced
     to users as "Cancelled") and carries its own cancel reason list. The caller
     owns the reason-code validation, audit event, and notification.
+
+    ``allow_preactivation`` (activation-rework Wave 5): permit cancelling from a
+    pre-activation state (``approved`` / ``offer_acceptance`` /
+    ``agreement_signature``) even though ``approved`` is otherwise treated as
+    terminal. A pre-activation file that has NO booked loan is just an open
+    application — cancelling it closes the application, there is nothing to
+    unwind. The caller MUST first confirm no ``platform_loans`` row exists before
+    opting in; a booked (flag-OFF / grandfathered or post-activation) loan keeps
+    the terminal guard so a live loan is never cancelled out from under servicing.
     """
-    _assert_not_terminal(application, "withdrawn")
+    if allow_preactivation and application.status in _PREACTIVATION_STATUSES:
+        pass  # caller confirmed no loan exists — closing the application only
+    else:
+        _assert_not_terminal(application, "withdrawn")
     application.status = "withdrawn"
     application.status_updated_at = datetime.now(timezone.utc)
 

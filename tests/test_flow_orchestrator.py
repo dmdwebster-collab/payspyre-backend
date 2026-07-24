@@ -15,7 +15,6 @@ from sqlalchemy.orm import Session
 import app.services.consent_service as consent_service
 from app.models.platform.credit_application import PlatformCreditApplication
 from app.models.platform.credit_product import PlatformCreditProduct
-from app.models.platform.event import PlatformEvent
 from app.models.platform.patient import PlatformPatient
 from app.services.consent_service import UnknownConsentPurposeError
 from app.services.flow_orchestrator import (
@@ -523,3 +522,55 @@ class TestConcurrency:
             {"aid": str(app.id)},
         ).scalar()
         assert decision_events == 1  # exactly one decision despite the race
+
+
+# ---------------------------------------------------------------------------
+# Activation-rework Wave 5 — mark_cancelled(allow_preactivation=...) (DB-free)
+# ---------------------------------------------------------------------------
+
+
+class TestMarkCancelledPreActivation:
+    """DB-free unit coverage for the Wave-5 pre-activation cancel opt-in.
+
+    ``mark_cancelled`` only reads/writes ``status`` + ``status_updated_at``, so a
+    SimpleNamespace stands in for the application row.
+    """
+
+    @staticmethod
+    def _app(status):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(status=status, status_updated_at=None)
+
+    def test_default_still_blocks_terminal_approved(self):
+        from app.services.flow_orchestrator import mark_cancelled
+
+        app = self._app("approved")
+        with pytest.raises(InvalidStateTransition):
+            mark_cancelled(app)  # no opt-in: approved stays terminal
+        assert app.status == "approved"
+
+    def test_allow_preactivation_cancels_approved(self):
+        from app.services.flow_orchestrator import mark_cancelled
+
+        app = self._app("approved")
+        mark_cancelled(app, allow_preactivation=True)
+        assert app.status == "withdrawn"
+
+    def test_allow_preactivation_cancels_offer_and_agreement(self):
+        from app.services.flow_orchestrator import mark_cancelled
+
+        for s in ("offer_acceptance", "agreement_signature"):
+            app = self._app(s)
+            mark_cancelled(app, allow_preactivation=True)
+            assert app.status == "withdrawn"
+
+    def test_allow_preactivation_does_not_reopen_active(self):
+        from app.services.flow_orchestrator import mark_cancelled
+
+        # 'active' is terminal AND not a pre-activation state — the opt-in must
+        # never let a live loan's application be cancelled.
+        app = self._app("active")
+        with pytest.raises(InvalidStateTransition):
+            mark_cancelled(app, allow_preactivation=True)
+        assert app.status == "active"
