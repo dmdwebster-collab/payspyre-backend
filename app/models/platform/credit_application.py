@@ -133,6 +133,35 @@ class PlatformCreditApplication(Base):
     self_reported = Column(JSONB, nullable=False, default=lambda: {})
 
     # =====================================================================
+    # PRE-LOAN AGREEMENT / SIGNATURE (activation rework Wave 1, migration 078)
+    # ---------------------------------------------------------------------
+    # Agreement e-sign state that can be reached BEFORE a loan exists — the
+    # groundwork for booking the loan at ACTIVATION rather than at approval.
+    # Mirrors ``PlatformLoan.agreement_status`` / ``agreement_ref`` (same shared
+    # ``platform_loan_agreement_status`` PG enum) so the application-level e-sign
+    # service is a near-verbatim port of the loan-level one. ADDITIVE this wave:
+    # nothing in the current approve/accept path writes these yet.
+    #
+    # Advances forward only: not_sent -> sent -> signed (or -> declined).
+    agreement_status = Column(
+        ENUM(
+            "not_sent",
+            "sent",
+            "signed",
+            "declined",
+            name="platform_loan_agreement_status",
+            create_type=False,
+        ),
+        nullable=False,
+        default="not_sent",
+    )
+    # SignNow document id — or a ``SIMULATED-<id>`` marker in simulator mode.
+    # NULL until an agreement is sent.
+    agreement_ref = Column(String, nullable=True)
+    # When the (real or simulated) signature completed. NULL until signed.
+    agreement_signed_at = Column(DateTime(timezone=True), nullable=True)
+
+    # =====================================================================
     # CUSTOMER PROFILE LINK (migration 071)
     # ---------------------------------------------------------------------
     # Dave: a credit application = profile + finance terms + score. The

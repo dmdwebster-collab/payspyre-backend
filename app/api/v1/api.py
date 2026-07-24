@@ -8,6 +8,7 @@ from app.api.v1.endpoints import (
     admin_analytics_depth,
     admin_application_process,
     admin_application_actions,
+    admin_application_documents,
     admin_applications,
     admin_archive,
     admin_audit,
@@ -77,6 +78,15 @@ api_router.include_router(
     admin_application_actions.router,
     prefix="/admin/applications",
     tags=["admin-application-actions"],
+)
+# Activation rework Wave 1: pre-loan agreement e-sign (send-for-signature +
+# simulate-signing) on the APPLICATION — the loan-level surface ported to the
+# application's new agreement columns (migration 078). Additive; nothing wires it
+# into the approve/accept path yet. Staff-only, same RBAC as the loan version.
+api_router.include_router(
+    admin_application_documents.router,
+    prefix="/admin/applications",
+    tags=["admin-documents"],
 )
 # WS-E customer/loan flags: directory CRUD + raise/clear; suppress-notifications
 # flags gate the notification processor's vendor sends.
