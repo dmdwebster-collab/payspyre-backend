@@ -50,8 +50,10 @@ logger = structlog.get_logger(__name__)
 
 router = APIRouter()
 
-# Actions that require a second approver (maker-checker).
-_MAKER_CHECKER_ACTIONS = ("charge_off", "disburse")
+# Actions that require a second approver (maker-checker). ``activate`` (books the
+# loan at activation — activation-rework Wave 2) is scoped to an APPLICATION, not a
+# loan (no loan exists yet); the other two target a loan.
+_MAKER_CHECKER_ACTIONS = ("charge_off", "disburse", "activate")
 
 
 def _actor_id(user) -> str:
@@ -262,17 +264,24 @@ def decide(
 
     loan_id = None
     if body.outcome == "approved":
-        db.flush()
-        try:
-            # Delegate to the hardened lifecycle entry point: idempotent (returns
-            # the existing loan if already booked), race-safe, and emits the
-            # `loan_booked` money event — none of which the inline
-            # create_loan_from_application call did.
-            loan = loan_lifecycle.book_loan(db, app)
-            loan_id = str(loan.id)
-        except Exception as exc:  # pricing/validation failure booking the loan
-            db.rollback()
-            raise HTTPException(status_code=409, detail=f"Could not book loan: {exc}")
+        if app_settings.ACTIVATION_BOOKS_LOAN:
+            # Activation-rework (Wave 2, flag ON): a manual approval does NOT book
+            # a loan. The file rests at ``approved``; offers are issued and the loan
+            # is booked later at ACTIVATION (POST /applications/{id}/activate →
+            # maker-checker → loan_lifecycle.activate_loan). loan_id stays None.
+            pass
+        else:
+            # Flag OFF (default): unchanged. Delegate to the hardened lifecycle
+            # entry point: idempotent (returns the existing loan if already
+            # booked), race-safe, and emits the `loan_booked` money event — none
+            # of which the inline create_loan_from_application call did.
+            db.flush()
+            try:
+                loan = loan_lifecycle.book_loan(db, app)
+                loan_id = str(loan.id)
+            except Exception as exc:  # pricing/validation failure booking the loan
+                db.rollback()
+                raise HTTPException(status_code=409, detail=f"Could not book loan: {exc}")
     elif body.outcome == "declined":
         # SEAM (Dave 2026-07-22): a staff rejection NO LONGER auto-sends a
         # US-style "adverse-action notice" — that is a US regulatory concept, not
@@ -769,10 +778,42 @@ def request_disburse(loan_id: UUID, body: ActionRequestBody, db: Session = Depen
     return _request_action(db, action="disburse", loan_id=loan_id, user=user, body=body)
 
 
+@router.post("/applications/{application_id}/activate")
+def request_activate(application_id: UUID, body: ActionRequestBody, db: Session = Depends(get_db),
+                     user=Depends(require_roles("admin"))):
+    """Request loan ACTIVATION (activation-rework Wave 2) — a SECOND admin approves.
+
+    Scoped to the APPLICATION: no loan exists yet — the approval books it at
+    activation via ``loan_lifecycle.activate_loan`` off the signed application
+    agreement. Maker-checker is unchanged: this only files a request; the
+    different-admin approver on ``/pending-actions/{id}/approve`` is what actually
+    creates the loan. The signed-agreement precondition is enforced at approve
+    time (and again inside ``activate_loan``)."""
+    app = (
+        db.query(PlatformCreditApplication)
+        .filter(PlatformCreditApplication.id == application_id)
+        .first()
+    )
+    if app is None:
+        raise HTTPException(status_code=404, detail="Application not found")
+    actor = _actor_id(user)
+    ev = _audit(
+        db, event_type="admin_action_requested", actor=actor, application_id=application_id,
+        payload={"action": "activate", "application_id": str(application_id),
+                 "requested_by": actor, "reason_code": body.reason_code, "note": body.note},
+    )
+    db.commit()
+    return {"pending_action_id": ev.id, "action": "activate",
+            "application_id": str(application_id), "status": "pending", "requested_by": actor}
+
+
 class PendingAction(BaseModel):
     id: int
     action: str
-    loan_id: str
+    # A pending action targets EITHER a loan (charge_off / disburse) or an
+    # application (activate). Exactly one is populated per row.
+    loan_id: Optional[str] = None
+    application_id: Optional[str] = None
     requested_by: str
     requested_at: datetime
     reason_code: Optional[str] = None
@@ -801,7 +842,8 @@ def list_pending(db: Session = Depends(get_db), _user=Depends(require_roles("adm
     out = []
     for ev_id, occurred_at, payload in rows:
         out.append(PendingAction(
-            id=ev_id, action=payload["action"], loan_id=payload["loan_id"],
+            id=ev_id, action=payload["action"],
+            loan_id=payload.get("loan_id"), application_id=payload.get("application_id"),
             requested_by=payload["requested_by"], requested_at=occurred_at,
             reason_code=payload.get("reason_code"), note=payload.get("note"),
         ))
@@ -844,35 +886,61 @@ def approve_action(request_event_id: int, db: Session = Depends(get_db),
         raise HTTPException(status_code=403, detail="Maker-checker: the approver must be a different admin.")
 
     action = payload["action"]
-    loan = _get_loan(db, UUID(payload["loan_id"]))
 
     # Validate + precondition-check BEFORE recording the approval, so a rejected
     # precondition can't leave an orphan approval event.
-    if action not in ("charge_off", "disburse"):
+    if action not in _MAKER_CHECKER_ACTIONS:
         raise HTTPException(status_code=422, detail=f"Unknown action '{action}'")
-    if action == "disburse":
-        # The admin "release disbursement" action funds an already-SIGNED loan that
-        # hasn't started disbursing — it does not bypass e-sign. (Audit H1/L4.)
-        if loan.agreement_status != "signed":
+
+    application = None
+    loan = None
+    if action == "activate":
+        # Activation-rework Wave 2: the pending action targets the APPLICATION —
+        # the approval books the loan at activation. Precondition: the application
+        # agreement is signed (checked again inside activate_loan).
+        application = (
+            db.query(PlatformCreditApplication)
+            .filter(PlatformCreditApplication.id == UUID(payload["application_id"]))
+            .first()
+        )
+        if application is None:
+            raise HTTPException(status_code=404, detail="Application not found")
+        if application.agreement_status != "signed":
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"Loan agreement is not signed (agreement_status="
-                       f"{loan.agreement_status!r}); cannot disburse.",
+                detail=f"Application agreement is not signed (agreement_status="
+                       f"{application.agreement_status!r}); cannot activate.",
             )
-        if loan.disbursement_status != "not_started":
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Disbursement already {loan.disbursement_status!r}.",
-            )
+    else:
+        loan = _get_loan(db, UUID(payload["loan_id"]))
+        if action == "disburse":
+            # The admin "release disbursement" action funds an already-SIGNED loan
+            # that hasn't started disbursing — it does not bypass e-sign. (Audit
+            # H1/L4.)
+            if loan.agreement_status != "signed":
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Loan agreement is not signed (agreement_status="
+                           f"{loan.agreement_status!r}); cannot disburse.",
+                )
+            if loan.disbursement_status != "not_started":
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Disbursement already {loan.disbursement_status!r}.",
+                )
 
     # Record the approval FIRST (within the request-row lock), THEN execute via the
     # hardened lifecycle entry point. The entry point commits — which commits this
     # flushed approval event too, so a concurrent approver (blocked on the lock)
     # re-reads, sees the terminal event, and 409s. Migration 039's unique index
     # backstops the approval event itself. No state column is written inline here.
-    _audit(db, event_type="admin_action_approved", actor=actor,
-           payload={"request_event_id": request_event_id, "action": action,
-                    "loan_id": payload["loan_id"], "approved_by": actor})
+    approval_payload = {"request_event_id": request_event_id, "action": action,
+                        "approved_by": actor}
+    if action == "activate":
+        approval_payload["application_id"] = payload["application_id"]
+    else:
+        approval_payload["loan_id"] = payload["loan_id"]
+    _audit(db, event_type="admin_action_approved", actor=actor, payload=approval_payload)
     db.flush()
 
     try:
@@ -880,11 +948,15 @@ def approve_action(request_event_id: int, db: Session = Depends(get_db),
             loan = loan_lifecycle.charge_off_loan(
                 db, loan, reason_code=payload.get("reason_code"), actor=actor)
             result = {"loan_status": loan.status}
-        else:  # disburse
+        elif action == "disburse":
             loan = loan_lifecycle.initiate_disbursement(db, loan)
             result = {"disbursement_status": loan.disbursement_status,
                       "disbursement_ref": loan.disbursement_ref}
-    except ValueError as exc:  # business-rule rejection (e.g. charging off a paid loan)
+        else:  # activate — books + activates the loan at activation
+            loan = loan_lifecycle.activate_loan(db, application, actor=actor)
+            result = {"loan_id": str(loan.id), "loan_status": loan.status,
+                      "booked_at_activation": loan.booked_at_activation}
+    except ValueError as exc:  # business-rule rejection (e.g. unsigned/paid loan)
         db.rollback()
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
 

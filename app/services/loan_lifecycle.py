@@ -92,6 +92,11 @@ LOAN_DISBURSEMENT_INITIATED_EVENT = "loan_disbursement_initiated"
 LOAN_DISBURSED_EVENT = "loan_disbursed"
 LOAN_DISBURSEMENT_FAILED_EVENT = "loan_disbursement_failed"
 LOAN_CHARGED_OFF_EVENT = "loan_charged_off"
+# Activation-rework Wave 2: the loan was booked at ACTIVATION (not approval) off a
+# signed APPLICATION agreement, and virtually disbursed (funds virtually moved) in
+# the same step. Distinct from ``loan_booked`` so the WORM log tells the two
+# origination cohorts apart.
+LOAN_ACTIVATED_EVENT = "loan_activated"
 # Agreement (e-sign) lifecycle — recorded so the notification processor can
 # send the borrower-facing "signature required" / "agreement signed" emails
 # (Dave's Customer notification spec) off the same event stream.
@@ -334,6 +339,148 @@ def book_loan(
         # must NOT roll back the committed booking on a document hiccup.
         logger.warning(
             "loan_booking_document_generation_failed",
+            loan_id=str(loan.id),
+            exc_info=True,
+        )
+    return loan
+
+
+class ActivationError(ValueError):
+    """Loan activation was attempted before its precondition was met."""
+
+
+def activate_loan(
+    db: Session,
+    application: PlatformCreditApplication,
+    *,
+    actor: Optional[str] = None,
+    first_due_date=None,
+) -> PlatformLoan:
+    """Book + activate a loan at ACTIVATION (activation-rework Wave 2 executor).
+
+    The activation-time analogue of ``book_loan``. Instead of creating the loan at
+    approval in ``pending_disbursement`` and disbursing later, this creates the
+    loan only now — once the borrower has SIGNED the agreement on the APPLICATION
+    (Wave 1 ``application.agreement_status``) — and brings it straight to
+    ``active``. Activation is Dave's "virtual disbursement": funds are treated as
+    moved, so there is NO separate disburse leg (``disbursement_status`` is set
+    ``completed`` and ``disbursed_at`` stamped in the same step).
+
+    Precondition: ``application.agreement_status == 'signed'`` — else
+    :class:`ActivationError` (surfaced as a 4xx). A loan is only booked at
+    activation off a signed application agreement.
+
+    Idempotent: if a loan already exists for the application (``book_loan``'s
+    idempotency + the ``uq_platform_loans_application`` constraint) the existing
+    loan is returned unchanged — a double-activate never double-books.
+
+    Provenance copy: ``booked_at_activation`` is set ``True`` and the agreement
+    ref + signed-at are copied from the application onto the loan, so the loan is
+    created ALREADY ``signed`` (never re-sent for signature) carrying the exact
+    signing record it was booked from.
+
+    Also advances the application to ``active`` and emits a ``loan_activated``
+    WORM event. Commits its own unit of work (like ``book_loan``).
+    """
+    if application.agreement_status != "signed":
+        raise ActivationError(
+            f"Cannot activate application {application.id}: its agreement is "
+            f"'{application.agreement_status}' (must be 'signed' before the loan "
+            f"can be booked at activation)."
+        )
+
+    existing = (
+        db.query(PlatformLoan)
+        .filter(PlatformLoan.application_id == application.id)
+        .first()
+    )
+    if existing is not None:
+        logger.info(
+            "loan_activate_idempotent_skip",
+            application_id=str(application.id),
+            loan_id=str(existing.id),
+        )
+        return existing
+
+    try:
+        loan = loan_servicing.create_loan_from_application(
+            db, application, first_due_date=first_due_date
+        )
+    except IntegrityError:
+        # Race: a concurrent activation booked this application's loan between our
+        # SELECT and INSERT. The unique constraint held — return the winner.
+        db.rollback()
+        existing = (
+            db.query(PlatformLoan)
+            .filter(PlatformLoan.application_id == application.id)
+            .first()
+        )
+        if existing is not None:
+            logger.info(
+                "loan_activate_idempotent_race",
+                application_id=str(application.id),
+                loan_id=str(existing.id),
+            )
+            return existing
+        raise
+
+    # Provenance: booked at activation, already-signed, off the application's
+    # agreement. Copy the ref + signed-at forward and mark the loan signed.
+    loan.booked_at_activation = True
+    loan.agreement_status = "signed"
+    loan.agreement_ref = application.agreement_ref
+    loan.agreement_signed_at = application.agreement_signed_at
+    # Virtual disbursement: _mark_active flips the fresh pending_disbursement loan
+    # to active, sets disbursement_status=completed and stamps disbursed_at — no
+    # Zumrails leg (activation IS the disbursement).
+    _mark_active(loan)
+
+    # Advance the application to active. The new activation flow reaches here from
+    # 'agreement_signature' (or 'approved'); the low-level setter is used because
+    # the real precondition is the signed agreement checked above, not the
+    # intermediate status the mark_active ladder-guard would demand.
+    from app.services.flow_orchestrator import _set_status
+
+    _set_status(application, "active")
+
+    _record_loan_event(
+        db,
+        loan,
+        LOAN_ACTIVATED_EVENT,
+        {
+            "status": loan.status,
+            "principal_cents": loan.principal_cents,
+            "term_months": loan.term_months,
+            "annual_rate_bps": loan.annual_rate_bps,
+            "booked_at_activation": True,
+            "agreement_ref": loan.agreement_ref,
+            "agreement_signed_at": (
+                loan.agreement_signed_at.isoformat() if loan.agreement_signed_at else None
+            ),
+            "disbursement_status": loan.disbursement_status,
+            "disbursed_at": loan.disbursed_at.isoformat() if loan.disbursed_at else None,
+            "actor": actor,
+        },
+    )
+    db.commit()
+    db.refresh(loan)
+    logger.info(
+        "loan_activated",
+        application_id=str(application.id),
+        loan_id=str(loan.id),
+        principal_cents=loan.principal_cents,
+        booked_at_activation=True,
+    )
+
+    # WS-B: freeze the agreement documents for this loan, best-effort (mirrors
+    # book_loan) — never fail a committed activation on a document hiccup.
+    try:
+        from app.services import document_engine
+
+        document_engine.generate_booking_documents(db, loan)
+    except Exception:
+        logger.warning(
+            "loan_activation_document_generation_failed",
             loan_id=str(loan.id),
             exc_info=True,
         )

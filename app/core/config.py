@@ -181,6 +181,21 @@ class Settings(BaseSettings):
     # is governed by integration_settings, not this flag.
     AUTO_COLLECTION_ENABLED: bool = False
 
+    # Activation rework (Wave 2) — the "loan created at ACTIVATION, not Approval"
+    # cutover master switch. When False (the DEFAULT), every origination path books
+    # the loan exactly as it does today: the automated approve path
+    # (flow_orchestrator), the manual admin decision (admin_actions.decide) and
+    # offer acceptance (loan_offers.accept_offer) each call ``book_loan`` at the
+    # same point they always have — production behaviour is unchanged. When True,
+    # NONE of those three book a loan: approval issues offers / moves the file into
+    # Offer Acceptance, acceptance advances it to Agreement Signature (agreement on
+    # the APPLICATION), and the loan is booked only at ACTIVATION
+    # (``loan_lifecycle.activate_loan`` via the maker-checker ``activate`` action)
+    # off a signed application agreement — activation being Dave's "virtual
+    # disbursement" (funds virtually moved; no separate disburse leg). Flip on only
+    # once the borrower-portal / cockpit UI for the new stages lands (later waves).
+    ACTIVATION_BOOKS_LOAN: bool = False
+
     # Vendor self-serve disbursements (W2-DISB, Turnkey parity video 10) —
     # MONEY-PATH MASTER FLAG. When False (the default), BOTH the monthly
     # auto-payout job (app/jobs/vendor_disbursements.py) AND the on-demand

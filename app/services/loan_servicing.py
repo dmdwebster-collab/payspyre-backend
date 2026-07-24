@@ -71,6 +71,12 @@ LOAN_PAYMENT_RECORDED_EVENT = "loan_payment_recorded"
 _DEFAULT_ANNUAL_RATE_BPS = 1299  # 12.99% APR
 _DEFAULT_TERM_MONTHS = 24
 
+# Application statuses a loan may be booked from. ``approved`` is the classic
+# approve-time booking; ``agreement_signature`` is the activation-rework (Wave 2)
+# booking point (the file has been approved, an offer accepted, and the agreement
+# signed on the application). See create_loan_from_application.
+_BOOKABLE_STATUSES = ("approved", "agreement_signature")
+
 
 def _add_months(d: date, months: int) -> date:
     """Return ``d`` advanced by ``months`` calendar months, clamping the day to
@@ -418,10 +424,17 @@ def create_loan_from_application(
 
     ``first_due_date`` defaults to one month from today.
     """
-    if application.status != "approved":
+    # Bookable states: the old approve-time path books an ``approved`` application;
+    # the activation-rework (Wave 2) path books at ACTIVATION off a file sitting in
+    # ``agreement_signature`` (approved → offer_acceptance → agreement_signature),
+    # so both are accepted. Everything else is refused — a loan is only ever
+    # created from a decided-and-accepted file. Widening this does NOT change the
+    # old path (``approved`` is still accepted); it only additionally permits the
+    # activation-time status.
+    if application.status not in _BOOKABLE_STATUSES:
         raise ValueError(
             f"Cannot book a loan from application {application.id} with "
-            f"status '{application.status}' (must be 'approved')"
+            f"status '{application.status}' (must be one of {_BOOKABLE_STATUSES})"
         )
 
     principal_cents, annual_rate_bps, term_months = _resolve_pricing(application)

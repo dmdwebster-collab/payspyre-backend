@@ -124,6 +124,13 @@ class PlatformLoan(Base):
     )
     # SignNow document id — durable vendor ref. NULL until an agreement is sent.
     agreement_ref = Column(String, nullable=True)
+    # When the loan agreement was signed (migration 079). Historically the loan
+    # only carried ``agreement_status`` (the SignNow webhook flipped it to
+    # ``signed`` without recording WHEN). The activation-rework (Wave 2) booking
+    # path copies this forward from the application's ``agreement_signed_at`` so a
+    # loan booked at activation records its own signing time. NULL for loans
+    # booked under the old approve-time path and for loans awaiting signature.
+    agreement_signed_at = Column(DateTime(timezone=True), nullable=True)
 
     # ---- Lifecycle: disbursement (Zumrails) ------------------------------
     # Where the funding payout is at. Advances forward only:

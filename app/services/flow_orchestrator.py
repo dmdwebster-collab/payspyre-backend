@@ -41,6 +41,7 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.logging import get_logger
 from app.models.platform.consent import PlatformConsent
 from app.models.platform.credit_application import PlatformCreditApplication
@@ -1259,25 +1260,36 @@ class FlowOrchestrator:
         # idempotent; send_agreement is forward-only + gracefully no-ops if SignNow is
         # unconfigured). loan-booking must never fail the decision, so it is guarded.
         if application.status == "approved":
-            try:
-                from app.services import loan_lifecycle
-
-                loan = loan_lifecycle.book_loan(self.db, application)
-            except Exception as exc:  # noqa: BLE001 — decision integrity over LMS hand-off
-                logger.error(
-                    "loan_booking_failed",
-                    application_id=str(application.id),
-                    error=str(exc),
-                )
+            if settings.ACTIVATION_BOOKS_LOAN:
+                # Activation-rework (Wave 2, flag ON): do NOT book at approval.
+                # Move the approved file into Offer Acceptance instead; the loan is
+                # booked later, at ACTIVATION, off a signed application agreement
+                # (loan_lifecycle.activate_loan). No loan row and no e-sign invite
+                # here. _set_status is the low-level setter — 'approved' is terminal
+                # to the mark_* ladder-guards, but this deliberate routing into the
+                # new pre-loan stages is what the flag turns on.
+                _set_status(application, "offer_acceptance")
             else:
-                # Post-commit: SignNow invite. The loan row is committed by the
-                # unit-of-work before this closure runs.
-                def _send_agreement(loan=loan) -> None:
+                # Flag OFF (default): unchanged — book the loan now, defer e-sign.
+                try:
                     from app.services import loan_lifecycle
 
-                    loan_lifecycle.send_agreement(self.db, loan)
+                    loan = loan_lifecycle.book_loan(self.db, application)
+                except Exception as exc:  # noqa: BLE001 — decision integrity over LMS hand-off
+                    logger.error(
+                        "loan_booking_failed",
+                        application_id=str(application.id),
+                        error=str(exc),
+                    )
+                else:
+                    # Post-commit: SignNow invite. The loan row is committed by the
+                    # unit-of-work before this closure runs.
+                    def _send_agreement(loan=loan) -> None:
+                        from app.services import loan_lifecycle
 
-                self._pending_outbound.append(("send_agreement", _send_agreement))
+                        loan_lifecycle.send_agreement(self.db, loan)
+
+                    self._pending_outbound.append(("send_agreement", _send_agreement))
         # SEAM (Dave 2026-07-22): on an auto-rejection we NO LONGER auto-send a
         # US-style "adverse-action notice" — that is a US regulatory concept and
         # is not applicable in Canada. The reason capture is untouched: the
