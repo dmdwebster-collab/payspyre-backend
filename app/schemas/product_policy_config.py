@@ -458,6 +458,16 @@ class ProductPolicyConfig(BaseModel):
     #: offered in the borrower-facing catalogue. Defaults True, which is how
     #: every product behaves today (there was no flag to hide one).
     visible_to_customer: bool = True
+    #: Dave's Account-Due-As-Of "% of installment to move" (AMOUNT_TO_MOVE_MODEL
+    #: §D7). The fraction of a scheduled installment a (virtual) payment must
+    #: reach to advance the account one full installment for delinquency
+    #: purposes — the "collections flexibility to avoid delinquency" lever,
+    #: consumed by ``app.services.servicing_status``. DEFAULT 1.0 is STRICT:
+    #: only a full installment moves the account, which preserves the
+    #: pre-existing per-installment DPD semantics for every product that never
+    #: sets it. Dave's worked example uses 0.50 and it is set per credit
+    #: product. Quantized to basis points by the servicing engine.
+    amount_to_move_pct: float = Field(default=1.0, ge=0.0, le=1.0)
     schedule_building: ScheduleBuildingConfig = Field(default_factory=ScheduleBuildingConfig)
     allocation_priority: AllocationPriorityConfig = Field(
         default_factory=AllocationPriorityConfig
@@ -661,6 +671,14 @@ POLICY_SECTION_STATUS: dict[str, dict] = {
     "visible_to_customer": {
         "status": "pending_consumer",
         "note": "No borrower-facing catalogue filter reads this yet.",
+    },
+    "amount_to_move_pct": {
+        "status": "consumed",
+        "note": (
+            "servicing_status reads this as the Account-Due-As-Of move% — it "
+            "drives the live days-past-due basis and the amount-to-move field "
+            "on the loan servicing read. Default 1.0 = strict (full installment)."
+        ),
     },
     "schedule_building": {
         "status": "pending_consumer",
