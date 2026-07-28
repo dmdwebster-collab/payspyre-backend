@@ -324,7 +324,12 @@ class PreviewResult:
 
     html: str
     title: str
-    template_source: str  # 'db_template' | 'builtin_skeleton'
+    #: The application the agreement was actually rendered FOR. Differs from the
+    #: requested id when a co-borrower file was passed: the agreement is written
+    #: on the primary file, so the preview resolves through to it.
+    application_id: Optional[UUID] = None
+    application_status: str = ""
+    template_source: str = "builtin_skeleton"  # or 'db_template'
     template_id: Optional[UUID] = None
     template_version: Optional[int] = None
     merge_data: dict[str, str] = _dc_field(default_factory=dict)
@@ -1254,6 +1259,8 @@ def build_preview(
         # with any copy of the HTML, not just the JSON envelope.
         html=PREVIEW_BANNER_HTML + result.html,
         title=f"PREVIEW — {title}",
+        application_id=getattr(application, "id", None),
+        application_status=_s(getattr(application, "status", None)),
         template_source=source,
         template_id=getattr(template, "id", None),
         template_version=getattr(template, "version", None),

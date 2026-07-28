@@ -86,6 +86,9 @@ class TermsSnapshotOut(BaseModel):
 
 
 class AgreementPreviewResponse(BaseModel):
+    #: The application the agreement was rendered FOR. When a co-borrower file id
+    #: is requested this is the PRIMARY file — the agreement is written on the
+    #: primary, with the co-borrower merged into it.
     application_id: UUID
     application_status: str
     #: ALWAYS true. This endpoint cannot return an executed document.
@@ -170,8 +173,10 @@ def agreement_preview(
     application = _get_application(db, application_id)
     preview = application_agreement_preview.generate_agreement_preview(db, application)
     return AgreementPreviewResponse(
-        application_id=application.id,
-        application_status=application.status,
+        # The PRIMARY file when a co-borrower id was requested — the agreement is
+        # written on the primary, with the co-borrower merged into it.
+        application_id=preview.application_id or application.id,
+        application_status=preview.application_status or application.status,
         is_preview=True,
         disclaimer=application_agreement_preview.PREVIEW_DISCLAIMER,
         generated_at=preview.generated_at,

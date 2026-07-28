@@ -466,6 +466,12 @@ class TestPreviewLabelling:
     def test_title_is_prefixed(self):
         assert _preview().title.startswith("PREVIEW — ")
 
+    def test_result_names_the_application_it_rendered(self):
+        application = _application()
+        result = build_preview(application, **_complete_kwargs())
+        assert result.application_id == application.id
+        assert result.application_status == "under_review"
+
     def test_service_never_writes_anything(self):
         """Structural guarantee: the preview module performs no DB mutation."""
         source = inspect.getsource(preview_mod)
