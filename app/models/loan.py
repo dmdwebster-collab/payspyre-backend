@@ -126,6 +126,11 @@ class Vendor(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
 
+    # The source system's own identifier for this vendor (e.g. "BC4906"), set by
+    # the portfolio import (migration 083). Unique when present, so re-importing
+    # a book resolves to the same vendor instead of creating a duplicate.
+    external_code = Column(String(64), nullable=True)
+
     # Business info
     business_name = Column(String(255), nullable=False)
     dba_name = Column(String(255), nullable=True)

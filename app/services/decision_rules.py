@@ -1,9 +1,9 @@
-"""Decision-rules directory (Workstream F — Turnkey Settings parity, video 08 §2.1).
+"""Decision-rules directory (Workstream F — legacy-LMS Settings parity, video 08 §2.1).
 
 An admin-editable registry over the flow-engine's decision rules, mirroring the
 notification-rules pattern from PR #174: the CODE registry below is the source
 of truth for which rules EXIST (with their default thresholds/outcomes, seeded
-from the Turnkey video-08 values + the engine's current defaults), and the
+from the legacy-LMS video-08 values + the engine's current defaults), and the
 ``platform_decision_rules`` table stores only EDITS. No DB row → the shipped
 default applies, so current decision behaviour is preserved bit-for-bit until an
 admin edits a rule.
@@ -18,7 +18,7 @@ Two enforcement tiers (honest by design):
       is exactly one 660/600 in the codebase.
 
       ⚠️ DECISION-PATH, CHANGED 2026-07-22 (P0/T4): the seeded ``approve_at``
-      was **680** (Turnkey-era engine default) against the **660** on Dave's
+      was **680** (the legacy LMS-era engine default) against the **660** on Dave's
       Settings screen. It is now **660** — auto-approving applicants scoring
       660-679 who previously went to manual review. **Confirm 660 with Dave**
       before this reaches production; if he says 680, change
@@ -123,7 +123,7 @@ def default_manual_review_band() -> dict[str, int]:
 
 
 # ---------------------------------------------------------------------------
-# The registry — seeded from Turnkey video 08 §4.1 (Dave's configured values).
+# The registry — seeded from legacy-LMS video 08 §4.1 (Dave's configured values).
 # ---------------------------------------------------------------------------
 
 _SPECS: tuple[DecisionRuleSpec, ...] = (

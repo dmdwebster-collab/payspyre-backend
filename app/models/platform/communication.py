@@ -13,7 +13,7 @@ there is deliberately no application code path that mutates or deletes a row.
 Unlike ``platform_events`` (which stores only a recipient hash), the raw
 recipient and body ARE the evidence here and are stored verbatim — with one
 exception: bodies carrying credentials (magic-link sign-in codes) are stored
-as ``<Hidden for privacy purposes>``, the on-camera Turnkey behavior.
+as ``<Hidden for privacy purposes>``, the on-camera legacy-LMS behavior.
 """
 from uuid import uuid4
 

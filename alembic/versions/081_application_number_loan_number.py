@@ -31,7 +31,7 @@ agreement. So this adds:
     application when the loan is booked. The signed agreement and the live loan
     therefore carry one identifier, which is the whole point of the instruction.
 
-Migrated Turnkey loans (``application_id IS NULL``) keep ``loan_number`` NULL and
+Migrated the legacy LMS loans (``application_id IS NULL``) keep ``loan_number`` NULL and
 go on being identified by ``legacy_account_number`` — vendors keep the numbers
 they already know.
 
@@ -52,7 +52,7 @@ branch_labels = None
 depends_on = None
 
 #: Numbers start here so an application number is never confusably short and
-#: never collides with a small legacy Turnkey account number.
+#: never collides with a small legacy account number.
 _SEQUENCE_START = 100_000
 
 
@@ -128,7 +128,7 @@ def upgrade() -> None:
     )
 
     # --- loans: the inherited copy ----------------------------------------
-    # Nullable: migrated Turnkey loans have no application to inherit from.
+    # Nullable: migrated the legacy LMS loans have no application to inherit from.
     op.add_column(
         "platform_loans", sa.Column("loan_number", sa.String(), nullable=True)
     )

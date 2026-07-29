@@ -1,6 +1,6 @@
-"""Dave's month-end delinquency bucket state machine (WS-H, Turnkey parity P0).
+"""Dave's month-end delinquency bucket state machine (WS-H, legacy-LMS parity, P0).
 
-Replaces Turnkey's rolling 1-30/31-60/61-90/>91 DPD filters with Dave's model
+Replaces the legacy LMS's rolling 1-30/31-60/61-90/>91 DPD filters with Dave's model
 (04__WP_Collections §4): buckets are assigned as MONTH-END SNAPSHOTS —
 
     current → current_month_late → pot_30 → pot_60 (credit-bureau reported)
@@ -44,7 +44,7 @@ cure/rollover semantics are AMBIGUOUS pending Dave — flagged in the PR):
      flagged for Dave.
 
      CORRECTED 2026-07-22 (P0/T4): the default threshold shipped at 121 DPD
-     (Turnkey's ">120" rule). Dave, video 04: *"instead of the 120 plus …
+     (the legacy LMS's ">120" rule). Dave, video 04: *"instead of the 120 plus …
      once they get past pot 90 they would just be quote unquote default."*
      ``default_min_dpd`` is now **91** and, like every other boundary here,
      is DB-overridable — see :func:`get_policy`.
@@ -56,7 +56,7 @@ cure/rollover semantics are AMBIGUOUS pending Dave — flagged in the PR):
      month (~120 DPD) now reports ``default`` instead of ``pot_90``. That IS
      the literal reading of "once they get past pot 90 they would just be
      default", and it is what Dave asked for — but if he meant "the month
-     AFTER a loan is pot 90", the correct value is ~121 (Turnkey's old rule).
+     AFTER a loan is pot 90", the correct value is ~121 (the legacy LMS's old rule).
      No deploy is needed to switch: set ``default_min_dpd`` in the
      ``delinquency_buckets`` integration-settings row.
   5. Insolvency overrides everything INCLUDING written_off: Dave keeps a
@@ -260,7 +260,7 @@ class BucketPolicy:
     pot_90_min_dpd: int = 90
     # ">90 → default" (Dave, video 04: "instead of the 120 plus … once they get
     # past pot 90 they would just be quote unquote default"). 90 DPD is the last
-    # pot_90 day; 91 is default. Was 121 (Turnkey's ">120") until 2026-07-22.
+    # pot_90 day; 91 is default. Was 121 (the legacy LMS's ">120") until 2026-07-22.
     default_min_dpd: int = 91
     # -- DPD ageing buckets (stateless reporting vocabulary; see docstring) ---
     # INCLUSIVE upper bounds: 1..30 → "1-30", 31..60 → "31-60",

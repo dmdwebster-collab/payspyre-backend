@@ -1,4 +1,4 @@
-"""Month-end delinquency bucket state machine (WS-H, Turnkey parity P0)
+"""Month-end delinquency bucket state machine (WS-H, legacy-LMS parity, P0)
 
 Revision ID: 053_delinquency_buckets
 Revises: 049_loan_ledger
@@ -8,7 +8,7 @@ NOTE ON CHAINING: origin/main's migration head was 049_loan_ledger when this
 branch was cut; the Phase-2 merge train re-chains down_revisions sequentially
 as siblings land (P0_BUILD_PLAN convention).
 
-Dave's collections model (04__WP_Collections §4) replaces Turnkey's rolling
+Dave's collections model (04__WP_Collections §4) replaces the legacy LMS's rolling
 1-30/31-60/61-90/>91 DPD filters with MONTH-END SNAPSHOT buckets:
 
     current → current_month_late → pot_30 → pot_60 (credit-bureau reported)

@@ -38,7 +38,7 @@ router = APIRouter(dependencies=[Depends(require_roles("admin", "staff"))])
 
 # Live DPD ageing vocabulary — Dave's platform-wide `Good / 1-30 / 31-60 /
 # 61-90 / >91` (upper bounds INCLUSIVE). Was `current/1-29/30-59/60-89/90-119/
-# 120+`, i.e. Turnkey's cut, which put 30/60/90-DPD loans one bucket deeper than
+# 120+`, i.e. The legacy LMS's cut, which put 30/60/90-DPD loans one bucket deeper than
 # Dave's screens do and invented a 120+ row he folded into Default. Corrected
 # 2026-07-22 (P0/T4). The boundaries come from `dq.get_policy(db)` — do NOT
 # re-derive them here.
@@ -227,7 +227,7 @@ class CollectionsQueueRow(BaseModel):
     # overrides applied) + its insolvency classification, if any.
     month_end_bucket: str = "current"
     insolvency_status: Optional[str] = None
-    # WS-C collector assignment surfacing (Turnkey's "A" avatar column).
+    # WS-C collector assignment surfacing (the legacy LMS's "A" avatar column).
     assigned_collector_user_id: Optional[UUID] = None
 
 

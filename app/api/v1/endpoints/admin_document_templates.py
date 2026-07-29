@@ -1,11 +1,11 @@
-"""Admin CRUD for system-document templates (WS-B — Turnkey "Settings >
+"""Admin CRUD for system-document templates (WS-B — legacy-LMS "Settings >
 Application process > System documents").
 
 VERSIONED, NEVER DESTRUCTIVE: a template version is an immutable row. "Editing"
 = POSTing a new version (new row, version+1 within the same kind+scope key);
 old versions are kept forever as history. The only mutations are the
 ``active`` flag (deactivate pulls a version out of resolution; activate
-restores it — Turnkey's history/restore affordance). There is NO delete and NO
+restores it — the legacy LMS's history/restore affordance). There is NO delete and NO
 body update endpoint, deliberately.
 
 Resolution preview: ``POST /{id}/preview`` renders a template against a real
@@ -156,7 +156,7 @@ def _validate_scope(body: TemplateCreate) -> None:
 
 @router.get("/merge-fields", response_model=MergeFieldsResponse)
 def merge_fields() -> MergeFieldsResponse:
-    """The canonical merge-field dictionary (Turnkey's Merge fields dialog)."""
+    """The canonical merge-field dictionary (the legacy LMS's Merge fields dialog)."""
     return MergeFieldsResponse(
         scalar_fields=document_engine.MERGE_FIELDS,
         table_fields=document_engine.TABLE_FIELDS,

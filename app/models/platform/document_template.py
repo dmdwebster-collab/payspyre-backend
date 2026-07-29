@@ -1,7 +1,7 @@
-"""System documents (WS-B, Turnkey parity): versioned merge-field templates +
+"""System documents (WS-B, legacy-LMS parity): versioned merge-field templates +
 per-loan generated document snapshots.
 
-Turnkey's "Settings > Application process > System documents" holds loan
+The legacy LMS's "Settings > Application process > System documents" holds loan
 agreements, PAD agreements, amortization/fee schedules, T&Cs and privacy policy
 as VERSIONED templates — global defaults plus per-credit-product and per-vendor
 overrides (the BC1180/AB4464-style per-clinic library in video 08). This module

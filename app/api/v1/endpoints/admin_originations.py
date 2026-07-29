@@ -1,4 +1,4 @@
-"""Originations-admin write/read surface (WS-E, Turnkey parity video 01).
+"""Originations-admin write/read surface (WS-E, legacy-LMS parity video 01).
 
 Mounted under ``/admin/applications`` alongside the read-only queue/detail
 (``admin_applications``) and the decision loop (``admin_actions``):

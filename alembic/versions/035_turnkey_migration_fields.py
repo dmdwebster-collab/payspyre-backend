@@ -1,15 +1,15 @@
-"""Turnkey loan-book migration fields on platform_loans
+"""The legacy LMS loan-book migration fields on platform_loans
 
 Revision ID: 035_turnkey_migration_fields
 Revises: 033_payment_idempotency_and_event_index
 Create Date: 2026-06-22
 
-Lets the legacy Turnkey book be imported as PlatformLoan rows that have no PaySpyre
+Lets the legacy book be imported as PlatformLoan rows that have no PaySpyre
 application:
 - ``application_id`` becomes NULLABLE (a migrated loan has no application). The
   existing unique constraint still holds — Postgres treats NULLs as distinct.
 - ``source`` ('application' default | 'turnkey_migration') records provenance.
-- ``legacy_account_number`` stores the Turnkey acct# for tracing + IDEMPOTENT
+- ``legacy_account_number`` stores the legacy LMS acct# for tracing + IDEMPOTENT
   re-import (partial unique index when present).
 - A CHECK constraint keeps natively-originated loans honest: only a migrated loan
   may have a NULL application_id.

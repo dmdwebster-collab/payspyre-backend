@@ -3,7 +3,7 @@
 Dave's collections modernization (04__WP_Collections):
 
 * ``PlatformCollectorAssignment`` — who is working a delinquent loan. Bulk
-  assignment (by vendor / borrower alpha / bucket) replaces Turnkey's
+  assignment (by vendor / borrower alpha / bucket) replaces the legacy LMS's
   one-at-a-time "Assign to me" ("that's just not viable"). Any collector may
   hold any file — seniority is the manager's staffing call when picking the
   assignee, not a classification the system stores.
@@ -249,7 +249,7 @@ class PlatformPromiseToPay(Base):
 
     amount_cents = Column(BigInteger, nullable=False)
     promised_date = Column(Date, nullable=False)
-    # MANDATORY (Dave / Turnkey dialog parity).
+    # MANDATORY (Dave / legacy-LMS dialog parity).
     comment = Column(String, nullable=False)
     no_late_fees = Column(
         Boolean, nullable=False, default=False, server_default=text("false")

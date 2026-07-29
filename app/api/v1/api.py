@@ -29,12 +29,15 @@ from app.api.v1.endpoints import (
     admin_flags,
     admin_hardship,
     admin_import,
+    admin_maintenance,
     admin_loan_documents,
     admin_loans,
     admin_messages,
     admin_offers,
     admin_origination,
     admin_originations,
+    admin_portfolio_import,
+    admin_providers,
     admin_report_builder,
     admin_report_exports,
     admin_risk_scores,
@@ -105,7 +108,7 @@ api_router.include_router(admin_loans.router, prefix="/admin/loans", tags=["admi
 # implicitly allowed) — Dave's "user-defined availability" mandate.
 api_router.include_router(admin_hardship.router, prefix="/admin/loans", tags=["admin-hardship"])
 # WS-B — per-loan generated documents (agreement/PAD/schedules/statements) +
-# versioned system-document templates w/ merge-field engine (Turnkey parity).
+# versioned system-document templates w/ merge-field engine (legacy-LMS parity).
 api_router.include_router(admin_loan_documents.router, prefix="/admin/loans", tags=["admin-documents"])
 api_router.include_router(
     admin_document_templates.router, prefix="/admin/document-templates", tags=["admin-documents"]
@@ -148,13 +151,24 @@ api_router.include_router(
 )
 # Phase 2 — write actions (decision/payment/payoff) + maker-checker (charge-off/disburse).
 api_router.include_router(admin_actions.router, prefix="/admin", tags=["admin-actions"])
-# Turnkey cutover import (P0 WS-D) — CSV upload -> preview -> confirm, admin-only.
+# Cutover import (P0 WS-D) — CSV upload -> preview -> confirm, admin-only.
 api_router.include_router(admin_import.router, prefix="/admin/import", tags=["admin-import"])
+# Generic PORTFOLIO import — a source system's own workbook, mapped by a declarative
+# profile: preview / apply (dry-run by default) / reconcile. Admin-only.
+api_router.include_router(
+    admin_portfolio_import.router, prefix="/admin/import", tags=["admin-import"]
+)
+# Vendor provider roster (migration 083) — the Originations provider dropdown's source.
+api_router.include_router(admin_providers.router, prefix="/admin", tags=["admin-providers"])
+# Guarded demo-data purge (dry-run + confirmed execute). Refused in production.
+api_router.include_router(
+    admin_maintenance.router, prefix="/admin/maintenance", tags=["admin-maintenance"]
+)
 # Phase 4 — advanced portfolio analytics (vintage / originations / CEI). Read-only.
 api_router.include_router(admin_analytics.router, prefix="/admin/analytics", tags=["admin-analytics"])
 # WS-H reports depth — profit split / buckets+debt-roll / overrides / AI-decisioning / geo.
 api_router.include_router(admin_analytics_depth.router, prefix="/admin/analytics", tags=["admin-analytics"])
-# Turnkey-parity XLSX report downloads (Dave's TL Smart Marker templates). Read-only.
+# legacy-parity XLSX report downloads (Dave's TL Smart Marker templates). Read-only.
 api_router.include_router(admin_report_exports.router, prefix="/admin/reports", tags=["admin-reports"])
 # WS-H — Excel report builder v1 + scheduled reports engine (definitions / schedules).
 api_router.include_router(admin_report_builder.router, prefix="/admin/reports", tags=["admin-reports"])

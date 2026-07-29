@@ -1,6 +1,6 @@
 """Borrower-facing loan offers (WS-D multi-offer approvals).
 
-The Turnkey flow Dave approved (video 02 §5 "Offers"): the underwriter creates
+The legacy LMS flow Dave approved (video 02 §5 "Offers"): the underwriter creates
 up to N offers; they land HERE — the borrower dashboard — for review; the
 borrower picks EXACTLY ONE.
 

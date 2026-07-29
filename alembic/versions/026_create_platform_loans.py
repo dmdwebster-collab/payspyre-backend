@@ -6,7 +6,7 @@ Create Date: 2026-06-19
 
 Part of P9.0: Loan Servicing (LMS) Spine.
 
-The platform's mandate is to replace Turnkey Lender as both LOS (origination —
+The platform's mandate is to replace the legacy LMS as both LOS (origination —
 already built across PRs P1–P8) AND LMS (loan management / servicing — this PR).
 This is the FOUNDATIONAL servicing layer, a first slice — not the whole LMS:
 

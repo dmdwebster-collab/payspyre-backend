@@ -661,7 +661,7 @@ def allocation_priority_field_metadata() -> dict:
 #
 #   "consumed"       — something reads it; editing changes behaviour.
 #   "informational"  — nothing can read it BY DESIGN; render read-only.
-#   "pending_consumer" — the vocabulary is captured for Turnkey parity but the
+#   "pending_consumer" — the vocabulary is captured for legacy-LMS parity but the
 #                      feature behind it is not built. Editing it today changes
 #                      nothing. NOT an acceptable resting state; each one is a
 #                      tracked build item.
@@ -767,7 +767,7 @@ def assert_schedule_consistent_with_engine(cfg: ProductPolicyConfig) -> None:
     sb = cfg.schedule_building
     if sb.loan_type is not LoanType.DAILY_SIMPLE_INTEREST:
         raise ProductPolicyConfigError(
-            f"loan_type '{sb.loan_type.value}' is declared for Turnkey parity but "
+            f"loan_type '{sb.loan_type.value}' is declared for legacy-LMS parity but "
             "the interest engine only implements daily simple interest on the "
             "remaining principal; use 'daily_simple_interest'"
         )

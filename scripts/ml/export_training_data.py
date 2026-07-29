@@ -45,8 +45,9 @@ DATA GAPS — read before training a model on this output
 
 2. **Low volume until the legacy book is imported.** Natively-originated loans
    only began at the July beta. Historical performance lives in the legacy
-   Turnkey book and must be imported via ``scripts/migration/turnkey_import.py``
-   (loans land with ``source='turnkey_migration'`` and ``application_id IS
+   legacy book and must be imported via the portfolio importer (loans land
+   with an imported ``source`` — see ``app/services/migration/constants.py``
+   — and ``application_id IS
    NULL``) BEFORE this export has enough labeled, matured loans to train on.
    Migrated loans have no PaySpyre application, so their origination-feature
    columns (requested amount, decision, self-reported, verification depth,
@@ -68,6 +69,7 @@ from datetime import date, datetime
 from typing import Any, Iterable, Optional
 
 from app.services.delinquency_buckets import DEFAULT_POLICY, aging_bucket
+from app.services.migration import constants as migration_constants
 
 # ---------------------------------------------------------------------------
 # Column contract
@@ -402,7 +404,7 @@ class LoanRecord:
 
 def build_row(record: LoanRecord, *, as_of: date, salt: str) -> dict[str, Any]:
     """Assemble one fully-derived CSV row dict (keys == ``COLUMNS``)."""
-    is_migrated = record.source == "turnkey_migration"
+    is_migrated = record.source in migration_constants.IMPORTED_LOAN_SOURCES
 
     row: dict[str, Any] = {
         "loan_id_hash": hash_id(record.loan_id, salt),

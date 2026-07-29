@@ -1,25 +1,25 @@
-"""Run the Turnkey -> PaySpyre PAYMENT-HISTORY import end-to-end.
+"""Run the portfolio PAYMENT-HISTORY import end-to-end.
 
-Loads historical loan payments out of a Turnkey payment-ledger export into the PaySpyre
+Loads historical loan payments out of a source system's payment-ledger export into PaySpyre's
 ``platform_loan_payments`` ledger so the AI training dataset has real performance signal.
 
 DRY RUN by default (no writes). With --execute it persists the mapped payments via the
-idempotent ledger-only persist step. Re-running is safe (dedups on the stable Turnkey
+idempotent ledger-only persist step. Re-running is safe (dedups on the stable source
 transaction id via the unique (loan_id, external_ref) index).
 
 LEDGER-ONLY: imported payments are raw PlatformLoanPayment rows for analytics. They do
 NOT run through record_payment, so the schedule and principal_balance of migrated loans
 are never touched (re-applying historical cash on top of the already-snapshotted balance
-would double-count — see app/services/migration/turnkey_payments.py).
+would double-count — see app/services/migration/portfolio_payments.py).
 
 SAFETY: real borrower data must never land on the dev-tools-enabled staging box, so the
 script refuses a target URL that looks like staging unless --force is given.
 
 Examples:
   # preview only
-  python scripts/migration/turnkey_payments_import.py payments.xlsx
+  python scripts/migration/portfolio_payments_import.py payments.xlsx
   # actually import into the target DB (loans must already be imported first)
-  python scripts/migration/turnkey_payments_import.py payments.xlsx --execute \\
+  python scripts/migration/portfolio_payments_import.py payments.xlsx --execute \\
       --database-url postgresql+psycopg2://user:pw@host:5432/payspyre
 """
 import argparse
@@ -29,10 +29,10 @@ import openpyxl
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.services.migration.turnkey_payments import map_payments, persist_payments
+from app.services.migration.portfolio_payments import map_payments, persist_payments
 
 # Sheet that holds the payment ledger and the header row within it. Adjust against the
-# real export alongside the Col constants in turnkey_payments.py.
+# real export alongside the Col constants in portfolio_payments.py.
 PAYMENTS_SHEET = "Payments"
 HEADER_ROW = 1
 
@@ -51,8 +51,8 @@ def _rows_with_headers(sheet):
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Turnkey -> PaySpyre payment-history import")
-    ap.add_argument("excel", help="path to the Turnkey payment-ledger export .xlsx")
+    ap = argparse.ArgumentParser(description="Portfolio payment-history import")
+    ap.add_argument("excel", help="path to the source payment-ledger export .xlsx")
     ap.add_argument("--execute", action="store_true", help="actually write (default: dry run)")
     ap.add_argument("--database-url", help="target DB (required with --execute)")
     ap.add_argument("--force", action="store_true", help="override the staging-URL safety guard")
@@ -64,9 +64,9 @@ def main() -> None:
 
     print(f"Parsed {mapres.total_rows} payment rows -> {len(mapres.payments)} valid "
           f"({len(mapres.invalid)} invalid, skipped).")
-    print("  Turnkey -> PaySpyre mapping: Acct# -> loan.legacy_account_number, "
+    print("  Source -> PaySpyre mapping: Acct# -> loan.legacy_account_number, "
           "Amount -> amount_cents, Payment Date -> received_at, "
-          "Transaction Id -> external_ref (namespaced 'turnkey:').")
+          "Transaction Id -> external_ref (namespaced 'portfolio:').")
     if mapres.payments:
         total = sum(p.amount_cents for p in mapres.payments)
         print(f"  total payment value: ${total/100:,.2f}")
@@ -91,7 +91,7 @@ def main() -> None:
     db = sessionmaker(bind=engine)()
     try:
         res = persist_payments(db, mapres.payments, invalid_count=len(mapres.invalid), commit=True)
-        print(f"\nPERSISTED (ledger-only — balances/schedules untouched):")
+        print("\nPERSISTED (ledger-only — balances/schedules untouched):")
         print(f"  imported            {res.imported}")
         print(f"  skipped (duplicate) {res.skipped_duplicate}")
         print(f"  unmatched account   {res.unmatched_account}"

@@ -1,4 +1,4 @@
-"""Settings suite (Workstream F — Turnkey Settings parity, videos 07-08)
+"""Settings suite (Workstream F — legacy-LMS Settings parity, videos 07-08)
 
 Revision ID: 060_settings_suite
 Revises: 054_hardship
@@ -12,7 +12,7 @@ Four additive pieces, no behaviour change on their own:
 
 1. ``platform_decision_rules`` — admin EDITS over the decision-rules directory
    (code registry in app/services/decision_rules.py holds the defaults, seeded
-   from the Turnkey video-08 values; no row → shipped default → decision path
+   from the legacy-LMS video-08 values; no row → shipped default → decision path
    unchanged).
 2. ``platform_company_info`` — single-row company configuration (names, logo /
    favicon refs, multi-contact list) consumed by documents + notifications via

@@ -219,7 +219,7 @@ def test_loans_duplicate_account_in_file():
     assert len(r.valid_rows) == 1
 
 
-def test_loans_turnkey_status_pair_maps_and_unmapped_rejects():
+def test_loans_source_status_pair_maps_and_unmapped_rejects():
     ok = validate_csv("loans", _csv(LOAN_HEADER, _loan_row(status="OPEN/ACTIVE")), _CTX)
     assert ok.valid_rows[0]["status"] == "active"
     closed = validate_csv(
@@ -282,9 +282,9 @@ def test_payments_happy_path_derives_ref():
     assert r.totals == {"amount_cents": 12345}
 
 
-def test_payments_supplied_reference_namespaced_turnkey():
+def test_payments_supplied_reference_is_namespaced():
     r = validate_csv("payments", _csv(PAY_HEADER, "BC4906-0001,2025-06-01,123.45,PAD,TXN-88123"), _PCTX)
-    assert r.valid_rows[0]["external_ref"] == "turnkey:TXN-88123"
+    assert r.valid_rows[0]["external_ref"] == "portfolio:TXN-88123"
 
 
 def test_payments_identical_rows_without_reference_are_ambiguous():
@@ -322,6 +322,8 @@ def test_payments_unknown_account_and_nonpositive_amount():
 def test_payments_already_imported_warns_idempotent():
     ctx = ImportContext(
         existing_loan_accounts={"BC4906-0001"},
+        # Deliberately the PRE-RENAME spelling: a book imported before the
+        # namespace changed must still be recognised as already imported.
         existing_payment_refs={("BC4906-0001", "turnkey:T1")},
     )
     r = validate_csv("payments", _csv(PAY_HEADER, "BC4906-0001,2025-06-01,123.45,PAD,T1"), ctx)

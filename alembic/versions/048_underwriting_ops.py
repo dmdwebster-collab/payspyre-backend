@@ -4,17 +4,17 @@ Revision ID: 048_underwriting_ops
 Revises: 043_canonical_credit_application
 Create Date: 2026-07-10
 
-Two additive pieces of underwriting operational completeness (Turnkey parity,
+Two additive pieces of underwriting operational completeness (legacy-LMS parity,
 docs/turnkey_parity/02__WP_Underwriting.md):
 
 1. ``platform_decision_reasons`` — the admin-editable directory of REJECT and
-   CANCEL reasons (Turnkey keeps these in a Settings directory; Dave: reasons
+   CANCEL reasons (the legacy LMS keeps these in a Settings directory; Dave: reasons
    must be "standardized ... compliant with all regulations ... not
    discriminatory and defensible"). Seeded with:
      * reject reasons mapped from the engine's stable ``decision_reasons`` codes
        (flow_engine.py) with borrower-facing wording consistent with the
        adverse-action notice (adverse_action._REASON_TEXT), plus staff-usable
-       Turnkey-style codes;
+       legacy-LMS-style codes;
      * cancel reasons (non-credit closure): customer request, duplicate
        application, vendor request, offer expired, bank verification expired,
        other.

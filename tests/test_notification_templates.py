@@ -55,7 +55,7 @@ def test_customer_template_renders(t):
     spec = nr.get_spec(key)
     subject, html = nr.render_email(key, t["sample_context"])
     assert subject and html
-    # Base-layout invariants: brand shell + no leaked Jinja + no Turnkey tokens.
+    # Base-layout invariants: brand shell + no leaked Jinja + no the legacy LMS tokens.
     assert "PaySpyre" in html
     assert "{{" not in html and "*|" not in html
     if t.get("sms_template"):

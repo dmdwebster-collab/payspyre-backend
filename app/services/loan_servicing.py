@@ -1,6 +1,6 @@
 """Loan Servicing (LMS) service — P9.0 spine.
 
-This module is the foundational servicing layer that replaces Turnkey Lender's
+This module is the foundational servicing layer that replaces the legacy LMS's
 LMS responsibilities. It covers three things, in order of trust:
 
 1. ``generate_amortization_schedule`` — a PURE function computing a standard
@@ -163,7 +163,7 @@ def _actual_360_schedule(
     due_dates: list[date],
     accrual_start_date: date,
 ) -> list[ScheduleRow]:
-    """Equal-payment schedule with actual/360 interest accrual (Turnkey-legacy).
+    """Equal-payment schedule with actual/360 interest accrual (legacy-LMS convention).
 
     Interest each period = balance * annual_rate * actual_days / 360, where ``days``
     is the real calendar gap to the due date (and accrual_start -> first due for the
@@ -284,7 +284,7 @@ def generate_amortization_schedule(
       * ``"actual/360"``: interest = balance * annual_rate * ACTUAL_DAYS / 360, where
         the day count is the real calendar gap between consecutive due dates (and, for
         the first installment, between ``accrual_start_date`` and ``first_due_date``).
-        This matches Turnkey Lender's legacy book (reconciled to the cent against real
+        This matches the legacy book (reconciled to the cent against real
         loans), so migrated/legacy-consistent loans can be originated identically.
         ``accrual_start_date`` defaults to one PERIOD before ``first_due_date``.
 
@@ -656,7 +656,7 @@ def record_payment(
     """Apply a received payment to a loan. MONEY-PATH (WS-A actuals engine +
     WS-F repayment modes).
 
-    ``repayment_mode`` selects the Turnkey allocation semantics
+    ``repayment_mode`` selects the legacy-LMS allocation semantics
     (03__WP_Servicing, Dave's spec — validated by the pure allocators in
     ``interest_engine``):
 
@@ -1247,7 +1247,7 @@ class PayoffQuote:
 def compute_payoff(db: Session, loan: PlatformLoan, as_of: date) -> PayoffQuote:
     """Compute the amount required to fully pay off ``loan`` as of ``as_of``.
 
-    ACTUALS ENGINE (WS-A — Turnkey parity, Dave's spec):
+    ACTUALS ENGINE (WS-A — legacy-LMS parity, Dave's spec):
 
         payoff = 100% outstanding principal
                + daily simple interest accrued to ``as_of`` (per-diem on the

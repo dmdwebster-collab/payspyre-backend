@@ -1,9 +1,10 @@
-"""Persist mapped Turnkey loans into PaySpyre (the DB-write step).
+"""Persist mapped portfolio loans into PaySpyre (the DB-write step).
 
-Kept separate from ``turnkey.py`` (which is pure/DB-free): this turns the mapped
-records into PlatformLoan rows (+ a forward schedule for active loans). Migrated loans
-have ``application_id = NULL`` and ``source = 'turnkey_migration'`` (migration 035), and
-are deduped on ``legacy_account_number`` so re-running is IDEMPOTENT.
+Kept separate from ``portfolio_accounts.py`` (which is pure/DB-free): this turns
+the mapped records into PlatformLoan rows (+ a forward schedule for active loans).
+Imported loans have ``application_id = NULL`` and ``source`` from
+``constants.PORTFOLIO_SOURCE`` (migration 035, widened by 083), and are deduped on
+``legacy_account_number`` so re-running is IDEMPOTENT.
 """
 from __future__ import annotations
 
@@ -14,7 +15,8 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from app.models.platform.loan import PlatformLoan, PlatformLoanScheduleItem
-from app.services.migration.turnkey import MappedLoan
+from app.services.migration import constants
+from app.services.migration.portfolio_accounts import MappedLoan
 
 
 @dataclass
@@ -29,7 +31,7 @@ def _to_dt(d: Optional[date]) -> Optional[datetime]:
 
 
 def persist_loans(db: Session, mapped: list[MappedLoan], *, commit: bool = True) -> PersistResult:
-    """Create PlatformLoan rows from mapped Turnkey loans. Idempotent: a loan whose
+    """Create PlatformLoan rows from mapped portfolio loans. Idempotent: a loan whose
     ``legacy_account_number`` already exists is skipped, so a partial/retried run is
     safe. Active loans also get their snapshot forward schedule; closed loans are a
     historical record (status + original principal, zero outstanding, no schedule).
@@ -47,7 +49,7 @@ def persist_loans(db: Session, mapped: list[MappedLoan], *, commit: bool = True)
             continue
         loan = PlatformLoan(
             application_id=None,
-            source="turnkey_migration",
+            source=constants.PORTFOLIO_SOURCE,
             legacy_account_number=m.acct,
             principal_cents=m.principal_cents,
             annual_rate_bps=m.annual_rate_bps,
@@ -55,7 +57,7 @@ def persist_loans(db: Session, mapped: list[MappedLoan], *, commit: bool = True)
             status=m.status,
             principal_balance_cents=m.principal_balance_cents,
             disbursed_at=_to_dt(m.disbursed_at),
-            # Migrated loans were already agreed + funded in the legacy system.
+            # Imported loans were already agreed + funded in their source system.
             agreement_status="signed",
             disbursement_status="completed",
             currency=m.currency,

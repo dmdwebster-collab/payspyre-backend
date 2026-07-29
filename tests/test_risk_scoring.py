@@ -551,14 +551,14 @@ def test_alembic_history_has_a_single_head():
     assert not duplicated, f"forked alembic chain — shared down_revision(s): {duplicated}"
 
     heads = [r for r in revisions if r not in set(parents)]
-    # The head moves with every merge. 081_application_number_loan_number was the
-    # tip; 082_loan_payment_frequency (loan booking becomes frequency-aware —
-    # platform_loans records the contract's repayment cadence instead of booking
-    # every deal monthly) now chains onto 081.
+    # The head moves with every merge. 082_loan_payment_frequency was the tip;
+    # 083_providers_and_portfolio_import (providers become a vendor-owned table
+    # instead of free text, and platform_loans.source gains the source-neutral
+    # 'portfolio_import' provenance) now chains onto 082.
     # Whoever adds the next migration updates this line — that edit is the point,
     # because it forces the author to look at the chain.
-    assert heads == ["082_loan_payment_frequency"], (
-        f"expected a single head at 082, got {heads}"
+    assert heads == ["083_providers_and_portfolio_import"], (
+        f"expected a single head at 083, got {heads}"
     )
 
 

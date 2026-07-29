@@ -1,4 +1,4 @@
-"""Per-province compliance engine (Workstream W2 — Turnkey parity, videos 07-08).
+"""Per-province compliance engine (Workstream W2 — legacy-LMS parity, videos 07-08).
 
 The engine that turns the ``platform_province_compliance_rules`` table into
 enforcement. Two layers:

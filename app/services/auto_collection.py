@@ -1,6 +1,6 @@
-"""Auto-collection engine (WS-G, Turnkey parity P0) — scheduled PAD pulls.
+"""Auto-collection engine (WS-G, legacy-LMS parity, P0) — scheduled PAD pulls.
 
-Turnkey Lender auto-charges each scheduled installment on its due date over the
+The legacy LMS auto-charges each scheduled installment on its due date over the
 PAD/EFT rail; PaySpyre previously had only borrower-initiated Pay Now. This
 module is the whole engine:
 
@@ -54,7 +54,7 @@ move" Excel (the 50%-tolerance partial-recovery algorithm from
 amount_cents) is where it drops in.
 
 NSF (03__WP_Servicing / 04__WP_Collections): when the loan's product
-PricingConfig carries an ENABLED ``nsf`` fee (Turnkey demo: $45, on-event,
+PricingConfig carries an ENABLED ``nsf`` fee (legacy-LMS demo: $45, on-event,
 add-on), a failed pull charges it as an immutable ledger ``fee`` row into the
 NON-ACCRUING ADD-ON bucket (``add_on_cents``) — never loan fees, never
 interest-bearing. At most one NSF fee per failed attempt
@@ -73,11 +73,11 @@ match); correct the list against real webhook captures.
 PAD PRE-NOTIFICATION — LEGAL PLACEHOLDER, COUNSEL MUST CONFIRM COPY + TIMING:
 Payments Canada Rule H1 requires the payee to give the payor advance notice of
 the amount and date of each PAD. The H1 *default* notice period is longer than
-the 3-business-day default used here (which matches the Turnkey demo cadence:
+the 3-business-day default used here (which matches the legacy-LMS demo cadence:
 "Payment Reminder: Autopay in 7 Days" + 48-hour reminders); H1 permits
 REDUCING or WAIVING the notice only when the payor expressly agrees in the PAD
 agreement. Rule H1 also treats recurring fixed-amount PADs differently, and —
-per the Turnkey settings video — WEEKLY-frequency PADs commonly rely on an
+per the legacy LMS settings video — WEEKLY-frequency PADs commonly rely on an
 explicit pre-notification WAIVER in the PAD agreement because per-charge
 notices at weekly cadence are impractical. ACTION FOR DAVE/COUNSEL before the
 flag is flipped: (a) confirm the PaySpyre PAD agreement contains the

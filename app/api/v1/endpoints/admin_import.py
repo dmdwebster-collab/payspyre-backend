@@ -1,7 +1,7 @@
 """Admin cutover-import API (WS-D): CSV upload -> preview -> confirm.
 
-Turnkey's Tools -> Import workplace, rebuilt for migrating INTO PaySpyre
-(docs/turnkey_parity/09__WP_Tools.md): per-entity templates, upload validates
+The Tools -> Import workplace, for migrating an existing loan book INTO
+PaySpyre from ANY servicing system: per-entity templates, upload validates
 into a preview report (NOTHING written to domain tables), a separate explicit
 CONFIRM applies the rows idempotently, per-row failure-safe. Admin-only; every
 lifecycle transition is audited via platform_events.

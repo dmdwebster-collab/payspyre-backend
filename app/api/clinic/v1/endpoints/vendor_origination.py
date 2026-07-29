@@ -1,8 +1,8 @@
 """Vendor-originated applications — intake, live preview, request-reprocessing.
 
-WS-I of the P0 Turnkey-parity build. PRIMARY SPEC:
+WS-I of the P0 legacy-parity build. PRIMARY SPEC:
 ``docs/turnkey_parity/10__Vendor_Access.md`` (Dave's vendor-portal requirements,
-narrated over the Turnkey admin backend):
+narrated over the legacy LMS admin backend):
 
 * ``POST /clinic/v1/applications`` — the vendor intake form. The practice
   creates a DRAFT application on the patient's behalf carrying the
@@ -12,7 +12,7 @@ narrated over the Turnkey admin backend):
   the STANDARD consent/verification journey via SMS/email magic link —
   **PaySpyre decides, the vendor only originates.**
 * ``POST /clinic/v1/applications/preview`` — the live payment preview from the
-  Turnkey new-application form (no persistence): installment, principal +
+  the legacy LMS's new-application form (no persistence): installment, principal +
   interest + fees = total, per-frequency Canadian APR (SOR/2001-104 via
   ``loan_quote``), and the full amortization schedule preview.
 * ``POST /clinic/v1/applications/{id}/request-reprocessing`` — the ONLY vendor
@@ -28,7 +28,7 @@ SCOPING: everything is ``principal.vendor_id``-scoped; cross-vendor access is a
 statuses always pass through ``to_vendor_visible_status`` (silent escalation of
 auto-declines).
 
-COMMISSION (FLAGGED FOR DAVE): the Turnkey preview shows a "Commission" line
+COMMISSION (FLAGGED FOR DAVE): the legacy LMS preview shows a "Commission" line
 (Principal + Interest + Commission = Total). The typed ``PricingConfig`` has no
 vendor-commission concept yet — the preview surfaces the product's configured
 fees (the vendor-relevant cost lines) and returns ``commission_cents=None``
@@ -209,7 +209,7 @@ class PreviewScheduleRow(BaseModel):
 
 
 class VendorPaymentPreview(BaseModel):
-    """The Turnkey new-application computed preview (10__Vendor_Access.md §1B):
+    """The legacy LMS new-application computed preview (10__Vendor_Access.md §1B):
     'Approximate payment', 'Principal + Interest (+ Commission) = Total (APR)'
     and the schedule table. Stateless — nothing is persisted."""
 
@@ -541,7 +541,7 @@ def preview_payment(
     db: Session = Depends(get_db),
     principal: ClinicPrincipal = Depends(get_current_clinic_user),
 ):
-    """Live payment preview (no persistence) — the Turnkey computed-preview card.
+    """Live payment preview (no persistence) — the legacy LMS computed-preview card.
 
     Rate-band validation applies (a preview outside the band would show terms
     the intake could never accept); the ROLE gate does not — nothing is
@@ -572,7 +572,7 @@ def preview_payment(
         body.term_months,
         frequency,
         fees_cents=fees_cents,
-        preview_rows=n,  # full schedule preview, like the Turnkey form
+        preview_rows=n,  # full schedule preview, like the legacy LMS form
     )
 
     fee_lines = [

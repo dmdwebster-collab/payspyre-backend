@@ -7,7 +7,7 @@ from app.db.base import Base
 
 
 class PlatformImportBatch(Base):
-    """One uploaded cutover-import file (Turnkey -> PaySpyre migration, WS-D).
+    """One uploaded cutover-import file (legacy LMS -> PaySpyre migration, WS-D).
 
     Lifecycle: ``uploaded`` -> ``validated`` (preview report built, NOTHING
     written to domain tables) -> ``confirmed`` (an admin explicitly applied it)

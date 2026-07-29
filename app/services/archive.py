@@ -1,4 +1,4 @@
-"""Archive workplace (WS-I) — Turnkey video 06 parity.
+"""Archive workplace (WS-I) — legacy-LMS video 06 parity.
 
 The Archive is the read-only terminal workplace: every non-active record —
 closed APPLICATIONS (rejected / cancelled / expired) and closed LOAN accounts

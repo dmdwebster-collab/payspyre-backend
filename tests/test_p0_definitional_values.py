@@ -82,7 +82,7 @@ class TestDefaultThreshold:
         assert D._dpd_bucket(dpd, D.DEFAULT_POLICY) == expected
 
     def test_threshold_is_configurable_via_settings(self, patch_settings):
-        """Dave can put it back to Turnkey's 121 (or anything else) with a
+        """Dave can put it back to the legacy LMS's 121 (or anything else) with a
         settings row — no deploy, no code change."""
         patch_settings(_Row({"default_min_dpd": 121}))
         policy = D.get_policy(object())

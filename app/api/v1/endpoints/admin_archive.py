@@ -1,4 +1,4 @@
-"""Archive workplace endpoints (WS-I) — Turnkey video 06 parity.
+"""Archive workplace endpoints (WS-I) — legacy-LMS video 06 parity.
 
 Read-only list + frozen polymorphic detail over TERMINAL records (closed
 applications AND closed loan accounts), with close-reason filters. See

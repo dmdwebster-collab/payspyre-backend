@@ -325,7 +325,7 @@ def cancel_application(
 ):
     """Cancel an application — a NON-CREDIT administrative closure (WS-E).
 
-    Distinct from a rejection: cancellation is not a credit decision (Turnkey
+    Distinct from a rejection: cancellation is not a credit decision (the legacy LMS
     parity, 02__WP_Underwriting.md §4) and carries its own CANCEL reason list.
     Requires an active CANCEL reason code from the directory; moves the application to the
     existing ``withdrawn`` terminal state; audited via platform_events; the
@@ -574,7 +574,7 @@ class PaymentBody(BaseModel):
     # received date, so the backdate is permanently visible in the dual-date
     # ledger row and the audit event.
     effective_date: Optional[date] = None
-    # WS-F repayment modes (Turnkey "Submit repayment" — Dave's spec):
+    # WS-F repayment modes (legacy-LMS "Submit repayment" — Dave's spec):
     #   regular — accrued interest → principal → fees (default)
     #   add_on  — pays the non-accruing add-on bucket only (≤ add-on balance)
     #   special — 100% principal (permission-gated: admin role only)
@@ -599,7 +599,7 @@ def record_payment(
     user=Depends(require_roles("admin")),
 ):
     """Manually post a payment/adjustment to a loan (audited). WS-F: the
-    ``repayment_mode`` selects the Turnkey allocation semantics; mode-rule
+    ``repayment_mode`` selects the legacy-LMS allocation semantics; mode-rule
     violations (amount caps, payoff exact-match) return 422 with the reason."""
     loan = _get_loan(db, loan_id)
     # WAVE 6 SERVICING GATE (Dave 2026-07-28): "Make a Payment should only be
@@ -701,7 +701,7 @@ def record_payment(
 
 
 # Staff payout calculator (WS-I): a quote may be FORWARD-DATED at most this
-# many days (Turnkey parity — payoff quote for any date up to 30 days out).
+# many days (legacy-LMS parity — payoff quote for any date up to 30 days out).
 PAYOFF_QUOTE_MAX_FORWARD_DAYS = 30
 
 
@@ -722,7 +722,7 @@ def payoff_quote(
     projection simply accrues interest to that date (422 beyond the window).
     Past dates remain allowed as a historical read.
 
-    THE RULE (Turnkey parity, documented + pinned by tests): requesting a
+    THE RULE (legacy-LMS parity, documented + pinned by tests): requesting a
     payoff quote is a PURE READ — it does NOT suspend, park, or alter any
     scheduled payment. Auto-collection and the amortization plan run
     unchanged unless/until the payoff payment is actually recorded

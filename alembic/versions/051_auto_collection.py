@@ -1,10 +1,10 @@
-"""Auto-collection engine — per-loan auto-charge switch + collection attempts (WS-G, Turnkey parity P0)
+"""Auto-collection engine — per-loan auto-charge switch + collection attempts (WS-G, legacy-LMS parity, P0)
 
 Revision ID: 051_auto_collection
 Revises: 049_loan_ledger
 Create Date: 2026-07-10
 
-Turnkey auto-charges scheduled PAD payments on their due dates; PaySpyre only
+The legacy LMS auto-charges scheduled PAD payments on their due dates; PaySpyre only
 had borrower-initiated Pay Now. This migration adds the persistence for the
 flag-gated auto-collection engine (``app/services/auto_collection.py``):
 

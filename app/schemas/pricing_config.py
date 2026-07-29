@@ -1,4 +1,4 @@
-"""Typed credit-product pricing configuration (P0 WS-B, Turnkey parity item 7).
+"""Typed credit-product pricing configuration (P0 WS-B, legacy-LMS parity item 7).
 
 Formalizes the previously free-form ``platform_credit_products.pricing_config``
 JSONB into a validated Pydantic schema, fixing the known launch blocker where
@@ -37,11 +37,11 @@ PRICING_SCHEMA_VERSION = 1
 
 # Legacy fallback rate — mirrors loan_servicing._DEFAULT_ANNUAL_RATE_BPS so a
 # product with NO rate information quotes and books at the same 12.99% it
-# always has. (New typed configs default to the Turnkey demo 19.99% instead —
+# always has. (New typed configs default to the legacy-LMS demo 19.99% instead —
 # see InterestConfig.)
 LEGACY_DEFAULT_RATE_BPS = 1299
 
-# Turnkey demo values (07__WP_Settings_Part_1.md §2.9): default 19.99%/yr,
+# legacy-LMS demo values (07__WP_Settings_Part_1.md §2.9): default 19.99%/yr,
 # bounds 9.99%–23.99%.
 DEFAULT_RATE_BPS = 1999
 DEFAULT_MIN_RATE_BPS = 999
@@ -112,7 +112,7 @@ def payments_in_term(term_months: int, frequency: PaymentFrequency | str) -> int
 
 
 # ---------------------------------------------------------------------------
-# Fee taxonomy — the 14 Turnkey Lender fee types (07__ file §2.9).
+# Fee taxonomy — the 14 the legacy LMS fee types (07__ file §2.9).
 # ---------------------------------------------------------------------------
 
 class FeeType(str, Enum):

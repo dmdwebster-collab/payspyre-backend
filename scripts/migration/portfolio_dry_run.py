@@ -1,16 +1,16 @@
-"""Dry-run the Turnkey -> PaySpyre importer against an export. NO DB writes.
+"""Dry-run the portfolio importer against a source export. NO DB writes.
 
-Reads the "Accounts" sheet of a Turnkey export, maps every loan, and prints a
+Reads the "Accounts" sheet of a source export, maps every loan, and prints a
 migration preview: counts by status, what would be imported vs skipped, validation
 warnings, and portfolio totals. Loans are referenced by Acct# only (no PII).
 
-Usage:  python scripts/migration/turnkey_dry_run.py "/path/to/PaySpyre_TestData.xlsx"
+Usage:  python scripts/migration/portfolio_dry_run.py "/path/to/export.xlsx"
 """
 import sys
 
 import openpyxl
 
-from app.services.migration.turnkey import build_report
+from app.services.migration.portfolio_accounts import build_report
 
 ACCOUNTS_FIRST_DATA_ROW = 4  # header is row 3
 
@@ -27,13 +27,13 @@ def main(path: str) -> None:
     print(f"Importable:              {rep.importable}")
     print(f"Skipped (unmapped):      {len(rep.skipped_unmapped)}"
           + (f"  -> accts {rep.skipped_unmapped[:10]}" if rep.skipped_unmapped else ""))
-    print(f"\nBy Turnkey status:")
-    for k, v in sorted(rep.by_turnkey_status.items()):
+    print("\nBy source status:")
+    for k, v in sorted(rep.by_source_status.items()):
         print(f"   {k:<22} {v}")
-    print(f"\nWould create as PaySpyre status:")
-    for k, v in sorted(rep.by_paspyre_status.items()):
+    print("\nWould create as PaySpyre status:")
+    for k, v in sorted(rep.by_payspyre_status.items()):
         print(f"   {k:<22} {v}")
-    print(f"\nPortfolio totals (importable loans):")
+    print("\nPortfolio totals (importable loans):")
     print(f"   original principal:   ${rep.total_principal_cents/100:,.2f}")
     print(f"   current outstanding:  ${rep.total_outstanding_cents/100:,.2f}")
 

@@ -1,4 +1,4 @@
-"""Collections work-surface (WS-C, Turnkey full parity)
+"""Collections work-surface (WS-C, full legacy-LMS parity)
 
 Revision ID: 057_collections_worksurface
 Revises: 054_hardship

@@ -1,20 +1,25 @@
-"""Turnkey Lender -> PaySpyre loan-book importer (pure mapping layer).
+"""Legacy account-sheet -> PaySpyre loan mapping (pure, DB-free).
 
-Transforms rows from a Turnkey "Accounts" export into PaySpyre loan records. PURE
-and DB-free: it parses, status-maps, validates, and (for active loans) builds a
-snapshot forward schedule, returning normalized dataclasses ready to persist. The
-DB-write step is deliberately separate (it needs a target environment + the
-application_id decision below) — this layer is unit-tested against synthetic rows and
-can be dry-run against the real export to preview a migration.
+Transforms rows from ANY servicing system's "accounts" export into PaySpyre loan
+records. PURE and DB-free: it parses, status-maps, validates, and (for active
+loans) builds a snapshot forward schedule, returning normalized dataclasses ready
+to persist. The DB-write step is deliberately separate — this layer is unit-tested
+against synthetic rows and can be dry-run against a real export to preview a
+migration.
 
-KNOWN MIGRATION DECISION (flagged, not solved here): ``PlatformLoan.application_id`` is
-NOT NULL + unique, but a Turnkey loan has no PaySpyre application. Persisting these
-requires either a nullable/`source='turnkey'` column or stub applications — resolve
-before the write step.
+This module is the ORIGINAL fixed-column mapper, kept because the CSV cutover
+importer and the historical scripts depend on it. NEW work should use
+``portfolio_profile`` + ``portfolio_workbook``, where the column layout, status
+vocabulary and transaction taxonomy are DATA rather than constants, so a source
+system this repo has never seen can be mapped without a code change.
 
-Reconciliation (see the actual/360 work) showed Turnkey accrues interest actual/360, so
-the forward schedules are generated with ``day_count='actual/360'`` to stay consistent
-with the legacy book.
+An imported loan has ``application_id = NULL`` (there is no PaySpyre application
+behind it) and ``source`` from ``constants.PORTFOLIO_SOURCE``; migration 035's
+CHECK constraint (widened by 083) is what permits that.
+
+Reconciliation against the first migrated book showed the source accrued interest
+actual/360, so forward schedules default to ``day_count='actual/360'`` to stay
+consistent with that book.
 """
 from __future__ import annotations
 
@@ -25,7 +30,7 @@ from typing import Any, Iterable, Optional
 from app.services.loan_servicing import ScheduleRow, generate_amortization_schedule
 
 
-# --- Turnkey "Accounts" sheet column indices (0-based; header row 3, data row 4+) ---
+# --- Legacy "Accounts" sheet column indices (0-based; header row 3, data row 4+) ---
 class Col:
     VENDOR = 1
     PROVIDER = 2
@@ -47,8 +52,8 @@ class Col:
     NEXT_DUE = 44
 
 
-# Turnkey (Status, Sub-Status) -> (PaySpyre loan status, import?). Anything not here is
-# surfaced as a warning and NOT imported until mapped.
+# Source (Status, Sub-Status) -> (PaySpyre loan status, import?). Anything not here
+# is surfaced as a warning and NOT imported until mapped.
 STATUS_MAP: dict[tuple[str, str], tuple[str, bool]] = {
     ("OPEN", "ACTIVE"): ("active", True),
     ("CLOSED", "PAID"): ("paid_off", True),
@@ -61,12 +66,12 @@ STATUS_MAP: dict[tuple[str, str], tuple[str, bool]] = {
 
 
 @dataclass
-class TurnkeyLoan:
+class SourceLoan:
     acct: str
     vendor: Optional[str]
     provider: Optional[str]
-    tk_status: str
-    tk_substatus: str
+    source_status: str
+    source_substatus: str
     days_past_due: int
     amount_financed_cents: Optional[int]
     term_months: Optional[int]
@@ -114,19 +119,19 @@ def _int(v: Any, default: int = 0) -> int:
     return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else default
 
 
-def parse_account_row(row: tuple) -> Optional[TurnkeyLoan]:
+def parse_account_row(row: tuple) -> Optional[SourceLoan]:
     """Parse one Accounts data row. Returns None for header/blank/total rows."""
     if not row or len(row) <= Col.PRINCIPAL_BALANCE:
         return None
     acct = row[Col.ACCT]
     if acct in (None, "", "Acct#") or not row[Col.STATUS]:
         return None
-    return TurnkeyLoan(
+    return SourceLoan(
         acct=str(acct),
         vendor=row[Col.VENDOR],
         provider=row[Col.PROVIDER],
-        tk_status=str(row[Col.STATUS]).strip().upper(),
-        tk_substatus=str(row[Col.SUBSTATUS] or "").strip().upper(),
+        source_status=str(row[Col.STATUS]).strip().upper(),
+        source_substatus=str(row[Col.SUBSTATUS] or "").strip().upper(),
         days_past_due=_int(row[Col.DAYS_PAST_DUE]),
         amount_financed_cents=_cents(row[Col.AMOUNT_FINANCED]),
         term_months=_int(row[Col.TERM]) or None,
@@ -143,7 +148,7 @@ def parse_account_row(row: tuple) -> Optional[TurnkeyLoan]:
     )
 
 
-def parse_accounts(rows: Iterable[tuple]) -> list[TurnkeyLoan]:
+def parse_accounts(rows: Iterable[tuple]) -> list[SourceLoan]:
     return [tk for r in rows if (tk := parse_account_row(r)) is not None]
 
 
@@ -153,9 +158,9 @@ def _months_inclusive(start: date, end: date) -> int:
     return max(0, n)
 
 
-def _forward_schedule(tk: TurnkeyLoan, warnings: list[str]) -> list[ScheduleRow]:
+def _forward_schedule(tk: SourceLoan, warnings: list[str]) -> list[ScheduleRow]:
     """Snapshot-and-service-forward: re-amortize the CURRENT balance over the remaining
-    term from the next due date, on Turnkey's actual/360 convention. The borrower keeps
+    term from the next due date, on the source book's actual/360 convention. The borrower keeps
     paying; nothing about the past changes."""
     bal = tk.principal_balance_cents
     if not bal or bal <= 0 or not tk.next_due_date or not tk.final_pmt_date or not tk.annual_rate_bps:
@@ -170,13 +175,13 @@ def _forward_schedule(tk: TurnkeyLoan, warnings: list[str]) -> list[ScheduleRow]
     )
 
 
-def map_loan(tk: TurnkeyLoan, *, snapshot: bool = True) -> Optional[MappedLoan]:
-    """Map a TurnkeyLoan to a PaySpyre MappedLoan, or None if it should not be imported."""
+def map_loan(tk: SourceLoan, *, snapshot: bool = True) -> Optional[MappedLoan]:
+    """Map a SourceLoan to a PaySpyre MappedLoan, or None if it should not be imported."""
     warnings: list[str] = []
-    mapped = STATUS_MAP.get((tk.tk_status, tk.tk_substatus))
+    mapped = STATUS_MAP.get((tk.source_status, tk.source_substatus))
     if mapped is None:
         warnings.append(
-            f"unmapped Turnkey status ({tk.tk_status}/{tk.tk_substatus}) — NOT imported"
+            f"unmapped source status ({tk.source_status}/{tk.source_substatus}) — NOT imported"
         )
         return None  # surfaced by build_report via map_all
     status, do_import = mapped
@@ -219,8 +224,8 @@ class ImportReport:
     total_rows: int
     importable: int
     skipped_unmapped: list[str]                 # acct numbers
-    by_paspyre_status: dict[str, int]
-    by_turnkey_status: dict[str, int]
+    by_payspyre_status: dict[str, int]
+    by_source_status: dict[str, int]
     loans_with_warnings: list[tuple[str, list[str]]]
     total_principal_cents: int
     total_outstanding_cents: int
@@ -234,10 +239,10 @@ def build_report(rows: Iterable[tuple], *, snapshot: bool = True) -> tuple[list[
     skipped: list[str] = []
     by_tk: dict[str, int] = collections.Counter()
     for tk in tks:
-        by_tk[f"{tk.tk_status}/{tk.tk_substatus}"] += 1
+        by_tk[f"{tk.source_status}/{tk.source_substatus}"] += 1
         m = map_loan(tk, snapshot=snapshot)
         if m is None:
-            if (tk.tk_status, tk.tk_substatus) not in STATUS_MAP:
+            if (tk.source_status, tk.source_substatus) not in STATUS_MAP:
                 skipped.append(tk.acct)
         else:
             mapped.append(m)
@@ -246,8 +251,8 @@ def build_report(rows: Iterable[tuple], *, snapshot: bool = True) -> tuple[list[
         total_rows=len(tks),
         importable=len(mapped),
         skipped_unmapped=skipped,
-        by_paspyre_status=dict(by_ps),
-        by_turnkey_status=dict(by_tk),
+        by_payspyre_status=dict(by_ps),
+        by_source_status=dict(by_tk),
         loans_with_warnings=[(m.acct, m.warnings) for m in mapped if m.warnings],
         total_principal_cents=sum(m.principal_cents for m in mapped),
         total_outstanding_cents=sum(m.principal_balance_cents for m in mapped),

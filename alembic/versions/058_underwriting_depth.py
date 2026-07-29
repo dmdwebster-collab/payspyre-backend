@@ -11,7 +11,7 @@ head at the time this branch was cut. Parallel wave-1 workstreams claim slots
 
 Three additive pieces:
 
-1. ``platform_loan_offers`` — the Turnkey "Create Loan Offers" model, Dave's
+1. ``platform_loan_offers`` — the legacy-LMS "Create Loan Offers" model, Dave's
    way (02__WP_Underwriting.md f85-f87 + §5 "Offers"): an underwriter approves
    up to N offers (default 3, configurable); the borrower reviews them on their
    dashboard and picks EXACTLY ONE. Acceptance books the loan with the offer's

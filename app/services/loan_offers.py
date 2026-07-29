@@ -1,6 +1,6 @@
 """Multi-offer approvals (WS-D) — the underwriter→borrower offer loop.
 
-Turnkey's "Create Loan Offers" modal (video 02, f85-f87) rebuilt Dave's way:
+The legacy LMS's "Create Loan Offers" modal (video 02, f85-f87) rebuilt Dave's way:
 
 * An underwriter APPROVES an application by creating 1..N offers (settings
   ``OFFER_MAX_PER_APPLICATION``, default 3), each validated against the

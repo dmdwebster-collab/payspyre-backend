@@ -111,7 +111,7 @@ class MockNotificationDispatcher:
         capture_event(event)
         # WS-A comms log (mandate #4): mirror the real dispatcher — the sign-in
         # message is a communication, but its body carries the plaintext code,
-        # so store the hidden marker (Turnkey's on-camera behavior).
+        # so store the hidden marker (the legacy LMS's on-camera behavior).
         from app.services import communications_log
 
         communications_log.record_communication(

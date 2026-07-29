@@ -43,7 +43,7 @@ The three derived quantities, and exactly how honest each one is
    can be reproduced and re-based later, and :func:`calibrate` is pure. When a
    real bad-rate history exists the same row shape supports an ``empirical``
    method; until then ``pd_method='pdo_calibration'`` says so on the record.
-   **FLAG FOR DAVE:** confirm the anchor (560 → 20:1) and PDO (40). Turnkey
+   **FLAG FOR DAVE:** confirm the anchor (560 → 20:1) and PDO (40). The legacy LMS
    showed 585 → PD 0.58% / 160:1 and 416 → PD 3.7% / 26:1, which is a much
    steeper curve than any single PDO line can fit; ours is a straight,
    documented approximation, not a reverse-engineering of his vendor's model.
@@ -217,7 +217,7 @@ CHECK_KIND: dict[str, str] = {
     CHECK_BANK_ACCOUNT: "scoring",
 }
 
-#: Checks Turnkey runs through third-party vendors PaySpyre does not integrate.
+#: Checks the legacy LMS runs through third-party vendors PaySpyre does not integrate.
 #: They render as an honest ``not_modelled`` node rather than a fake tick.
 NOT_MODELLED_CHECKS: frozenset[str] = frozenset(
     {CHECK_WEB_ACTIVITY, CHECK_CYBER_SECURITY}

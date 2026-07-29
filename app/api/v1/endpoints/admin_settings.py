@@ -1,4 +1,4 @@
-"""Admin settings suite (Workstream F — Turnkey Settings parity, videos 07-08).
+"""Admin settings suite (Workstream F — legacy-LMS Settings parity, videos 07-08).
 
 Four admin-editable surfaces under /api/v1/admin/settings:
 

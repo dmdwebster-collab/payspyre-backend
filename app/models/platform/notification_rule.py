@@ -1,4 +1,4 @@
-"""System-configurable notification rules (Turnkey-parity).
+"""System-configurable notification rules (legacy-parity).
 
 Replaces today's hardcoded notification cadence/channels (the ``DunningPolicy``
 dataclass in :mod:`app.services.dunning`) with a DB-backed, per-notification-type

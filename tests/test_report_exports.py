@@ -1,4 +1,4 @@
-"""Turnkey-parity XLSX report exports (live test DB).
+"""legacy-parity XLSX report exports (live test DB).
 
 Covers ``app/services/report_exports.py`` + the admin and clinic endpoints:
 

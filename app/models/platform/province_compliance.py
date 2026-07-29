@@ -1,6 +1,6 @@
-"""Per-province compliance rule table (Workstream W2 — Turnkey parity, videos 07-08).
+"""Per-province compliance rule table (Workstream W2 — legacy-LMS parity, videos 07-08).
 
-Net-new beyond Turnkey Lender (TL only has a static province checkbox list). One
+Net-new beyond the legacy LMS (TL only has a static province checkbox list). One
 row per Canadian province/territory. The row encodes the regulatory guardrails
 Dave wants enforced at product-configuration time:
 

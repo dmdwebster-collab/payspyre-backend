@@ -1,4 +1,4 @@
-"""Repayment modes + scheduled-transaction surgery (WS-F, Turnkey parity P0)
+"""Repayment modes + scheduled-transaction surgery (WS-F, legacy-LMS parity, P0)
 
 Revision ID: 050_repayment_modes
 Revises: 049_loan_ledger

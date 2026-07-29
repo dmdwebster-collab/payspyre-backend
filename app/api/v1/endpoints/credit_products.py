@@ -230,7 +230,7 @@ async def update_credit_product(
     confirm_loan_type_change: bool = Query(
         default=False,
         description=(
-            "Confirms Turnkey's destructive `Loan type` change ('All filled data "
+            "Confirms the legacy LMS's destructive `Loan type` change ('All filled data "
             "will be removed'). Required — and only consulted — when a patch "
             "changes policy_config.schedule_building.loan_type on a product that "
             "already has one; otherwise the update is refused with 409."

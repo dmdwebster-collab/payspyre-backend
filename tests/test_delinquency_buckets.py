@@ -84,7 +84,7 @@ def _unpaid(dpd: int, total=10_000, paid=0, status="scheduled"):
         (59, BUCKET_POT_30),
         (60, BUCKET_POT_60),
         (89, BUCKET_POT_60),
-        # P0/T4: Dave's ">90 → default" replaces Turnkey's ">120". 90 DPD is
+        # P0/T4: Dave's ">90 → default" replaces the legacy LMS's ">120". 90 DPD is
         # the last pot_90 day; 91 and beyond are default.
         (90, BUCKET_POT_90),
         (91, BUCKET_DEFAULT),

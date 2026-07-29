@@ -196,7 +196,7 @@ def collect_reportable_accounts(
         disbursed = loan.disbursed_at
         accounts.append(
             ReportableAccount(
-                # The legacy Turnkey number when migrated, else the loan UUID.
+                # The legacy number when migrated, else the loan UUID.
                 account_number=loan.legacy_account_number or str(loan.id),
                 consumer_name=_consumer_name(patient),
                 date_opened=(

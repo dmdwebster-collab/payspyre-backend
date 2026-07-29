@@ -1,4 +1,4 @@
-"""WS-H scheduled-reports engine (Turnkey parity, video 05 item 6).
+"""WS-H scheduled-reports engine (legacy-LMS parity, video 05 item 6).
 
 A schedule = a report (a stock ``report_exports`` dataset OR a saved builder
 definition) + a cadence (daily / weekly / monthly) + recipients (static emails,

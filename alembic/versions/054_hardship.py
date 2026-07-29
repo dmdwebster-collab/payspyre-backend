@@ -1,4 +1,4 @@
-"""Hardship v1 — deferment + due-date change, e-sign gated (WS-J, Turnkey parity P0)
+"""Hardship v1 — deferment + due-date change, e-sign gated (WS-J, legacy-LMS parity, P0)
 
 Revision ID: 054_hardship
 Revises: 050_repayment_modes

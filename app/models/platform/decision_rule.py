@@ -2,7 +2,7 @@
 
 Mirrors ``platform_notification_rules`` (PR #174): the code registry in
 :mod:`app.services.decision_rules` defines which rules EXIST and their shipped
-defaults (Turnkey video-08 values + engine defaults); this table stores ONLY the
+defaults (legacy-LMS video-08 values + engine defaults); this table stores ONLY the
 rows an admin has edited. No row → shipped default applies, so the decision
 path is unchanged until someone edits.
 """

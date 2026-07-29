@@ -1,4 +1,4 @@
-"""Vendor + Customer CRM (WS-G, Turnkey full-parity plan)
+"""Vendor + Customer CRM (WS-G, full legacy-LMS-parity plan)
 
 Revision ID: 061_crm
 Revises: 054_hardship

@@ -1,7 +1,7 @@
-"""actual/360 day-count option for the amortization engine (Turnkey-legacy parity).
+"""actual/360 day-count option for the amortization engine (legacy-LMS parity).
 
 The default 30/360 path must be byte-identical to before; actual/360 must reproduce
-Turnkey's interest accrual (reconciled to the cent against the real book) while keeping
+The legacy LMS's interest accrual (reconciled to the cent against the real book) while keeping
 the same exact money tie-out invariants.
 """
 from datetime import date
@@ -36,12 +36,12 @@ def test_unknown_day_count_raises():
         generate_amortization_schedule(1_000_000, 1299, 24, date(2026, 7, 1), day_count="30E/360")
 
 
-# --- actual/360 reconciliation to Turnkey -----------------------------------
+# --- actual/360 reconciliation to the legacy LMS -----------------------------------
 
 
-def test_actual_360_first_interest_matches_turnkey_to_the_cent():
+def test_actual_360_first_interest_matches_the_legacy_book_to_the_cent():
     # Loan shape from the real book (no PII): $3,395 @ 5.99%, 36 mo, originated
-    # 2021-05-19, first payment 2021-06-19. Turnkey posted $17.51 interest on the
+    # 2021-05-19, first payment 2021-06-19. The legacy LMS posted $17.51 interest on the
     # opening balance: 3395 * 0.0599 * 31/360 = 17.51.
     rows = generate_amortization_schedule(
         339_500, 599, 36, date(2021, 6, 19),

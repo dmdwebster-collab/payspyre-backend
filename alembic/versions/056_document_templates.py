@@ -4,7 +4,7 @@ Revision ID: 056_document_templates
 Revises: 054_hardship
 Create Date: 2026-07-20
 
-Turnkey parity (video 08 §2.11 "System documents", video 11 borrower documents
+legacy-LMS parity (video 08 §2.11 "System documents", video 11 borrower documents
 tab, executive gap #4):
 
 * ``platform_document_templates`` — one row per template VERSION (new version =

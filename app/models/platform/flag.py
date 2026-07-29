@@ -1,6 +1,6 @@
 """Customer/loan flag directory + assignments (WS-E originations admin).
 
-Turnkey parity, video 01: staff can raise named flags against a CUSTOMER or a
+legacy-LMS parity, video 01: staff can raise named flags against a CUSTOMER or a
 LOAN (e.g. "Do not contact", "Fraud watch", "VIP") with a free-text reason.
 
 * ``PlatformFlagDefinition`` — the admin-managed directory. Definitions are

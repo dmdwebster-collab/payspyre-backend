@@ -1,4 +1,4 @@
-"""Province compliance engine (Workstream W2 — Turnkey parity, videos 07-08).
+"""Province compliance engine (Workstream W2 — legacy-LMS parity, videos 07-08).
 
 Revision ID: 066_province_compliance
 Revises: 064_borrower_depth

@@ -13,7 +13,7 @@ commits — the row lands in the same transaction as the ``notification_sent``
 audit event it corresponds to, so log and audit can't diverge.
 
 Bodies that carry credentials (magic-link sign-in codes) are stored as
-:data:`HIDDEN_BODY` — the on-camera Turnkey behavior ("<Hidden for privacy
+:data:`HIDDEN_BODY` — the on-camera legacy-LMS behavior ("<Hidden for privacy
 purposes>" on the welcome email containing login info).
 """
 from __future__ import annotations

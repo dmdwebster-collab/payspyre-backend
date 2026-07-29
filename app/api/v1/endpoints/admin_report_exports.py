@@ -1,6 +1,6 @@
-"""Admin cockpit — Turnkey-parity XLSX report downloads.
+"""Admin cockpit — legacy-parity XLSX report downloads.
 
-Serves the seven operational reports Dave previously generated inside Turnkey
+Serves the seven operational reports Dave previously generated inside the legacy LMS
 Lender (see app/services/report_exports.py and
 docs/turnkey_parity/report_exports.md). Whole-book by default; ``vendor_id``
 narrows to one vendor, ``date_from``/``date_to`` window each report's natural

@@ -1,11 +1,11 @@
-"""Cutover-import batches (Turnkey -> PaySpyre CSV migration, WS-D)
+"""Cutover-import batches (legacy LMS -> PaySpyre CSV migration, WS-D)
 
 Revision ID: 047_import_batches
 Revises: 043_canonical_credit_application
 Create Date: 2026-07-10
 
 Supports the template-driven, preview-then-confirm import Dave specced from
-Turnkey's Tools -> Import workplace (docs/turnkey_parity/09__WP_Tools.md):
+The legacy LMS's Tools -> Import workplace (docs/turnkey_parity/09__WP_Tools.md):
 upload a CSV per entity (customers / loans / payments / disbursements),
 validate it into a preview report (NOTHING written to domain tables), then a
 separate explicit CONFIRM applies the rows idempotently.

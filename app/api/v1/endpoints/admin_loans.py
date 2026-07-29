@@ -326,7 +326,7 @@ def set_loan_insolvency(
 
 
 
-# --- WS-G: Disable / re-enable auto-charges (Turnkey Servicing parity) -------
+# --- WS-G: Disable / re-enable auto-charges (legacy-LMS Servicing parity) -------
 
 
 class AutoChargeDisableBody(BaseModel):

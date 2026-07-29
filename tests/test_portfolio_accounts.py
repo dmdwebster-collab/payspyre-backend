@@ -1,7 +1,7 @@
-"""Turnkey -> PaySpyre importer mapping (synthetic rows; no real data)."""
+"""Portfolio account-sheet mapping (synthetic rows; no real data)."""
 from datetime import date, datetime
 
-from app.services.migration.turnkey import (
+from app.services.migration.portfolio_accounts import (
     Col,
     build_report,
     map_loan,
@@ -104,7 +104,7 @@ def test_build_report_aggregates_and_flags_unmapped():
     mapped, rep = build_report(rows)
     assert rep.total_rows == 4
     assert rep.importable == 2  # active + paid (voided + mystery excluded)
-    assert rep.by_paspyre_status == {"active": 1, "paid_off": 1}
+    assert rep.by_payspyre_status == {"active": 1, "paid_off": 1}
     assert "4" in rep.skipped_unmapped       # unmapped status surfaced
     assert "3" not in rep.skipped_unmapped   # voided is an intentional skip, not unmapped
 

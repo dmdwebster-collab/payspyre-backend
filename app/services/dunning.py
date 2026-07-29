@@ -55,7 +55,7 @@ class DunningPolicy:
     reminder_channels: tuple[str, ...] = ("email",)
     overdue_channels: tuple[str, ...] = ("email",)
     # NO late fees. Canadian provincial consumer-protection legislation restricts
-    # them; enabling per-province requires legal clarification. (Turnkey carried a
+    # them; enabling per-province requires legal clarification. (the legacy LMS carried a
     # default late-fee option; we do not use it.)
     late_fee_enabled: bool = False
 
@@ -100,7 +100,7 @@ def run_dunning_scan(
     Cadence (offsets) and channels are read from the DB-backed notification-rule
     config (``platform_notification_rules``); the ``policy`` dataclass is the
     typed fallback used per-type when no row exists (see
-    :func:`app.services.notification_config.get_rule`). This is the seam Turnkey
+    :func:`app.services.notification_config.get_rule`). This is the seam the legacy LMS
     parity required: the team edits the config table, not this code.
     """
     # Late import: notification_config imports from this module (DunningPolicy),

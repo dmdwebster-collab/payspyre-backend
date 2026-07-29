@@ -1,6 +1,6 @@
 """Decision-reason directory CRUD (WS-E underwriting ops). Admin-only.
 
-The Settings directory of REJECT and CANCEL reasons (Turnkey parity,
+The Settings directory of REJECT and CANCEL reasons (legacy-LMS parity,
 02__WP_Underwriting.md — "These are added in a directory in the settings so we
 can add and remove particular rejection reasons"). Rules:
 
