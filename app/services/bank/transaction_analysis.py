@@ -76,6 +76,10 @@ MAX_AMOUNT_CV = 0.25
 # the "same" recurring amount when grouping into streams.
 AMOUNT_BUCKET_PCT = 0.15
 
+# Max upward step between two same-merchant amount bands to treat as a single
+# stream split by a raise/COLA (rather than two unrelated deposit streams).
+RAISE_MAX_STEP_PCT = 0.30
+
 # Income keywords (positive signal). Lowercase, matched as substrings of the
 # normalized description.
 _INCOME_KEYWORDS = (
@@ -254,10 +258,55 @@ def _extract_txns(accounts: list[dict[str, Any]]) -> list[_Txn]:
 # ---------------------------------------------------------------------------
 
 
-def _account_age_months(txns: list[_Txn], today: date) -> int:
-    if not txns:
+# Account-level metadata keys that may carry the date the account was OPENED.
+# Flinks' raw schema is inconsistent across institutions/endpoints, so we scan a
+# small set of plausible names (top-level and nested under ``Detail``). Using a
+# real open date avoids understating age from the 90-day transaction span — a
+# borderline-thin file is otherwise penalized for our short lookback window.
+_ACCOUNT_OPEN_DATE_KEYS = (
+    "OpeningDate", "OpenDate", "DateOpened", "OpenedDate", "AccountOpenDate",
+    "CreatedDate", "CreationDate",
+)
+
+
+def _account_open_date(accounts: list[dict[str, Any]]) -> Optional[date]:
+    """Earliest account open-date from account metadata, if any institution
+    reports one. Returns ``None`` when no usable metadata date is present.
+    """
+    earliest: Optional[date] = None
+    for account in accounts or []:
+        if not isinstance(account, dict):
+            continue
+        sources: list[dict[str, Any]] = [account]
+        detail = account.get("Detail")
+        if isinstance(detail, dict):
+            sources.append(detail)
+        for src in sources:
+            for key in _ACCOUNT_OPEN_DATE_KEYS:
+                d = parse_flinks_date(src.get(key))
+                if d is not None and (earliest is None or d < earliest):
+                    earliest = d
+    return earliest
+
+
+def _account_age_months(
+    txns: list[_Txn],
+    today: date,
+    accounts: Optional[list[dict[str, Any]]] = None,
+) -> int:
+    # Prefer a real open date from account metadata; it does not understate age
+    # the way the 90-day transaction span does. Fall back to the earliest
+    # observed transaction when no metadata date is available.
+    open_date = _account_open_date(accounts or [])
+    earliest: Optional[date] = open_date
+    if txns:
+        txn_earliest = min(t.date for t in txns)
+        # Guard against an implausible/future metadata date by taking whichever
+        # genuinely earlier date better reflects the account's true age.
+        if earliest is None or txn_earliest < earliest:
+            earliest = txn_earliest
+    if earliest is None:
         return 0
-    earliest = min(t.date for t in txns)
     return max(0, (today - earliest).days // 30)
 
 
@@ -318,7 +367,55 @@ def _build_streams(credits: list[_Txn]) -> list[_Stream]:
             stream = _Stream(key=key)
             streams[key] = stream
         stream.deposits.append(t)
-    return list(streams.values())
+    return _merge_raise_buckets(list(streams.values()))
+
+
+def _merge_raise_buckets(streams: list[_Stream]) -> list[_Stream]:
+    """Re-join streams that the amount bucketing fragmented across a pay raise.
+
+    A raise (e.g. $1,500 -> $1,650 biweekly) can split one real payroll stream
+    into two amount buckets, leaving each with too few deposits to qualify — so
+    the raise silently drops the borrower's income to zero. We coalesce streams
+    that share a merchant token and whose deposit amounts step monotonically up
+    (or down) by a modest amount, so the combined stream is evaluated as one.
+
+    Only same-merchant streams are merged, and only when the amount gap between
+    the two bands is small (a plausible raise/COLA, not two unrelated deposits),
+    keeping the merge conservative.
+    """
+    # Group fragments by merchant token (the part of the key before "|").
+    by_merchant: dict[str, list[_Stream]] = {}
+    for s in streams:
+        merchant = s.key.rsplit("|", 1)[0]
+        by_merchant.setdefault(merchant, []).append(s)
+
+    merged: list[_Stream] = []
+    for merchant, group in by_merchant.items():
+        if len(group) == 1:
+            merged.append(group[0])
+            continue
+        # An empty merchant token is the catch-all for description-less /
+        # non-alpha deposits; never coalesce those — they are unrelated.
+        if not merchant:
+            merged.extend(group)
+            continue
+        # Order fragments by their typical amount; merge neighbours whose means
+        # differ by at most RAISE_MAX_STEP_PCT (a realistic raise band).
+        group.sort(key=lambda s: statistics.fmean(s.amounts_cents))
+        combined = _Stream(key=group[0].key)
+        combined.deposits.extend(group[0].deposits)
+        prev_mean = statistics.fmean(group[0].amounts_cents)
+        for frag in group[1:]:
+            frag_mean = statistics.fmean(frag.amounts_cents)
+            if prev_mean > 0 and (frag_mean - prev_mean) / prev_mean <= RAISE_MAX_STEP_PCT:
+                combined.deposits.extend(frag.deposits)
+            else:
+                merged.append(combined)
+                combined = _Stream(key=frag.key)
+                combined.deposits.extend(frag.deposits)
+            prev_mean = frag_mean
+        merged.append(combined)
+    return merged
 
 
 def _classify_cadence(median_gap: float) -> Optional[tuple[str, float]]:
@@ -349,15 +446,16 @@ def _stream_is_non_income(stream: _Stream) -> bool:
     return neg * 2 >= len(stream.deposits)
 
 
-def _stream_monthly_income_cents(stream: _Stream) -> int:
-    """Monthly income contribution of a stream, or 0 if not qualifying income."""
-    deposits = stream.deposits
+def _qualify_deposits(deposits: list[_Txn]) -> int:
+    """Monthly income for a homogeneous set of deposits, or 0 if not qualifying.
+
+    Operates on a single amount band — callers handle stream-level exclusion and
+    raise-splitting before invoking this.
+    """
     if len(deposits) < MIN_DEPOSITS_PER_STREAM:
         return 0
-    if _stream_is_non_income(stream):
-        return 0
 
-    amounts = stream.amounts_cents
+    amounts = [t.credit_cents for t in deposits]
     mean_amt = statistics.fmean(amounts)
     if mean_amt <= 0:
         return 0
@@ -371,7 +469,7 @@ def _stream_monthly_income_cents(stream: _Stream) -> int:
     has_income_kw = any(_has_keyword(t.description, _INCOME_KEYWORDS) for t in deposits)
 
     # Cadence from gaps between consecutive deposits.
-    dts = stream.dates
+    dts = sorted(t.date for t in deposits)
     gaps = [(dts[i] - dts[i - 1]).days for i in range(1, len(dts))]
     gaps = [g for g in gaps if g > 0]
 
@@ -409,6 +507,46 @@ def _stream_monthly_income_cents(stream: _Stream) -> int:
         return 0
 
     return int(round(mean_amt * per_month))
+
+
+def _recent_amount_band(deposits: list[_Txn]) -> list[_Txn]:
+    """Deposits whose amount is within AMOUNT_BUCKET_PCT of the most recent one.
+
+    After a raise, a merged stream spans two amount levels. Underwriting cares
+    about CURRENT income, so we isolate the band around the latest deposit — and
+    using the latest level (whether the step was up or down) keeps the estimate
+    conservative relative to summing or averaging across the step.
+    """
+    if not deposits:
+        return []
+    latest = max(deposits, key=lambda t: t.date)
+    ref = latest.credit_cents
+    if ref <= 0:
+        return []
+    lo, hi = ref * (1.0 - AMOUNT_BUCKET_PCT), ref * (1.0 + AMOUNT_BUCKET_PCT)
+    return [t for t in deposits if lo <= t.credit_cents <= hi]
+
+
+def _stream_monthly_income_cents(stream: _Stream) -> int:
+    """Monthly income contribution of a stream, or 0 if not qualifying income."""
+    deposits = stream.deposits
+    if len(deposits) < MIN_DEPOSITS_PER_STREAM:
+        return 0
+    if _stream_is_non_income(stream):
+        return 0
+
+    # First try the stream as a whole (stable, single-amount payroll).
+    income = _qualify_deposits(deposits)
+    if income > 0:
+        return income
+
+    # Fallback: a pay raise can leave a merged stream's amounts too dispersed to
+    # qualify (high CV), even though the underlying payroll is real. Re-evaluate
+    # the most recent amount band on its own so a raise doesn't drop income to 0.
+    recent = _recent_amount_band(deposits)
+    if len(recent) < len(deposits):
+        return _qualify_deposits(recent)
+    return 0
 
 
 def _infer_per_month_from_gaps(gaps: list[int]) -> float:
@@ -477,6 +615,6 @@ def analyze_accounts(
     return {
         "monthly_income_cents": _monthly_income_cents(txns, today, lookback_days),
         "nsf_count_90d": _nsf_count_90d(txns, today),
-        "account_age_months": _account_age_months(txns, today),
+        "account_age_months": _account_age_months(txns, today, accounts),
         "avg_balance_cents": _avg_balance_cents(accounts),
     }
