@@ -295,6 +295,11 @@ class FieldSpec:
     display_from: Optional[str] = None
     #: value never lands in profile field storage (SIN -> encrypted on the patient)
     external_storage: Optional[str] = None
+    #: Fields sharing a ``field_group`` are ALTERNATES of one logical field: they
+    #: share a label, their ``visible_when`` rules are mutually exclusive, and a
+    #: consumer should render the group as a single row (see
+    #: :data:`HOUSING_COST_GROUP`). Zero of them may apply, which renders nothing.
+    field_group: Optional[str] = None
     note: Optional[str] = None
     #: set where this deviates from the literal sheet cell
     sheet_discrepancy: Optional[str] = None
@@ -326,6 +331,7 @@ class FieldSpec:
                 DATE_DISPLAY_FORMAT if self.field_type is FieldType.DATE else None
             ),
             "sensitive": self.masking is not None or self.external_storage is not None,
+            "field_group": self.field_group,
             "note": self.note,
             "sheet_discrepancy": self.sheet_discrepancy,
         }
@@ -431,6 +437,19 @@ RESIDENTIAL_STATUS_OPTIONS = (
     Option("living_with_parents", "Living with Parent(s) or Guardian(s)"),
 )
 
+#: ONE label for the housing-cost pair (owner instruction, 2026-07-28: "Monthly
+#: Mortgage Payment" renamed). ``monthly_mortgage_payment`` and ``monthly_rent``
+#: remain SEPARATE storage keys — a mortgage payment and a rent payment are not
+#: the same datum for underwriting, and collapsing them would have to migrate
+#: every stored value — but they present as a single row: the residential status
+#: decides which one is applicable, and at most one is ever visible at a time.
+HOUSING_COST_LABEL = "Monthly Housing Costs (Rent / Mortgage)"
+
+#: Marks the fields above as alternates of one logical field, so a consumer can
+#: group them without pattern-matching on labels. "Living with Parent(s) or
+#: Guardian(s)" makes NEITHER applicable — the group simply renders nothing.
+HOUSING_COST_GROUP = "monthly_housing_cost"
+
 #: the "any of the Own options" set Dave's Monthly Mortgage trigger refers to
 OWN_RESIDENTIAL_STATUSES = (
     "own_detached",
@@ -496,8 +515,14 @@ INCOME_TYPE_TO_ENGINE_ENUM: dict[str, str] = {
 def _address_fields(block: ProfileBlock, *, with_payments: bool, with_resided_to: bool) -> tuple[FieldSpec, ...]:
     """Dave's address shape, used by Current Address and Previous Address 1.
 
-    ``with_payments`` — only Current Address carries Monthly Mortgage / Monthly
-    Rent (the Previous Address rows in the sheet stop at "Resided at address to").
+    ``with_payments`` — only Current Address carries the housing-cost pair
+    (the Previous Address rows in the sheet stop at "Resided at address to").
+
+    FIELD ORDER (owner instruction, 2026-07-28): Residential status sits AFTER
+    the "Resided at address ..." dates and immediately BEFORE the housing-cost
+    field, because it is what decides which housing-cost field applies. It used
+    to sit above "Resided at address since", which put the trigger two rows away
+    from the field it triggers.
     """
     fields: list[FieldSpec] = [
         FieldSpec(key="street_address", block=block, label="Street Address",
@@ -521,9 +546,6 @@ def _address_fields(block: ProfileBlock, *, with_payments: bool, with_resided_to
         FieldSpec(key="postal_code", block=block, label="Postal Code",
                   field_type=FieldType.POSTAL_CODE, format=FieldFormat.POSTAL,
                   mandatory=True, char_limit=6),
-        FieldSpec(key="residential_status", block=block, label="Residential status",
-                  field_type=FieldType.DROPDOWN, format=FieldFormat.ALPHA,
-                  mandatory=True, options=RESIDENTIAL_STATUS_OPTIONS),
         FieldSpec(key="resided_since", block=block, label="Resided at address since",
                   field_type=FieldType.DATE, format=FieldFormat.DATE, mandatory=True),
     ]
@@ -536,23 +558,58 @@ def _address_fields(block: ProfileBlock, *, with_payments: bool, with_resided_to
                 note="Sheet Field Options: 'Display: Current Address Resided at address since'.",
             )
         )
+    fields.append(
+        FieldSpec(key="residential_status", block=block, label="Residential status",
+                  field_type=FieldType.DROPDOWN, format=FieldFormat.ALPHA,
+                  mandatory=True, options=RESIDENTIAL_STATUS_OPTIONS,
+                  sheet_discrepancy=(
+                      "Sheet places this above 'Resided at address since'. MOVED "
+                      "below the resided-at dates by owner instruction "
+                      "(2026-07-28) so it sits directly above the housing-cost "
+                      "field whose applicability it decides."
+                  )),
+    )
     if with_payments:
         fields += [
             FieldSpec(
-                key="monthly_mortgage_payment", block=block, label="Monthly Mortgage Payment",
+                key="monthly_mortgage_payment", block=block,
+                label=HOUSING_COST_LABEL,
                 field_type=FieldType.TEXTBOX, format=FieldFormat.CURRENCY,
                 mandatory=True, char_limit=10,
+                field_group=HOUSING_COST_GROUP,
                 visible_when=when_in(
                     "residential_status", OWN_RESIDENTIAL_STATUSES,
                     'If Residential status = any of the "Own" options',
                 ),
+                note=(
+                    "The OWN half of the housing-cost pair. Renders under the "
+                    "shared label; the borrower sees one 'Monthly Housing Costs' "
+                    "row, not a mortgage row and a rent row."
+                ),
+                sheet_discrepancy=(
+                    "Sheet labels this 'Monthly Mortgage Payment'. RELABELLED to "
+                    f"'{HOUSING_COST_LABEL}' by owner instruction (2026-07-28). "
+                    "The storage KEY is unchanged, so no stored value moves."
+                ),
             ),
             FieldSpec(
-                key="monthly_rent", block=block, label="Monthly Rent",
+                key="monthly_rent", block=block,
+                label=HOUSING_COST_LABEL,
                 field_type=FieldType.TEXTBOX, format=FieldFormat.CURRENCY,
                 mandatory=True, char_limit=10,
+                field_group=HOUSING_COST_GROUP,
                 visible_when=when_equals(
                     "residential_status", "rent", "If Residential status = Rent"
+                ),
+                note=(
+                    "The RENT half of the housing-cost pair. Renders under the "
+                    "shared label; the borrower sees one 'Monthly Housing Costs' "
+                    "row, not a mortgage row and a rent row."
+                ),
+                sheet_discrepancy=(
+                    "Sheet labels this 'Monthly Rent'. RELABELLED to "
+                    f"'{HOUSING_COST_LABEL}' by owner instruction (2026-07-28) so "
+                    "it and monthly_mortgage_payment present as one field."
                 ),
             ),
         ]

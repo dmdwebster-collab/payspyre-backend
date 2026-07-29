@@ -77,6 +77,14 @@ class PlatformLoan(Base):
     # natively-originated loans; uniquely indexed when present (migration 035).
     legacy_account_number = Column(String, nullable=True)
 
+    # THE LOAN ID the borrower sees (Dave, 2026-07-28: "the Application Number
+    # becomes the Loan ID"). Copied verbatim from
+    # ``platform_credit_applications.application_number`` when the loan is booked
+    # (migration 081), so the agreement signed BEFORE this row existed names the
+    # same identifier as the live loan. NULL for migrated Turnkey loans, which
+    # have no application and stay identified by ``legacy_account_number``.
+    loan_number = Column(String, nullable=True)
+
     principal_cents = Column(BigInteger, nullable=False)
     annual_rate_bps = Column(Integer, nullable=False)
     term_months = Column(Integer, nullable=False)

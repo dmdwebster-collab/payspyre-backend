@@ -75,6 +75,9 @@ PRICING = {
 def _application(**over):
     base = dict(
         id=uuid4(),
+        # The Application Number — minted with the application (migration 081)
+        # and, per Dave 2026-07-28, printed on the agreement AS the Loan ID.
+        application_number="100777",
         status="under_review",
         patient_id=uuid4(),
         credit_product_id=uuid4(),
@@ -324,9 +327,12 @@ class TestMissingFieldsAreExplicit:
 
     def test_unresolved_fields_render_a_loud_marker_not_a_blank(self):
         result = self._sparse()
-        for name in ("FullName", "BorrowerDateOfBirth", "ContactEmail", "LoanId"):
+        for name in ("FullName", "BorrowerDateOfBirth", "ContactEmail"):
             assert result.merge_data[name] == NOT_AVAILABLE_FMT.format(field=name)
             assert NOT_AVAILABLE_FMT.format(field=name) in result.html
+        # LoanId is NOT in that list any more: even a sparse, pre-loan file has
+        # an application number, so it always resolves (Dave, 2026-07-28).
+        assert result.merge_data["LoanId"] == "100777"
 
     def test_every_marker_is_reported_in_missing_fields(self):
         result = self._sparse()
@@ -341,17 +347,22 @@ class TestMissingFieldsAreExplicit:
 
     def test_missing_notes_explain_source_and_reason(self):
         by_field = {n.field: n for n in self._sparse().missing_fields}
-        assert "no loan exists yet" in by_field["LoanId"].reason.lower()
-        assert "activation" in by_field["LoanId"].reason.lower()
+        assert "LoanId" not in by_field  # always resolves — see the Gap-4 tests
+        assert "not signed yet" in by_field["ContractDate"].reason.lower()
         assert "no default bank account" in by_field["BorrowerBankNumber"].reason.lower()
         assert "industry category" in by_field["VendorIndustryCategory"].reason.lower()
         # The source hint always points at where the value should come from.
         assert "patient" in by_field["FullName"].source.lower()
 
-    def test_pending_application_flags_exactly_the_two_pre_loan_gaps(self):
-        """A complete but UNBOOKED, UNSIGNED file: LoanId + ContractDate only."""
+    def test_pending_application_flags_exactly_one_pre_loan_gap(self):
+        """A complete but UNBOOKED, UNSIGNED file: ContractDate ALONE.
+
+        It used to be ``{LoanId, ContractDate}``. Dave's 2026-07-28 instruction
+        closed the LoanId half — the application number supplies it — leaving
+        the signature date as the only thing an unsigned file cannot know.
+        """
         result = _preview(loan=None)
-        assert {n.field for n in result.missing_fields} == {"LoanId", "ContractDate"}
+        assert {n.field for n in result.missing_fields} == {"ContractDate"}
         assert "signs" in {n.field: n for n in result.missing_fields}[
             "ContractDate"
         ].reason.lower()

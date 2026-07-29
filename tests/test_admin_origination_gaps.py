@@ -215,23 +215,40 @@ class TestFinanceTermsPayload:
     def test_start_date_alone_is_fine(self):
         assert _terms(start_date=date(2026, 8, 1)).first_due_date is None
 
-    def test_checkbox_without_a_date_is_rejected(self):
-        with pytest.raises(Exception):
-            _terms(start_date=date(2026, 8, 1), use_custom_first_due_date=True)
+    def test_first_due_date_stands_alone_without_the_legacy_checkbox(self):
+        """GAP 2. The "Use Custom First Payment Date" checkbox is GONE.
 
-    def test_date_without_the_checkbox_is_rejected(self):
-        with pytest.raises(Exception):
-            _terms(start_date=date(2026, 8, 1), first_due_date=date(2026, 9, 1))
+        Per the owner's Originations spec (2026-07-28) First Payment Date is
+        always visible and always mandatory, bounded by the product's
+        first-payment window. Requiring ``use_custom_first_due_date`` alongside
+        it forced the UI to post a meaningless ``true`` on every application.
+        A date on its own must now be accepted.
+        """
+        body = _terms(start_date=date(2026, 8, 1), first_due_date=date(2026, 9, 1))
+        assert body.first_due_date == date(2026, 9, 1)
+        assert body.use_custom_first_due_date is False
+
+    def test_the_legacy_checkbox_is_still_accepted_and_now_inert(self):
+        """Backward compatibility: older callers still send the flag.
+
+        It must not 422 — and, with no date, it must no longer 422 either: the
+        flag carries no meaning at all now, so a bare ``true`` is simply ignored.
+        """
+        assert _terms(
+            start_date=date(2026, 8, 1), use_custom_first_due_date=True
+        ).first_due_date is None
+        assert _terms(
+            start_date=date(2026, 8, 1),
+            use_custom_first_due_date=True,
+            first_due_date=date(2026, 9, 1),
+        ).first_due_date == date(2026, 9, 1)
 
     @pytest.mark.parametrize("first_due", [date(2026, 8, 1), date(2026, 7, 1)])
     def test_first_due_must_follow_start_date(self, first_due):
-        """Same invariant the main origination path enforces."""
+        """Same invariant the main origination path enforces — still enforced
+        now that the checkbox no longer gates the date."""
         with pytest.raises(Exception):
-            _terms(
-                start_date=date(2026, 8, 1),
-                use_custom_first_due_date=True,
-                first_due_date=first_due,
-            )
+            _terms(start_date=date(2026, 8, 1), first_due_date=first_due)
 
 
 # ===========================================================================
