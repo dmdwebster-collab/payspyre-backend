@@ -181,15 +181,16 @@ class TestApplicantJourney:
             decided = decided or result.decided
         assert decided is True
 
-        # status approved (seed product, score 720 ≥ 660, clean identity/bank)
+        # Wave 6 cutover: an approved file is routed straight into Offer
+        # Acceptance (no loan booked at approval).
         r = client.get(f"{_BASE}/applications/{app_id}", headers=headers)
-        assert r.json()["status"] == "approved"
+        assert r.json()["status"] == "offer_acceptance"
 
         # 14. submit is idempotent — returns the existing decision
         s = client.post(f"{_BASE}/applications/{app_id}/submit", headers=headers)
         assert s.status_code == 200
         assert s.json()["already_decided"] is True
-        assert s.json()["status"] == "approved"
+        assert s.json()["status"] == "offer_acceptance"
 
     def test_journey_decline_path(self, client, db_session, dispatcher):
         app_id, headers = _drive(client, db_session, dispatcher, score=550)

@@ -15,6 +15,7 @@ from app.core.auth import get_current_user, require_roles
 from app.db.base import get_db
 from app.models.platform.credit_application import PlatformCreditApplication
 from app.models.platform.loan import PlatformLoan
+from app.models.platform.loan_offer import PlatformLoanOffer
 
 router = APIRouter(dependencies=[Depends(require_roles("admin", "staff"))])
 
@@ -36,8 +37,16 @@ class LoanBookBlock(BaseModel):
 
 class WorkQueueBlock(BaseModel):
     under_review: int          # applications needing a human decision
-    pending_disbursement: int  # loans awaiting funding
+    pending_disbursement: int  # GRANDFATHERED loans awaiting funding (see below)
     delinquent: int            # loans past due
+    # --- Activation-rework Wave 6 queues -----------------------------------
+    # Since the cutover, no loan exists before ACTIVATION — so
+    # ``pending_disbursement`` now only counts the grandfathered cohort (loans
+    # booked at approval under the old path) and trends to zero. These two fields
+    # are the real post-cutover operating queues; defaulted so an older client
+    # that doesn't know about them still parses the payload.
+    awaiting_offers: int = 0      # approved, no open offer issued yet → staff must offer
+    pending_activation: int = 0   # agreement SIGNED, no loan yet → staff must activate
 
 
 class AdminOverview(BaseModel):
@@ -75,6 +84,33 @@ def overview(db: Session = Depends(get_db), _user=Depends(get_current_user)):
         or 0
     )
 
+    # Wave 6 operating queues. Both are "applications with NO loan row yet" —
+    # the states the cutover created. ORM-built (no raw SQL).
+    _PRE_LOAN = ("approved", "offer_acceptance", "agreement_signature")
+    loaned_app_ids = db.query(PlatformLoan.application_id).filter(
+        PlatformLoan.application_id.isnot(None)
+    )
+    pre_loan = (
+        db.query(PlatformCreditApplication)
+        .filter(PlatformCreditApplication.status.in_(_PRE_LOAN))
+        .filter(PlatformCreditApplication.id.notin_(loaned_app_ids))
+    )
+    pending_activation = (
+        pre_loan.filter(PlatformCreditApplication.agreement_status == "signed").count()
+    )
+    # Awaiting offers: approved (or already parked in Offer Acceptance by the
+    # decision engine) with nothing for the borrower to accept yet. A file past
+    # that point (agreement_signature) is NOT waiting on an offer.
+    open_offer_app_ids = db.query(PlatformLoanOffer.application_id).filter(
+        PlatformLoanOffer.status.in_(("offered", "accepted"))
+    )
+    awaiting_offers = (
+        pre_loan
+        .filter(PlatformCreditApplication.status.in_(("approved", "offer_acceptance")))
+        .filter(PlatformCreditApplication.id.notin_(open_offer_app_ids))
+        .count()
+    )
+
     return AdminOverview(
         applications=ApplicationsBlock(
             total=app_total, by_status=app_counts, approval_rate=approval_rate
@@ -89,5 +125,7 @@ def overview(db: Session = Depends(get_db), _user=Depends(get_current_user)):
             under_review=app_counts.get("under_review", 0),
             pending_disbursement=loan_counts.get("pending_disbursement", 0),
             delinquent=loan_counts.get("delinquent", 0),
+            awaiting_offers=int(awaiting_offers),
+            pending_activation=int(pending_activation),
         ),
     )

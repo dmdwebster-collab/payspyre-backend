@@ -85,7 +85,7 @@ class TestApplicantDevTools:
 
         r = client.get(f"{_BASE}/applications/{app_id}", headers=headers)
         assert r.status_code == 200
-        assert r.json()["status"] == "approved", r.text
+        assert r.json()["status"] == "offer_acceptance", r.text
 
     def test_complete_without_decision_consent_still_decides(
         self, client: TestClient, db_session: Session
@@ -147,7 +147,7 @@ class TestApplicantDevTools:
         assert final.status_code == 200, final.text
         # The decision ran and reached a terminal state despite no ADM consent.
         r = client.get(f"{_BASE}/applications/{app_id}", headers=headers)
-        assert r.json()["status"] == "approved", r.text
+        assert r.json()["status"] == "offer_acceptance", r.text
 
     def test_magic_link_code_missing_returns_404(self, client: TestClient, db_session: Session):
         resp = client.get(

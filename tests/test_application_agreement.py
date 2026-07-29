@@ -245,3 +245,68 @@ def test_simulate_signing_409s_in_live_mode(monkeypatch):
 
     with pytest.raises(application_agreement.ESignModeError):
         application_agreement.simulate_signing_for_application(db, app)
+
+
+# ---------------------------------------------------------------------------
+# WAVE 6 — the LIVE webhook handlers (the real SignNow callback's entry points)
+# ---------------------------------------------------------------------------
+
+
+def test_on_signed_marks_the_application_signed(monkeypatch):
+    """Works in LIVE mode (unlike Simulate Signing) — it IS the live path."""
+    _force_live(monkeypatch, live=True)
+    app = _Application(agreement_status="sent")
+    db = _FakeSession(query_results={"first": None})
+
+    out = application_agreement.on_agreement_signed_for_application(
+        db, app, actor="signnow:webhook"
+    )
+
+    assert out.agreement_status == "signed"
+    assert out.agreement_signed_at is not None
+    signed = [
+        e for e in db.added
+        if getattr(e, "event_type", None)
+        == application_agreement.APPLICATION_AGREEMENT_SIGNED_EVENT
+    ]
+    assert signed and "simulated" not in signed[0].payload["after"]
+    assert db.commits == 1
+
+
+def test_on_signed_is_idempotent_and_never_revives_a_decline():
+    already = _Application(agreement_status="signed")
+    db = _FakeSession(query_results={"first": None})
+    assert (
+        application_agreement.on_agreement_signed_for_application(db, already)
+        .agreement_status
+        == "signed"
+    )
+    assert db.commits == 0  # no second write
+
+    declined = _Application(agreement_status="declined")
+    db2 = _FakeSession(query_results={"first": None})
+    assert (
+        application_agreement.on_agreement_signed_for_application(db2, declined)
+        .agreement_status
+        == "declined"
+    )
+    assert db2.commits == 0
+
+
+def test_on_declined_marks_the_application_declined():
+    app = _Application(agreement_status="sent")
+    db = _FakeSession(query_results={"first": None})
+
+    out = application_agreement.on_agreement_declined_for_application(db, app)
+
+    assert out.agreement_status == "declined"
+    events = [
+        e for e in db.added
+        if getattr(e, "event_type", None)
+        == application_agreement.APPLICATION_AGREEMENT_DECLINED_EVENT
+    ]
+    assert len(events) == 1
+    assert db.commits == 1
+    # Idempotent.
+    application_agreement.on_agreement_declined_for_application(db, out)
+    assert db.commits == 1

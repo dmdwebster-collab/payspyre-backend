@@ -173,7 +173,19 @@ _TERMINAL_RESULT_TO_STATUS = {
     "manual_review": "manual_review",
 }
 _PRE_DECISION_STATUSES = ("started", "verifying")
-_DECISION_STATUSES = ("approved", "rejected", "under_review")
+# "This file has already been decided" — used to make a re-submit / a late vendor
+# result an idempotent no-op instead of a re-decide.
+#
+# ACTIVATION REWORK WAVE 6: an auto-approved file no longer STOPS at ``approved``
+# — it is routed straight on to ``offer_acceptance``, then ``agreement_signature``,
+# then ``active``. Those onward states are just as decided as ``approved`` is;
+# without them here a borrower's double-submit (or a late verification webhook)
+# would fall through to ``_decide`` and raise InvalidStateTransition on a file
+# that was approved seconds earlier.
+_DECISION_STATUSES = (
+    "approved", "rejected", "under_review",
+    "offer_acceptance", "agreement_signature", "active",
+)
 
 
 def mark_manual_review(application: PlatformCreditApplication) -> None:

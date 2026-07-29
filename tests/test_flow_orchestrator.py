@@ -341,7 +341,9 @@ class TestHandleVerificationResult:
         app_id = _drive_to_decision(db_session, orch, score=720)
         app = db_session.get(PlatformCreditApplication, app_id)
         db_session.refresh(app)
-        assert app.status == "approved"
+        # Wave 6 cutover: an auto-approval routes straight into Offer Acceptance
+        # (and books NO loan) instead of resting at 'approved'.
+        assert app.status == "offer_acceptance"
         ev = db_session.execute(
             text(
                 "SELECT id FROM platform_events WHERE event_type='decision_made' "
@@ -382,7 +384,12 @@ class TestDecisionPaths:
         app_id = _drive_to_decision(db_session, orch, score=720)
         app = db_session.get(PlatformCreditApplication, app_id)
         db_session.refresh(app)
-        assert app.status == "approved"
+        # Wave 6 cutover: approved files move on to Offer Acceptance, no loan.
+        assert app.status == "offer_acceptance"
+        from app.models.platform.loan import PlatformLoan
+
+        assert db_session.query(PlatformLoan).filter(
+            PlatformLoan.application_id == app_id).count() == 0
 
     def test_didit_in_review_end_to_end_decides_under_review(self, db_session: Session):
         """P7.6 — Didit "In Review" landing as ``result="manual_review"`` on
@@ -446,8 +453,10 @@ class TestSubmitForDecision:
         orch = _orch(db_session)
         app_id = _drive_to_decision(db_session, orch, score=720)
         result = orch.submit_for_decision(app_id)
+        # Wave 6: the decided file now rests in 'offer_acceptance' — a re-submit
+        # must still be an idempotent no-op, never a re-decide.
         assert result.already_decided is True
-        assert result.status == "approved"
+        assert result.status == "offer_acceptance"
 
     def test_raises_still_pending_when_verifications_open(self, db_session: Session):
         orch = _orch(db_session)

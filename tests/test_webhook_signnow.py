@@ -215,3 +215,91 @@ def test_replay_returns_202_replay_no_lifecycle(tc):
     assert r.json()["status"] == "replay"
     lifecycle.on_agreement_signed.assert_not_called()
     lifecycle.on_agreement_declined.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# ACTIVATION REWORK WAVE 6 — the ref resolves to an APPLICATION, not a loan
+#
+# Under the cutover the agreement is signed BEFORE any loan exists, so a real
+# SignNow callback normally carries a ref that lives on the application. Before
+# this wiring every such signature came back "orphaned" and the file could never
+# be activated.
+# ---------------------------------------------------------------------------
+
+
+def _db_for_application(application):
+    """Session mock: PlatformLoan lookups miss, PlatformCreditApplication hits."""
+    from app.models.platform.credit_application import PlatformCreditApplication
+
+    db = MagicMock(name="db_session")
+
+    def _query(model, *a):
+        result = MagicMock()
+        result.filter.return_value.first.return_value = (
+            application if model is PlatformCreditApplication else None
+        )
+        return result
+
+    db.query.side_effect = _query
+    return db
+
+
+@contextmanager
+def _wired_application(application, verifier, webhook_event):
+    db = _db_for_application(application)
+    adapter = MagicMock(name="signnow_adapter")
+    adapter.verify_webhook.return_value = webhook_event
+
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[get_signature_verifier] = lambda: verifier
+    with patch.object(esign, "_build_adapter", return_value=adapter), patch.object(
+        esign, "application_agreement"
+    ) as agreement, patch.object(esign, "loan_lifecycle") as lifecycle, patch(
+        "app.services.observability.posthog_bridge.capture_event", MagicMock()
+    ):
+        try:
+            yield db, agreement, lifecycle
+        finally:
+            app.dependency_overrides.pop(get_db, None)
+            app.dependency_overrides.pop(get_signature_verifier, None)
+
+
+def test_signed_event_on_a_preloan_application_agreement(tc):
+    application = MagicMock(name="application")
+    with _wired_application(application, _make_verifier(), _signed_event()) as (
+        db, agreement, lifecycle,
+    ):
+        r = tc.post(_PATH, content=b'{"document_id": "signnow-doc-123"}')
+
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "accepted"
+    agreement.on_agreement_signed_for_application.assert_called_once()
+    # Recording the signature is ALL the webhook does — activation stays a
+    # maker-checker decision, never something an inbound callback triggers.
+    lifecycle.activate_loan.assert_not_called()
+    lifecycle.on_agreement_signed.assert_not_called()
+
+
+def test_declined_event_on_a_preloan_application_agreement(tc):
+    application = MagicMock(name="application")
+    with _wired_application(
+        application, _make_verifier(), _signed_event(status="declined")
+    ) as (db, agreement, lifecycle):
+        r = tc.post(_PATH, content=b'{"document_id": "signnow-doc-123"}')
+
+    assert r.status_code == 200, r.text
+    agreement.on_agreement_declined_for_application.assert_called_once()
+    agreement.on_agreement_signed_for_application.assert_not_called()
+
+
+def test_pending_event_on_a_preloan_application_is_ignored(tc):
+    application = MagicMock(name="application")
+    with _wired_application(
+        application, _make_verifier(), _signed_event(status="pending")
+    ) as (db, agreement, lifecycle):
+        r = tc.post(_PATH, content=b'{"document_id": "signnow-doc-123"}')
+
+    assert r.status_code == 202
+    assert r.json()["status"] == "ignored"
+    agreement.on_agreement_signed_for_application.assert_not_called()
+    agreement.on_agreement_declined_for_application.assert_not_called()

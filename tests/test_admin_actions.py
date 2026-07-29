@@ -88,7 +88,10 @@ class TestDevMarkSigned:
 
 
 class TestDecision:
-    def test_approve_books_a_loan(self, app_client, db_session):
+    def test_approve_does_not_book_a_loan(self, app_client, db_session):
+        """ACTIVATION REWORK WAVE 6 (cutover): a manual approval no longer books
+        a loan. The file rests at ``approved``; the loan is created only at
+        ACTIVATION off a signed application agreement."""
         app, client = app_client
         application = _seed_application(db_session)
         r = client.post(f"{_BASE}/applications/{application.id}/decision",
@@ -96,7 +99,9 @@ class TestDecision:
         assert r.status_code == 200, r.text
         body = r.json()
         assert body["status"] == "approved"
-        assert body["loan_id"]  # a loan was booked
+        assert body["loan_id"] is None  # NO loan at approval
+        assert db_session.query(PlatformLoan).filter(
+            PlatformLoan.application_id == application.id).count() == 0
 
     def test_reject_sets_status(self, app_client, db_session):
         app, client = app_client
@@ -305,16 +310,21 @@ class TestMoneyEventDelegation:
     """Audit H1/L5/L6: cockpit actions delegate to the hardened lifecycle entry
     points, so the WORM log gets the proper money events (it didn't before)."""
 
-    def test_approve_emits_loan_booked(self, app_client, db_session):
-        """L5: approve → book_loan → a loan_booked money event exists."""
+    def test_approve_emits_no_loan_booked(self, app_client, db_session):
+        """L5, restated for the Wave 6 cutover: approve books NOTHING, so no
+        ``loan_booked`` money event is written for this application. The money
+        event for the new lifecycle is ``loan_activated``, emitted at ACTIVATION
+        (asserted end-to-end in tests/test_activation_golden_lifecycle.py)."""
         app, client = app_client
         application = _seed_application(db_session)
         r = client.post(f"{_BASE}/applications/{application.id}/decision",
                         json={"outcome": "approved", "reason_codes": ["ok"]})
         assert r.status_code == 200, r.text
         booked = db_session.query(PlatformEvent).filter(
-            PlatformEvent.event_type == "loan_booked").all()
-        assert len(booked) >= 1
+            PlatformEvent.event_type == "loan_booked",
+            PlatformEvent.application_id == application.id,
+        ).all()
+        assert booked == []
 
     def test_charge_off_emits_loan_charged_off(self, app_client, db_session):
         """L6: charge-off approval → charge_off_loan → a loan_charged_off event."""

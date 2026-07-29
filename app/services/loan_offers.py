@@ -47,7 +47,15 @@ logger = get_logger(__name__)
 # closures (rejected/withdrawn/expired) and the pre-submission states are out;
 # "approved" is allowed so an underwriter can extend an additional offer while
 # earlier ones are still open (the cap still applies).
-OFFERABLE_STATUSES = ("verifying", "underwriting", "under_review", "approved")
+# ``offer_acceptance`` is offerable (activation-rework Wave 6): under the cutover
+# an AUTO-approved file is routed straight into Offer Acceptance by the decision
+# engine — before any offer exists, because offers are an underwriter action.
+# Without this the file was a dead end: not offerable (wrong status) and not
+# activatable (no agreement). Issuing offers on a file that is literally in the
+# Offer Acceptance stage is the intended move; it does NOT demote the status.
+OFFERABLE_STATUSES = (
+    "verifying", "underwriting", "under_review", "approved", "offer_acceptance",
+)
 
 # Event types (WORM audit + notification triggers).
 OFFERS_CREATED_EVENT = "application_offers_created"
@@ -299,7 +307,11 @@ def create_offers(
     db.flush()
 
     before_status = application.status
-    mark_approved(application)
+    if before_status != "offer_acceptance":
+        # Issuing offers IS the approval — except for a file already sitting in
+        # Offer Acceptance (Wave 6 auto-approve routing), which must not be
+        # demoted back up the ladder by adding the offers it was waiting for.
+        mark_approved(application)
     application.status_updated_at = now
     application.decision = {
         "outcome": "approved",
@@ -319,7 +331,7 @@ def create_offers(
         application=application,
         payload={
             "before": {"status": before_status},
-            "after": {"status": "approved"},
+            "after": {"status": application.status},
             "offers": [
                 {
                     "offer_id": str(o.id),

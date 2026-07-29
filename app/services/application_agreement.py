@@ -62,6 +62,7 @@ logger = get_logger(__name__)
 # pre-loan agreement apart from a booked-loan agreement.
 APPLICATION_AGREEMENT_SENT_EVENT = "application_agreement_sent"
 APPLICATION_AGREEMENT_SIGNED_EVENT = "application_agreement_signed"
+APPLICATION_AGREEMENT_DECLINED_EVENT = "application_agreement_declined"
 
 
 def _record_application_event(
@@ -238,6 +239,99 @@ def send_agreement_for_application(
         application_id=str(application.id),
         agreement_ref=application.agreement_ref,
     )
+    return application
+
+
+def on_agreement_signed_for_application(
+    db: Session,
+    application: PlatformCreditApplication,
+    *,
+    actor: Optional[str] = None,
+) -> PlatformCreditApplication:
+    """Handle the REAL SignNow "signed" callback for a PRE-LOAN agreement.
+
+    The live-mode counterpart of :func:`simulate_signing_for_application` and the
+    application-level analogue of ``loan_lifecycle.on_agreement_signed`` — the
+    entry point the SignNow webhook calls once it has resolved the
+    ``agreement_ref`` to an APPLICATION (activation rework Wave 6: under the
+    cutover the agreement lives on the application, so a real signature arrives
+    with no loan in existence).
+
+    Deliberately does NOT book or activate a loan: activation is a maker-checker
+    decision (``admin_actions`` ``activate`` → ``loan_lifecycle.activate_loan``),
+    never something an inbound webhook triggers on its own. This only records the
+    signature, which is what makes the file activatable.
+
+    Forward-only + idempotent: already ``signed`` is a no-op; a ``declined``
+    agreement is left alone (it must be re-sent first).
+    """
+    if application.agreement_status == "declined":
+        logger.warning(
+            "application_agreement_signed_after_declined",
+            application_id=str(application.id),
+        )
+        return application
+    if application.agreement_status == "signed":
+        logger.info(
+            "application_agreement_signed_idempotent",
+            application_id=str(application.id),
+        )
+        return application
+    if application.agreement_status == "not_sent":
+        # Out-of-order webhook (signed before we recorded the send). Accept it,
+        # exactly like the loan-level handler does.
+        logger.info(
+            "application_agreement_signed_without_send",
+            application_id=str(application.id),
+        )
+
+    application.agreement_status = "signed"
+    application.agreement_signed_at = datetime.now(timezone.utc)
+    _record_application_event(
+        db,
+        application,
+        APPLICATION_AGREEMENT_SIGNED_EVENT,
+        {
+            "agreement_status": "signed",
+            "agreement_ref": application.agreement_ref,
+            "agreement_signed_at": application.agreement_signed_at.isoformat(),
+        },
+        actor=actor,
+    )
+    db.commit()
+    db.refresh(application)
+    logger.info(
+        "application_agreement_signed",
+        application_id=str(application.id),
+        simulated=False,
+    )
+    return application
+
+
+def on_agreement_declined_for_application(
+    db: Session,
+    application: PlatformCreditApplication,
+    *,
+    actor: Optional[str] = None,
+) -> PlatformCreditApplication:
+    """Handle the SignNow "declined" callback for a PRE-LOAN agreement.
+
+    Terminal for the agreement (not for the application — staff may re-send).
+    Idempotent; never touches the application's status.
+    """
+    if application.agreement_status == "declined":
+        return application
+    application.agreement_status = "declined"
+    _record_application_event(
+        db,
+        application,
+        APPLICATION_AGREEMENT_DECLINED_EVENT,
+        {"agreement_status": "declined", "agreement_ref": application.agreement_ref},
+        actor=actor,
+    )
+    db.commit()
+    db.refresh(application)
+    logger.info("application_agreement_declined", application_id=str(application.id))
     return application
 
 
