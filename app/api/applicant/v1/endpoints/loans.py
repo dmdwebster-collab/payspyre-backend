@@ -506,6 +506,11 @@ class PaymentMethodOut(BaseModel):
 class PaymentOptions(BaseModel):
     as_of: date
     modes: list[str]
+    # Wave 6 servicing gate: false for a loan that is not active yet (pending
+    # activation) or already closed — ``modes`` is then empty and the UI must not
+    # render Pay Now. Defaulted so pre-Wave-6 service-layer stubs keep working.
+    payable: bool = True
+    not_payable_reason: Optional[str] = None
     outstanding_cents: int
     add_on_balance_cents: int
     payoff_cents: int

@@ -39,7 +39,13 @@ from app.models.platform.credit_application import PlatformCreditApplication
 from app.models.platform.event import PlatformEvent
 from app.models.platform.loan import PlatformLoan, PlatformLoanPayment
 from app.models.user import User
-from app.services import decision_reasons, loan_ledger, loan_lifecycle, loan_servicing
+from app.services import (
+    decision_reasons,
+    loan_ledger,
+    loan_lifecycle,
+    loan_payments,
+    loan_servicing,
+)
 from app.services.flow_orchestrator import (
     _PREACTIVATION_STATUSES,
     _TERMINAL_STATUSES,
@@ -596,6 +602,13 @@ def record_payment(
     ``repayment_mode`` selects the Turnkey allocation semantics; mode-rule
     violations (amount caps, payoff exact-match) return 422 with the reason."""
     loan = _get_loan(db, loan_id)
+    # WAVE 6 SERVICING GATE (Dave 2026-07-28): "Make a Payment should only be
+    # available on active loans. They should not be available for loans pending
+    # activation." Enforced server-side here — the same gate the borrower's Pay
+    # Now path applies (loan_payments.servicing_block_reason).
+    blocked = loan_payments.servicing_block_reason(loan)
+    if blocked is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=blocked)
     if body.amount_cents <= 0:
         raise HTTPException(status_code=422, detail="amount_cents must be positive")
     # WS-F granular permissions: a past-dated received_at is a BACKDATED posting —

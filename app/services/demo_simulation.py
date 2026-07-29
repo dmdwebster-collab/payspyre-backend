@@ -127,6 +127,42 @@ def run_demo_application(
     }
 
     loan = db.query(PlatformLoan).filter(PlatformLoan.application_id == app_id).first()
+    if loan is None and application.status in (
+        "approved", "offer_acceptance", "agreement_signature"
+    ):
+        # ACTIVATION REWORK WAVE 6: approval no longer books a loan, so the demo
+        # (and dev_seed_collections, which originates its whole book through this
+        # function) would otherwise stop dead at "approved". Walk the file through
+        # the REAL new lifecycle — sign the application agreement, then activate —
+        # so the demo still ends with a live, active loan. Simulator-only by
+        # construction; any failure degrades to an explanatory step, never a 500.
+        try:
+            from app.services import application_agreement, loan_lifecycle
+            from app.services.flow_orchestrator import mark_offer_accepted
+
+            if application.status == "offer_acceptance":
+                # Dave's "manually register offer acceptance" route — the demo has
+                # no borrower to click Accept.
+                mark_offer_accepted(application)
+                db.commit()
+            application_agreement.send_agreement_for_application(
+                db, application, actor="demo"
+            )
+            application_agreement.simulate_signing_for_application(
+                db, application, actor="demo"
+            )
+            loan = loan_lifecycle.activate_loan(db, application, actor="demo")
+            steps.append({"step": "agreement_signed",
+                          "detail": "Application agreement signed (simulated)"})
+            steps.append({"step": "activated",
+                          "detail": "Loan booked at ACTIVATION (virtual disbursement)"})
+        except Exception as exc:  # noqa: BLE001 — demo tool: explain, never fail
+            steps.append({"step": "activation_skipped",
+                          "detail": f"Approved; awaiting activation ({exc})"})
+        # The trace's status is captured above, before this walk — refresh it so
+        # the demo reports where the file actually ended up.
+        db.refresh(application)
+        trace["status"] = application.status
     if loan is not None:
         # Simulate funding so the demo produces a LIVE, active loan — the dashboard's
         # active book then reflects it. This is a LABELLED simulation; real

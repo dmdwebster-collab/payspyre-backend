@@ -30,7 +30,7 @@ open counsel/Dave question (``decision_notice`` is the dormant seam).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Optional
 
 from sqlalchemy import bindparam, text
@@ -81,6 +81,17 @@ TRIGGER_EVENT_TYPES = (
     "loan_payment_recorded",
     "loan_agreement_sent",
     "loan_agreement_signed",
+    # ACTIVATION-REWORK WAVE 6. Under the cutover the classic trio never fires:
+    # there is no loan at approval, so the agreement is sent + signed on the
+    # APPLICATION and the loan is created (already active) at activation. Without
+    # these three the borrower would receive NOTHING for the whole new lifecycle.
+    #   application_agreement_sent   ↔ loan_agreement_sent   ("please sign")
+    #   application_agreement_signed ↔ loan_agreement_signed ("we got it")
+    #   loan_activated               ↔ loan_disbursed        ("your loan is live")
+    # Exactly one of each pair can exist per file, so there is no double-send.
+    "application_agreement_sent",
+    "application_agreement_signed",
+    "loan_activated",
 )
 
 # event_type → customer-facing notification_type for simple 1:1 lifecycle
@@ -91,6 +102,16 @@ _LIFECYCLE_NOTIFICATION_MAP = {
     "loan_charged_off": "loan_written_off",
     "loan_agreement_sent": "offer_accepted_signing",
     "loan_agreement_signed": "agreement_signed",
+    # Wave 6: booked+activated in one step (no separate disburse leg) — same
+    # customer-facing "your loan is active" notification as loan_disbursed.
+    "loan_activated": "loan_activated",
+}
+
+# Wave 6 PRE-LOAN agreement events (they carry an application_id, never a
+# loan_id) → the SAME customer notification types the loan-level pair maps to.
+_APPLICATION_AGREEMENT_NOTIFICATION_MAP = {
+    "application_agreement_sent": "offer_accepted_signing",
+    "application_agreement_signed": "agreement_signed",
 }
 
 
@@ -288,9 +309,36 @@ class NotificationProcessor:
             "payment_delay_notice",
         ):
             return self._plan_passthrough(ev)
+        if etype in _APPLICATION_AGREEMENT_NOTIFICATION_MAP:
+            return self._plan_application_agreement(ev)
         if etype in _LIFECYCLE_NOTIFICATION_MAP or etype == "loan_payment_recorded":
             return self._plan_loan_lifecycle(ev)
         return []
+
+    def _plan_application_agreement(self, ev) -> list[NotificationPlan]:
+        """Wave 6 PRE-LOAN agreement notifications (no loan exists yet).
+
+        Same customer notification types as the loan-level agreement events, but
+        the context is built from the APPLICATION (``_approval_context`` already
+        degrades to the decision terms when there is no loan)."""
+        from app.services.notification_config import get_rule
+        from app.services.notification_render import NOTIFICATION_TYPES
+
+        ctx = self._approval_context(ev)
+        if ctx is None:
+            return []
+        loan_id = ctx.pop("_loan_id", None)
+        ntype = _APPLICATION_AGREEMENT_NOTIFICATION_MAP[ev["event_type"]]
+        rule = get_rule(self.db, ntype)
+        if not rule.enabled:
+            return []
+        spec = NOTIFICATION_TYPES.get(ntype)
+        plans: list[NotificationPlan] = []
+        for ch in rule.enabled_channels:
+            if ch == "sms" and not (spec and spec.sms_template) and not rule.override_for("sms"):
+                continue
+            plans.append(NotificationPlan(ntype, ch, ctx, loan_id))
+        return plans
 
     def _plan_decision(self, ev) -> list[NotificationPlan]:
         payload = ev["payload"] or {}
@@ -486,7 +534,14 @@ class NotificationProcessor:
         return ctx
 
     def _approval_context(self, ev) -> Optional[dict]:
-        """Build the approval-email context from the booked loan + patient."""
+        """Build the approval / pre-loan-agreement email context.
+
+        WAVE 6: there is NO loan at approval any more. When a loan exists (the
+        grandfathered cohort, or a post-activation event) the context is built
+        from it exactly as before; otherwise it is built from the APPLICATION's
+        approved terms so the borrower still gets told they were approved and
+        where to go. Returns None only when neither source can supply terms.
+        """
         from app.models.platform.loan import PlatformLoan, PlatformLoanScheduleItem
         from app.models.platform.patient import PlatformPatient
 
@@ -497,11 +552,7 @@ class NotificationProcessor:
             .first()
         )
         if loan is None:
-            # Loan booking is defensive/idempotent in _decide and may lag; without
-            # it we can't populate the approval email — skip (cursor holds via the
-            # absence of a sent/skip marker only if we return a plan, so return []).
-            logger.info("approval_email_no_loan_yet", application_id=str(app_id))
-            return None
+            return self._preloan_approval_context(ev)
 
         first = (
             self.db.query(PlatformLoanScheduleItem)
@@ -544,6 +595,94 @@ class NotificationProcessor:
             "monthly_payment": _fmt_cents(first.total_cents if first else None),
             "agreement_url": f"{base}/loans/{loan.id}/agreement",
             "_loan_id": str(loan.id),
+        }
+
+    def _preloan_approval_context(self, ev) -> Optional[dict]:
+        """Approval/agreement context for a file with NO loan yet (Wave 6).
+
+        Terms come from the accepted offer when the borrower has picked one, else
+        from any open offer, else from the decision snapshot. The monthly payment
+        is the first row of a PREVIEW amortization schedule (pure function, no
+        DB write). The agreement link points at the APPLICATION-level agreement —
+        the surface the borrower actually signs before a loan exists.
+        """
+        from app.models.platform.credit_application import PlatformCreditApplication
+        from app.models.platform.loan_offer import PlatformLoanOffer
+        from app.models.platform.patient import PlatformPatient
+
+        app_id = ev["application_id"]
+        application = self.db.get(PlatformCreditApplication, app_id) if app_id else None
+        if application is None:
+            logger.info("approval_email_no_application", application_id=str(app_id))
+            return None
+
+        offers = (
+            self.db.query(PlatformLoanOffer)
+            .filter(PlatformLoanOffer.application_id == app_id)
+            .all()
+        )
+        chosen = next((o for o in offers if o.status == "accepted"), None)
+        if chosen is None:
+            chosen = next((o for o in offers if o.status == "offered"), None)
+        decision = application.decision or {}
+        amount_cents = chosen.amount_cents if chosen else decision.get("amount_cents")
+        term_months = chosen.term_months if chosen else decision.get("term_months")
+        rate_bps = chosen.annual_rate_bps if chosen else decision.get("apr_bps")
+        if not (amount_cents and term_months):
+            # Nothing to quote — an approval with no terms anywhere. Skip rather
+            # than send a half-empty email.
+            logger.info("approval_email_no_terms", application_id=str(app_id))
+            return None
+
+        monthly = None
+        try:
+            from app.services.loan_servicing import generate_amortization_schedule
+
+            rows = generate_amortization_schedule(
+                int(amount_cents),
+                int(rate_bps or 0),
+                int(term_months),
+                (chosen.first_due_date if chosen else None) or date.today(),
+            )
+            monthly = rows[0].total_cents if rows else None
+        except Exception:  # noqa: BLE001 — display-only preview, never blocks a send
+            monthly = None
+
+        patient = (
+            self.db.query(PlatformPatient)
+            .filter(PlatformPatient.id == (ev["patient_id"] or application.patient_id))
+            .first()
+        )
+        name = " ".join(
+            p for p in (
+                getattr(patient, "legal_first_name", None),
+                getattr(patient, "legal_last_name", None),
+            ) if p
+        ).strip() or "there"
+
+        vendor_name = "your provider"
+        if getattr(application, "vendor_id", None):
+            from app.models.loan import Vendor
+
+            vendor = self.db.get(Vendor, application.vendor_id)
+            if vendor is not None:
+                vendor_name = vendor.dba_name or vendor.business_name
+
+        base = settings.BORROWER_PORTAL_BASE_URL.rstrip("/")
+        return {
+            "borrower_name": name,
+            "full_name": name,
+            "application_id": str(app_id),
+            # No loan exists yet — the file's own short id is the reference the
+            # borrower and staff can both quote.
+            "loan_id": str(app_id)[:8],
+            "vendor_name": vendor_name,
+            "amount": _fmt_cents(int(amount_cents)),
+            "interest_rate": "{:.2f}%".format((rate_bps or 0) / 100),
+            "term": f"{int(term_months)} months",
+            "monthly_payment": _fmt_cents(monthly),
+            "agreement_url": f"{base}/applications/{app_id}/agreement",
+            "_loan_id": None,
         }
 
     # -- WS-E flag suppression ----------------------------------------------

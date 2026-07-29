@@ -274,28 +274,31 @@ def test_create_offers_rejects_bad_status():
         )
 
 
-def test_accept_offer_voids_siblings_and_books(monkeypatch):
+def test_accept_offer_voids_siblings_and_does_not_book(monkeypatch):
+    """ACTIVATION REWORK WAVE 6 (the default): acceptance voids the siblings and
+    advances the file to Agreement Signature — it books NO loan. The accepted
+    terms are still merged onto the decision, because that is what the ACTIVATION
+    booking reads when it finally creates the loan."""
     picked = make_offer(amount_cents=600_000, term_months=30, annual_rate_bps=1699)
     sibling = make_offer()
     session = FakeSession(offers=[picked, sibling], loan_row=None)
     app = make_application(status="approved")
 
-    booked = SimpleNamespace(id=uuid4(), status="pending_disbursement")
-
-    def fake_book_loan(db, application, first_due_date=None):
-        return booked
-
     import app.services.loan_lifecycle as ll
 
-    monkeypatch.setattr(ll, "book_loan", fake_book_loan)
+    def _never(*a, **k):
+        raise AssertionError("book_loan must not be called at offer acceptance")
+
+    monkeypatch.setattr(ll, "book_loan", _never)
 
     offer, loan = loan_offers.accept_offer(
         session, app, picked.id, actor="patient:x", now=NOW
     )
     assert offer.status == "accepted"
     assert sibling.status == "void"
-    assert loan is booked
-    # accepted terms merged onto the decision so the unchanged booking path uses them
+    assert loan is None
+    assert app.status == "agreement_signature"
+    # accepted terms merged onto the decision so the ACTIVATION booking uses them
     assert app.decision["amount_cents"] == 600_000
     assert app.decision["apr_bps"] == 1699
     assert app.decision["term_months"] == 30

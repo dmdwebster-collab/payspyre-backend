@@ -57,6 +57,41 @@ _OPEN_ITEM_STATUSES = ("scheduled", "partial", "late", "suspended")
 # Repayment modes a BORROWER may initiate (WS-F). ``special`` is staff-only.
 BORROWER_MODES = ("regular", "add_on", "payoff")
 
+# ---------------------------------------------------------------------------
+# Servicing gate (activation rework Wave 6, Dave 2026-07-28: "Make a Payment
+# should only be available on active loans. They should not be available for
+# loans pending activation.")
+#
+# The ONLY statuses in which money may be taken against a loan. A loan that has
+# not been activated yet (``pending_disbursement`` — i.e. a grandfathered loan
+# booked at approval and still awaiting funding) has no live obligation, so no
+# payment may be posted or initiated against it; neither may a closed one
+# (``paid_off`` / ``charged_off`` / ``cancelled``). Under the Wave 6 cutover a
+# loan pending ACTIVATION has no loan row at all — this gate is what keeps the
+# grandfathered pre-active cohort out of the servicing surfaces too.
+SERVICEABLE_LOAN_STATUSES = ("active", "delinquent")
+
+
+def is_serviceable(loan: PlatformLoan) -> bool:
+    """True when payments/servicing actions may act on this loan."""
+    return loan.status in SERVICEABLE_LOAN_STATUSES
+
+
+def servicing_block_reason(loan: PlatformLoan) -> Optional[str]:
+    """Human-readable reason this loan cannot be serviced, or None if it can.
+
+    One message, shared by every payment entry point (borrower Pay Now, admin
+    manual posting) so the borrower and the cockpit are told the same thing.
+    """
+    if is_serviceable(loan):
+        return None
+    if loan.status == "pending_disbursement":
+        return (
+            "This loan is not active yet (pending activation) — payments cannot be "
+            "made until it is activated."
+        )
+    return f"loan is not in a payable state (status={loan.status})"
+
 
 class PaymentError(Exception):
     """Base for borrower-payment failures."""
@@ -105,16 +140,24 @@ def payment_options(db: Session, loan: PlatformLoan, *, as_of=None) -> dict:
     ``payoff`` is offered with the SERVER-QUOTED amount (non-editable — the
     server computes, the client confirms); ``add_on`` is exposed ONLY when the
     add-on balance is positive (there is otherwise nothing for it to pay).
+
+    Wave 6: a loan that is NOT serviceable (pending activation, or closed)
+    offers NO modes and reports ``payable: false`` with the reason, so the UI
+    cannot render a Pay Now button that the server would only reject.
     """
     as_of = as_of or datetime.now(timezone.utc).date()
     balances = loan_ledger.loan_balances(loan, as_of=as_of)
-    modes = ["regular"]
-    if balances.add_on_balance_cents > 0:
-        modes.append("add_on")
-    modes.append("payoff")
+    blocked = servicing_block_reason(loan)
+    modes = [] if blocked else ["regular"]
+    if not blocked:
+        if balances.add_on_balance_cents > 0:
+            modes.append("add_on")
+        modes.append("payoff")
     options = {
         "as_of": as_of.isoformat(),
         "modes": modes,
+        "payable": blocked is None,
+        "not_payable_reason": blocked,
         "outstanding_cents": outstanding_cents(db, loan),
         "add_on_balance_cents": balances.add_on_balance_cents,
         "payoff_cents": balances.payoff_cents,
@@ -179,10 +222,9 @@ def initiate_payment(
     it. If Zumrails returns COMPLETED synchronously, the payment is recorded
     immediately. Raises ``PaymentValidationError`` / ``PaymentProviderUnavailable``.
     """
-    if loan.status not in ("active", "delinquent"):
-        raise PaymentValidationError(
-            f"loan is not in a payable state (status={loan.status})"
-        )
+    blocked = servicing_block_reason(loan)
+    if blocked is not None:
+        raise PaymentValidationError(blocked)
     if mode not in BORROWER_MODES:
         raise PaymentValidationError(
             f"repayment mode {mode!r} is not available (choose one of {BORROWER_MODES})"

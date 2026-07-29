@@ -16,9 +16,13 @@ verification + notification webhook surface exactly:
    ``verification.py`` / ``notifications.py``). The nonce is
    ``"signnow:<document_id>:<status>"`` — each (document, terminal status) is
    delivered once; a re-delivery conflicts (rowcount 0) → 202 ``"replay"``.
-5. Resolve the loan by ``agreement_ref == event.document_id``. Unknown ref →
-   202 ``"orphaned"`` (SignNow keeps retrying otherwise; an unknown document is
-   not an error we want to surface as a 5xx).
+5. Resolve the loan by ``agreement_ref == event.document_id``; when no loan
+   matches, resolve the same ref against the APPLICATION (activation rework: the
+   agreement is signed PRE-LOAN, so under the cutover this is the normal case)
+   and drive the application-level transition — recording the signature only;
+   activation itself stays a maker-checker decision. Then the hardship
+   amendment resolver. Still unknown → 202 ``"orphaned"`` (SignNow keeps
+   retrying otherwise; an unknown document is not an error we want as a 5xx).
 6. Dispatch on the normalized status:
      * ``signed``   → ``loan_lifecycle.on_agreement_signed``
      * ``declined`` → ``loan_lifecycle.on_agreement_declined``
@@ -39,8 +43,10 @@ from sqlalchemy.orm import Session
 from app.api.webhooks.v1.deps import get_signature_verifier
 from app.core.logging import get_logger
 from app.db.base import get_db
+from app.models.platform.credit_application import PlatformCreditApplication
 from app.models.platform.event import PlatformEvent
 from app.models.platform.loan import PlatformLoan
+from app.services import application_agreement
 from app.services import hardship as hardship_service
 from app.services import integration_settings, loan_lifecycle
 from app.services.esign.signnow_adapter import (
@@ -150,22 +156,47 @@ async def receive_signnow_agreement(
         )
 
     # 4. Resolve the loan by agreement_ref == SignNow document id.
-    #
-    # TODO (activation rework Stage C): once the cutover books the loan at
-    # ACTIVATION off a signed APPLICATION agreement, a live SignNow "signed"
-    # webhook may arrive while only a PRE-LOAN application agreement exists (its
-    # ``agreement_ref`` lives on ``PlatformCreditApplication`` — migration 078).
-    # This resolver must then ALSO look the ref up on the application and drive
-    # the application-level signed transition (and downstream booking) when no
-    # loan matches. Not needed in Wave 1: this wave is additive, nothing wires an
-    # application agreement into the live approve flow, and the exercised path is
-    # SIMULATOR mode (Simulate Signing), which never hits this webhook.
     loan = (
         db.query(PlatformLoan)
         .filter(PlatformLoan.agreement_ref == event.document_id)
         .first()
     )
     if loan is None:
+        # 4a. ACTIVATION REWORK WAVE 6 (this is the cutover the Wave 1 TODO here
+        #     anticipated): with the loan booked at ACTIVATION, a live SignNow
+        #     signature normally arrives while only a PRE-LOAN agreement exists —
+        #     its ``agreement_ref`` lives on the APPLICATION (migration 078), and
+        #     there is no loan to resolve. Drive the application-level transition
+        #     instead. It records the signature ONLY: activation stays a
+        #     maker-checker decision, never something a webhook can trigger.
+        application = (
+            db.query(PlatformCreditApplication)
+            .filter(PlatformCreditApplication.agreement_ref == event.document_id)
+            .first()
+        )
+        if application is not None:
+            if event.status == "signed":
+                application_agreement.on_agreement_signed_for_application(
+                    db, application, actor="signnow:webhook"
+                )
+            elif event.status == "declined":
+                application_agreement.on_agreement_declined_for_application(
+                    db, application, actor="signnow:webhook"
+                )
+            else:
+                db.commit()  # persist the nonce claim; application untouched
+                return JSONResponse(
+                    status_code=status.HTTP_202_ACCEPTED,
+                    content={"status": "ignored"},
+                )
+            logger.info(
+                "signnow_webhook_application_processed",
+                application_id=str(application.id),
+                document_id=event.document_id,
+                status=event.status,
+            )
+            return {"status": "accepted"}
+
         # 4b. Not a loan agreement — a hardship AMENDMENT document? (WS-J: the
         #     borrower-signed amendment is the legal gate before any schedule
         #     change; on "signed" the hardship service applies the change.)

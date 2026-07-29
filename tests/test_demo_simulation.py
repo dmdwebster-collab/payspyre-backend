@@ -33,7 +33,11 @@ def client(db_session: Session):
 class TestSimulationService:
     def test_approved_run_books_loan_with_real_amortization(self, db_session):
         trace = demo_simulation.run_demo_application(db_session, score=720, amount_cents=2_000_000)
-        assert trace["status"] == "approved", trace
+        # Wave 6 cutover: the demo now walks the file through the REAL new
+        # lifecycle (offer acceptance → application agreement signed →
+        # ACTIVATION), so it ends ACTIVE with a booked loan rather than resting
+        # at 'approved' with a loan booked at approval time.
+        assert trace["status"] == "active", trace
         loan = trace["loan"]
         # the calculation engine produced a real amortized schedule
         assert loan["installments"] == loan_term(loan)
@@ -70,7 +74,7 @@ class TestEndpoints:
         r = client.post(f"{_BASE}/dev/run-demo-application", json={"score": 720, "amount_cents": 1_500_000})
         assert r.status_code == 200, r.text
         body = r.json()
-        assert body["status"] == "approved"
+        assert body["status"] == "active"  # Wave 6: demo runs through to ACTIVATION
         assert body["loan"]["total_interest_cents"] > 0
 
     def test_system_mode_simulation(self, client, monkeypatch):
