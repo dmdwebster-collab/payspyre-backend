@@ -103,7 +103,7 @@ api_router.include_router(
     admin_document_templates.router, prefix="/admin/document-templates", tags=["admin-documents"]
 )
 api_router.include_router(admin_collections.router, prefix="/admin/collections", tags=["admin-cockpit"])
-# WS-C — collections work-surface: collector assignment (bulk + tiers), action
+# WS-C — collections work-surface: collector assignment (single + bulk), action
 # plans, promise-to-pay, header math, segregated insolvency portfolio.
 api_router.include_router(
     admin_collections_work.router, prefix="/admin/collections", tags=["admin-collections"]

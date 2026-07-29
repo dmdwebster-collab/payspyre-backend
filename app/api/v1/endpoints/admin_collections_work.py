@@ -6,7 +6,7 @@ surfaces in ``admin_collections``:
 
   * BULK collector assignment (by vendor / borrower alpha / bucket) +
     single assign/unassign + per-collector queue ("assign to me
-    one-at-a-time is just not viable"); junior/senior tier gating.
+    one-at-a-time is just not viable").
   * Action plans: settings-definable action-type directory (admin CRUD) +
     per-loan dated actions with mandatory comments and recorded outcomes.
   * Promise-to-pay: amount / date / mandatory comment / no-late-fee flag,
@@ -121,13 +121,11 @@ class AssignBody(BaseModel):
     # Defaults to the calling user — Turnkey's "Assign to me", minus the
     # one-at-a-time pain.
     collector_user_id: Optional[UUID] = None
-    tier: Literal["junior", "senior"]
     reassign: bool = False
 
 
 class BulkAssignBody(BaseModel):
     collector_user_id: UUID
-    tier: Literal["junior", "senior"]
     # Selectors — at least one required; they AND together (Dave: "per vendor
     # or per vendor and alpha depending on how big that vendor is").
     vendor_id: Optional[UUID] = None
@@ -144,7 +142,6 @@ class AssignmentRow(BaseModel):
     id: UUID
     loan_id: UUID
     collector_user_id: UUID
-    tier: str
     method: str
     active: bool
 
@@ -154,7 +151,6 @@ def _assignment_row(a: PlatformCollectorAssignment) -> AssignmentRow:
         id=a.id,
         loan_id=a.loan_id,
         collector_user_id=a.collector_user_id,
-        tier=str(a.tier),
         method=a.method,
         active=a.active,
     )
@@ -175,7 +171,9 @@ def assign_loan(
     user=Depends(get_current_user),
 ):
     """Assign one delinquent loan to a collector (defaults to the caller —
-    "assign to me"). Tier-gated: a junior cannot take deep-bucket accounts."""
+    "assign to me"). Any collector may hold any file; if a manager wants a
+    deep-bucket account on a more experienced collector, they assign it to
+    them."""
     loan = _get_loan(db, loan_id)
     collector_id = body.collector_user_id or getattr(user, "id", None)
     if collector_id is None:
@@ -186,7 +184,6 @@ def assign_loan(
             db,
             loan,
             collector_id,
-            body.tier,
             method=work.ASSIGN_METHOD_MANUAL,
             actor_id=_actor_id(user),
             reassign=body.reassign,
@@ -235,11 +232,10 @@ def bulk_assign(
     individual account and assign it to a user … just not viable".
 
     Selects the delinquent worklist (past-due loans, plus the insolvency
-    portfolio for seniors), narrows by the given selectors (vendor /
-    borrower-last-name alpha range / month-end bucket — they AND together),
-    and assigns every match to the collector. Already-assigned loans are
-    skipped unless ``reassign``; tier violations are skipped with the reason
-    (never a partial failure)."""
+    portfolio), narrows by the given selectors (vendor / borrower-last-name
+    alpha range / month-end bucket — they AND together), and assigns every
+    match to the collector. Already-assigned loans are skipped unless
+    ``reassign``; every skip carries its reason (never a partial failure)."""
     if body.vendor_id is None and body.alpha_from is None and body.buckets is None:
         raise HTTPException(
             status_code=422,
@@ -307,7 +303,6 @@ def bulk_assign(
                 db,
                 loan,
                 body.collector_user_id,
-                body.tier,
                 method=method,
                 actor_id=_actor_id(user),
                 reassign=body.reassign,
@@ -326,7 +321,6 @@ class MyQueueRow(BaseModel):
     principal_balance_cents: int
     days_past_due: int
     bucket: str
-    tier: str
     assigned_at: Optional[datetime] = None
     insolvency_status: Optional[str] = None
     # Promise-to-pay surfacing (Dave: promises show in the queues).
@@ -394,7 +388,6 @@ def my_queue(
                 principal_balance_cents=loan.principal_balance_cents,
                 days_past_due=work.loan_days_past_due(loan, today),
                 bucket=work.display_bucket(loan, today),
-                tier=str(assignment.tier),
                 assigned_at=assignment.assigned_at,
                 insolvency_status=loan.insolvency_status,
                 open_promise_date=open_promise.promised_date if open_promise else None,
