@@ -22,6 +22,7 @@ Run (only this file — the full suite hits a shared remote DB):
 from __future__ import annotations
 
 import uuid
+from datetime import date, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -94,6 +95,14 @@ def _fake_created_application():
     )
 
 
+# Origination dates must sit inside the product's due-date policy window
+# (policy_config.due_dates — enforced since the origination-constraints
+# workstream), so they are RELATIVE to today rather than hardcoded calendar
+# dates that silently go stale and start failing.
+_START = date.today() + timedelta(days=7)
+_FIRST_DUE = _START + timedelta(days=22)
+
+
 # Dave's checklist numbers (f0033): $25,000 − $1,500 − $7,500 = $16,000.
 def _intake_body(product_id, **overrides):
     body = {
@@ -107,8 +116,8 @@ def _intake_body(product_id, **overrides):
         "term_months": 12,
         "province": "bc",
         "provider_name": "Dr. Khadembashi",
-        "loan_start_date": "2026-07-16",
-        "first_due_date": "2026-08-07",
+        "loan_start_date": _START.isoformat(),
+        "first_due_date": _FIRST_DUE.isoformat(),
         "preferred_payment_amount_cents": 26_000,
         "preferred_payment_frequency": "bi-weekly",
         "preferred_first_due_date": "2026-06-25",
@@ -237,7 +246,9 @@ class TestVendorIntake:
 
     def test_first_due_before_start_is_422(self, harness):
         client, ctx = harness
-        body = _intake_body(ctx.product.id, first_due_date="2026-07-15")
+        body = _intake_body(
+            ctx.product.id, first_due_date=(_START - timedelta(days=1)).isoformat()
+        )
         resp = client.post(f"{_BASE}/applications", json=body)
         assert resp.status_code == 422
 
@@ -314,8 +325,8 @@ class TestVendorIntake:
         assert c.residence_province == "BC"
         assert c.preferred_payment_frequency == "bi_weekly"  # alias normalized
         assert c.preferred_payment_amount_cents == 26_000
-        assert str(c.loan_start_date) == "2026-07-16"
-        assert str(c.first_due_date) == "2026-08-07"
+        assert str(c.loan_start_date) == _START.isoformat()
+        assert str(c.first_due_date) == _FIRST_DUE.isoformat()
         # unqueried checklist extras -> self_reported
         assert c.self_reported["vendor_intake"]["alt_contact_name"] == "June"
         assert c.self_reported["vendor_intake"]["alt_contact_relationship"] == "Mother"

@@ -4,9 +4,9 @@ Dave's collections modernization (04__WP_Collections):
 
 * ``PlatformCollectorAssignment`` — who is working a delinquent loan. Bulk
   assignment (by vendor / borrower alpha / bucket) replaces Turnkey's
-  one-at-a-time "Assign to me" ("that's just not viable"). ``tier`` carries the
-  junior/senior collector split — a junior may only work shallow buckets
-  (current-month-late / pot-30); anything deeper needs a senior.
+  one-at-a-time "Assign to me" ("that's just not viable"). Any collector may
+  hold any file — seniority is the manager's staffing call when picking the
+  assignee, not a classification the system stores.
 * ``PlatformCollectionActionType`` — the settings-definable directory of
   action-plan types ("those action types need to be in a settings area that we
   can define and add and remove to"). Soft-deactivate only, like decision
@@ -83,12 +83,6 @@ class PlatformCollectorAssignment(Base):
         nullable=False,
     )
 
-    # Junior collectors work current-month-late / pot-30 only; seniors work
-    # everything (hardship powers live in the separate hardship permission).
-    tier = Column(
-        ENUM("junior", "senior", name="platform_collector_tier", create_type=False),
-        nullable=False,
-    )
     # How this assignment was made: manual | bulk_vendor | bulk_alpha | bulk_bucket.
     method = Column(String, nullable=False, default="manual")
 
@@ -106,8 +100,7 @@ class PlatformCollectorAssignment(Base):
     def __repr__(self) -> str:
         return (
             f"<PlatformCollectorAssignment(loan_id={self.loan_id}, "
-            f"collector={self.collector_user_id}, tier={self.tier}, "
-            f"active={self.active})>"
+            f"collector={self.collector_user_id}, active={self.active})>"
         )
 
 

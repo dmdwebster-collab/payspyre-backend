@@ -33,6 +33,7 @@ from app.api.v1.endpoints import (
     admin_loans,
     admin_messages,
     admin_offers,
+    admin_origination,
     admin_originations,
     admin_report_builder,
     admin_report_exports,
@@ -71,6 +72,13 @@ api_router.include_router(admin_applications.router, prefix="/admin/applications
 api_router.include_router(
     admin_originations.router, prefix="/admin/applications", tags=["admin-originations"]
 )
+# The New Application form's product-driven backbone: ONE constraints call
+# (bounds/defaults/options + vendor providers + available products) and the live
+# quote (approximate payment, Principal + Interest + Fees = Total (APR), and the
+# preliminary amortization schedule). Same validator guards the create paths.
+api_router.include_router(
+    admin_origination.router, prefix="/admin/origination", tags=["admin-origination"]
+)
 # P0 T3 (2026-07-21 review): the six controls that rendered DISABLED —
 # Add Bank Account / Bank Verification / Send Email / Send SMS / Hard + Soft
 # Pull. Staff-only; NEVER mounted on the clinic (vendor) API.
@@ -103,7 +111,7 @@ api_router.include_router(
     admin_document_templates.router, prefix="/admin/document-templates", tags=["admin-documents"]
 )
 api_router.include_router(admin_collections.router, prefix="/admin/collections", tags=["admin-cockpit"])
-# WS-C — collections work-surface: collector assignment (bulk + tiers), action
+# WS-C — collections work-surface: collector assignment (single + bulk), action
 # plans, promise-to-pay, header math, segregated insolvency portfolio.
 api_router.include_router(
     admin_collections_work.router, prefix="/admin/collections", tags=["admin-collections"]

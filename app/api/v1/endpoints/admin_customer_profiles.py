@@ -49,8 +49,10 @@ from app.db.base import get_db
 from app.models.platform.credit_application import PlatformCreditApplication
 from app.models.platform.credit_product import PlatformCreditProduct
 from app.models.platform.customer_profile import PlatformCustomerProfile
+from app.schemas.pricing_config import PricingConfigError
 from app.services import customer_profile as profiles
 from app.services import customer_profile_schema as schema
+from app.services import origination_constraints
 from app.services.customer_profile_validation import (
     ProfileValidationError,
     completeness,
@@ -534,6 +536,36 @@ def create_application_from_profile(
             status.HTTP_404_NOT_FOUND, f"Credit product {payload.credit_product_id} not found"
         )
 
+    if product.status != "active":
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"Credit product {product.code} is {product.status}, not active.",
+        )
+
+    # Server-side enforcement of the credit product's guardrails — the SAME
+    # validator behind /admin/origination/constraints and /quote, so amount /
+    # term / rate / start-date / first-payment-window limits cannot be bypassed
+    # by calling this endpoint directly. (This path builds the application row
+    # itself rather than going through the orchestrator, so before this it had
+    # no bounds check at all.)
+    try:
+        origination_constraints.enforce_on_create(
+            product,
+            origination_constraints.SelectionInput(
+                amount_cents=payload.requested_amount_cents,
+                term_months=payload.requested_term_months,
+                annual_rate_bps=payload.requested_annual_rate_bps,
+                start_date=payload.start_date,
+                first_payment_date=payload.first_due_date,
+            ),
+        )
+    except origination_constraints.ConstraintViolation as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, exc.as_detail())
+    except PricingConfigError as exc:
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY, f"Product pricing config invalid: {exc}"
+        )
+
     if payload.require_complete_profile:
         try:
             profiles.assert_complete_for_application(db, profile_id)
@@ -545,7 +577,12 @@ def create_application_from_profile(
         credit_product_id=product.id,
         credit_product_version=getattr(product, "version", 1) or 1,
         requested_amount_cents=payload.requested_amount_cents,
-        requested_amount_source="clinic_proposed",
+        # BUG FIX (found by the new create-path enforcement test): the
+        # ``platform_amount_source`` enum has no ``clinic_proposed`` member —
+        # its values are clinic / patient / clinic_then_patient_adjusted — so
+        # every call to this endpoint died with a DataError on INSERT. The
+        # back-office staff member is entering the amount the clinic proposed.
+        requested_amount_source="clinic",
         vendor_id=payload.vendor_id,
         provider_name=payload.provider_name,
         requested_term_months=payload.requested_term_months,

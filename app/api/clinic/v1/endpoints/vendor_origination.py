@@ -66,7 +66,7 @@ from app.schemas.pricing_config import (
     coerce_frequency,
     parse_pricing_config,
 )
-from app.services import loan_quote
+from app.services import loan_quote, origination_constraints
 from app.services.auth.patient_auth_service import PatientAuthService
 from app.services.flow_orchestrator import (
     FlowOrchestrator,
@@ -326,6 +326,37 @@ def resolve_rate_bps(
     return requested_rate_bps
 
 
+def _enforce_product_constraints(
+    product: PlatformCreditProduct,
+    *,
+    amount_cents: Optional[int] = None,
+    term_months: Optional[int] = None,
+    annual_rate_bps: Optional[int] = None,
+    frequency: Optional[str] = None,
+    start_date: Optional[date] = None,
+    first_payment_date: Optional[date] = None,
+) -> None:
+    """Apply the SHARED origination guardrails (422 w/ field-level errors).
+
+    One validator for the quote path and every create path — see
+    ``app/services/origination_constraints.py``.
+    """
+    try:
+        origination_constraints.enforce_on_create(
+            product,
+            origination_constraints.SelectionInput(
+                amount_cents=amount_cents,
+                term_months=term_months,
+                annual_rate_bps=annual_rate_bps,
+                frequency=frequency,
+                start_date=start_date,
+                first_payment_date=first_payment_date,
+            ),
+        )
+    except origination_constraints.ConstraintViolation as exc:
+        raise HTTPException(status_code=422, detail=exc.as_detail())
+
+
 def _emit_vendor_event(
     db: Session,
     *,
@@ -392,6 +423,20 @@ def create_vendor_application(
         body_pref_freq = None
     effective_rate_bps = resolve_rate_bps(
         cfg, body.requested_annual_rate_bps, role=principal.role, enforce_role=True
+    )
+    # Server-side enforcement of the product's FULL guardrail set — the same
+    # validator the New Application form and /admin/origination/quote use, so
+    # the start-date / first-payment windows (policy_config.due_dates) cannot be
+    # bypassed by posting straight to the API. Runs after the checks above so
+    # their established messages are unchanged.
+    _enforce_product_constraints(
+        product,
+        amount_cents=body.amount_financed_cents,
+        term_months=body.term_months,
+        annual_rate_bps=effective_rate_bps,
+        frequency=body_pref_freq,
+        start_date=body.loan_start_date,
+        first_payment_date=body.first_due_date,
     )
 
     patient = _find_or_create_patient(db, body)
