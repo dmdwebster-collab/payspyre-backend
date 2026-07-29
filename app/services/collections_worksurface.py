@@ -13,19 +13,17 @@ primitive in ``auto_collection``).
 
 Split of responsibilities (flow_engine / delinquency_buckets idiom):
 
-  * PURE CORE — tier gating, alpha-range matching, promise evaluation,
-    queue sort keys: no DB, no I/O, no clock reads.
+  * PURE CORE — alpha-range matching, promise evaluation, queue sort keys:
+    no DB, no I/O, no clock reads.
   * ORCHESTRATION — assignment writes, promise-status refresh, trustee
     payments, the monthly maintenance-fee hook. Functions add + flush only;
     CALLERS own commits (endpoint idiom).
 
 POLICY (flagged for Dave, all in one place):
 
-  * ``JUNIOR_ALLOWED_BUCKETS`` — Dave: "a junior collector is going to deal
-    with something that is maybe current month late or potentially 30 days
-    late and then anything beyond that is going to be somebody that is a more
-    senior collector". Encoded as: junior may work current /
-    current_month_late / pot_30; a senior may work everything.
+  * Assignment carries NO seniority classification. Any permitted collector
+    may be assigned any file in any bucket — a manager who wants a deep
+    account on a more experienced collector simply assigns it to them.
   * Promise window — payments qualify from the promise's creation date
     through its promised date (inclusive). No grace days (knob available).
   * ``no_late_fees`` on a promise is a RECORDED flag; automated late-fee
@@ -51,9 +49,6 @@ from app.models.platform.event import PlatformEvent
 from app.models.platform.loan import PlatformLoan, PlatformLoanTransaction
 from app.services import loan_ledger, loan_servicing
 from app.services.delinquency_buckets import (
-    BUCKET_CURRENT,
-    BUCKET_CURRENT_MONTH_LATE,
-    BUCKET_POT_30,
     INSOLVENCY_STATUSES,
     NOT_OWED_STATUSES,
     effective_bucket,
@@ -64,10 +59,6 @@ from app.services.delinquency_buckets import (
 # Vocabulary / events
 # ---------------------------------------------------------------------------
 
-TIER_JUNIOR = "junior"
-TIER_SENIOR = "senior"
-TIERS = (TIER_JUNIOR, TIER_SENIOR)
-
 ASSIGN_METHOD_MANUAL = "manual"
 ASSIGN_METHOD_BULK_VENDOR = "bulk_vendor"
 ASSIGN_METHOD_BULK_ALPHA = "bulk_alpha"
@@ -77,13 +68,6 @@ ASSIGN_METHODS = (
     ASSIGN_METHOD_BULK_VENDOR,
     ASSIGN_METHOD_BULK_ALPHA,
     ASSIGN_METHOD_BULK_BUCKET,
-)
-
-# Dave's junior/senior split — the buckets a JUNIOR collector may work.
-JUNIOR_ALLOWED_BUCKETS = (
-    BUCKET_CURRENT,
-    BUCKET_CURRENT_MONTH_LATE,
-    BUCKET_POT_30,
 )
 
 COLLECTOR_ASSIGNED_EVENT = "collector_assigned"
@@ -109,20 +93,6 @@ class CollectionsError(ValueError):
 # ---------------------------------------------------------------------------
 # Pure core
 # ---------------------------------------------------------------------------
-
-
-def tier_allows_bucket(tier: str, bucket: str) -> bool:
-    """May a collector of ``tier`` work a loan in ``bucket``? PURE.
-
-    Seniors work everything (including the insolvency portfolio and
-    written-off recoveries); juniors only the shallow ladder
-    (current / current-month-late / pot-30).
-    """
-    if tier not in TIERS:
-        raise CollectionsError(f"Unknown collector tier {tier!r}")
-    if tier == TIER_SENIOR:
-        return True
-    return bucket in JUNIOR_ALLOWED_BUCKETS
 
 
 def normalize_alpha(letter: Optional[str]) -> str:
@@ -265,35 +235,28 @@ def assign_loan(
     db: Session,
     loan: PlatformLoan,
     collector_user_id,
-    tier: str,
     *,
     method: str,
     actor_id: str,
     reassign: bool = False,
     today: Optional[date] = None,
 ) -> PlatformCollectorAssignment:
-    """Assign one loan to a collector (tier-gated). Adds + flushes; caller
-    commits.
+    """Assign one loan to a collector. Adds + flushes; caller commits.
 
-    * ``tier`` must be allowed to work the loan's effective bucket (junior →
-      shallow ladder only).
+    Any collector may be assigned any file, in any bucket — seniority is a
+    staffing decision the manager makes when choosing the assignee, not
+    something the system classifies.
+
     * An existing ACTIVE assignment blocks unless ``reassign=True`` (then it
       is deactivated, keeping history).
 
     Raises :class:`CollectionsError` on a rule violation.
     """
-    if tier not in TIERS:
-        raise CollectionsError(f"Unknown collector tier {tier!r}")
     if method not in ASSIGN_METHODS:
         raise CollectionsError(f"Unknown assignment method {method!r}")
 
     today = today or date.today()
     bucket = display_bucket(loan, today)
-    if not tier_allows_bucket(tier, bucket):
-        raise CollectionsError(
-            f"A {tier} collector cannot work bucket {bucket!r} "
-            f"(junior tier is limited to {', '.join(JUNIOR_ALLOWED_BUCKETS)})"
-        )
 
     existing = active_assignment(db, loan.id)
     replaced = None
@@ -312,7 +275,6 @@ def assign_loan(
         id=uuid4(),
         loan_id=loan.id,
         collector_user_id=collector_user_id,
-        tier=tier,
         method=method,
         active=True,
         assigned_by=actor_id,
@@ -329,7 +291,6 @@ def assign_loan(
                 "actor": {"type": "staff", "id": actor_id},
                 "loan_id": str(loan.id),
                 "collector_user_id": str(collector_user_id),
-                "tier": tier,
                 "method": method,
                 "bucket": bucket,
                 "replaced_assignment_id": str(replaced.id) if replaced else None,
