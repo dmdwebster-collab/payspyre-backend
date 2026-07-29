@@ -396,6 +396,14 @@ def _import_borrowers(
     field_counts: dict[str, int] = {}
 
     for account in read.accounts:
+        # A borrower is only created for an account that will actually become a
+        # loan. A voided or unmapped account would otherwise leave behind a
+        # borrower record with nothing attached to it — exactly the kind of
+        # orphan the demo purge exists to get rid of.
+        if profile.is_skipped_status(account.source_status, account.source_sub_status):
+            continue
+        if profile.map_status(account.source_status, account.source_sub_status) is None:
+            continue
         key = borrower_key(account)
         if key in out:
             continue

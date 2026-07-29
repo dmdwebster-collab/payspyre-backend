@@ -321,9 +321,12 @@ def test_a_borrower_with_two_loans_at_one_vendor_is_one_borrower(db_session):
         db_session, read_workbook(build_workbook(), PROFILE),
         importer.ImportOptions(placeholders=KOM_555), commit=False,
     )
-    assert result.borrowers_created == 5
+    assert result.borrowers_created == 4
     patients = db_session.query(PlatformPatient).all()
     assert sum(1 for p in patients if p.legal_last_name == "Ramsey") == 2
+    # 5004 is VOIDED and never becomes a loan, so its borrower is never created —
+    # an import must not leave behind records with nothing attached to them.
+    assert not any(p.legal_last_name == "Doe" for p in patients)
     db_session.rollback()
 
 
@@ -364,7 +367,7 @@ def test_reimporting_the_same_book_creates_nothing_twice(db_session):
     assert second.loans_skipped_existing == 4
     assert second.ledger_rows_created == 0
     assert second.transactions_skipped_duplicate > 0
-    assert second.borrowers_matched == 5
+    assert second.borrowers_matched == 4
     assert second.providers_created == 0
     db_session.rollback()
 
@@ -411,7 +414,7 @@ def test_the_unroutable_shape_applies_only_when_the_flag_is_set(db_session):
         db_session, read_workbook(build_workbook(), PROFILE),
         importer.ImportOptions(placeholders=KOM_555), commit=False,
     )
-    assert result.borrowers_completed == 5
+    assert result.borrowers_completed == 4
     patients = db_session.query(PlatformPatient).all()
     assert patients
     for p in patients:
@@ -481,7 +484,7 @@ def test_generated_addresses_are_placed_from_the_vendor_code(db_session):
         .filter(PlatformPatientField.field_key == constants.IMPORT_ADDRESS_FIELD_KEY)
         .all()
     )
-    assert len(fields) == 5
+    assert len(fields) == 4
     provinces = {f.field_value["province"] for f in fields}
     assert provinces == {"BC", "AB"}  # AB2000's borrower lands in Alberta
     db_session.rollback()
