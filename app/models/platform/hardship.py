@@ -1,6 +1,6 @@
 """``platform_hardship_requests`` model — Hardship v1 (WS-J, migration 054).
 
-Dave (03__WP_Servicing §5): Turnkey's unused "Rescheduling" tab must become
+Dave (03__WP_Servicing §5): the legacy LMS's unused "Rescheduling" tab must become
 **Hardship** — installment deferments, due-date changes (and later: frequency
 change, refinance-balance-only, temporary Adjustment of Terms with auto
 snap-back) — and "we can't unilaterally change those things without the

@@ -52,7 +52,7 @@ class NotificationSpec:
 def _global_context() -> dict:
     """Company-level fields available to EVERY template render.
 
-    Mirrors Turnkey's "System > Company Settings" merge fields (CompanyName,
+    Mirrors the legacy LMS's "System > Company Settings" merge fields (CompanyName,
     SupportEmail, ...) from Dave's Mergefields doc — callers never need to pass
     these, and any explicit context key with the same name wins. Computed per
     call (not module-level) so tests can monkeypatch settings.

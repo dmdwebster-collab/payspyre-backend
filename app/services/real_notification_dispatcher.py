@@ -428,7 +428,7 @@ class RealNotificationDispatcher:
         )
         # WS-A comms log (mandate #4): the sign-in message IS a communication,
         # but its body carries the plaintext code — store the hidden marker
-        # (the on-camera Turnkey behavior for credential-bearing bodies).
+        # (the on-camera legacy-LMS behavior for credential-bearing bodies).
         from app.services import communications_log
 
         communications_log.record_communication(

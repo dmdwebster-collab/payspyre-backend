@@ -383,7 +383,7 @@ class TestPaymentPreview:
         assert out["annual_rate_bps"] == 1999
         # fees: $25 origination + $1 x 12 payments = $37.00
         assert out["fees_cents"] == 2500 + 100 * 12
-        # Principal + Interest + Fees = Total (the Turnkey equation strip)
+        # Principal + Interest + Fees = Total (the legacy LMS equation strip)
         assert (
             out["principal_cents"] + out["interest_cents"] + out["fees_cents"]
             == out["total_of_payments_cents"]

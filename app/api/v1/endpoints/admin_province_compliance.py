@@ -1,6 +1,6 @@
 """Admin CRUD for the per-province compliance rule engine (Workstream W2).
 
-Net-new beyond Turnkey. Admins manage the province rule table that BLOCKS
+Net-new beyond the legacy LMS. Admins manage the province rule table that BLOCKS
 non-compliant product configurations (APR caps / high-cost-credit licensing
 thresholds) at create/update, and surface every rule still on placeholder
 values so counsel can confirm them.

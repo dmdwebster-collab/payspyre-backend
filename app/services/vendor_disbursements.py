@@ -1,4 +1,4 @@
-"""Vendor self-serve disbursements engine (W2-DISB, Turnkey parity video 10).
+"""Vendor self-serve disbursements engine (W2-DISB, legacy-LMS parity video 10).
 
 Dave's ask (10__Vendor_Access §2/§4/§5 "Disbursements — the big new ask"):
 give each vendor a place to see, on their portfolio,

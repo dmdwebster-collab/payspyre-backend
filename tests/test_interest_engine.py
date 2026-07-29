@@ -252,7 +252,7 @@ def test_reversal_style_charges_restore_balances():
 
 
 # ---------------------------------------------------------------------------
-# allocate_regular_payment — Turnkey "Regular" waterfall
+# allocate_regular_payment — legacy-LMS "Regular" waterfall
 # ---------------------------------------------------------------------------
 
 def _balances(principal=98_000, interest=3_000, fees=100, add_on=4_500):

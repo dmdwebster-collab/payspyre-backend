@@ -4,7 +4,7 @@ Revision ID: 052_vendor_origination
 Revises: 049_loan_ledger
 Create Date: 2026-07-10
 
-Turnkey parity WS-I (docs/turnkey_parity/10__Vendor_Access.md — Dave's vendor
+legacy-LMS parity WS-I (docs/turnkey_parity/10__Vendor_Access.md — Dave's vendor
 portal spec): vendors originate applications on the patient's behalf via the
 clinic surface, carrying the "Application Submission Checklist" money model
 (treatment cost − insurance − down payment = amount financed), the patient's
@@ -24,7 +24,7 @@ false. Schema is kept minimal (build-plan rule: only what queries need):
 * Vendor-arranged terms: ``requested_term_months``,
   ``requested_annual_rate_bps`` (role-gated within the product's
   PricingConfig rate band), ``loan_start_date``, ``first_due_date`` (the
-  "custom first due date" from the Turnkey new-application form).
+  "custom first due date" from the legacy LMS's new-application form).
 * ``provider_name`` — free-text provider (the treating dentist). There is no
   providers directory table yet (the widget intake also carries provider as a
   display string); a structured Vendor→Provider directory is FLAGGED FOR DAVE.

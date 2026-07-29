@@ -1,6 +1,6 @@
 """Scheduled-transaction surgery (WS-F) — Dave: "a very, very important section".
 
-Turnkey's Scheduled-transactions tab (03__WP_Servicing f0074–f0081) gives staff
+The legacy LMS's Scheduled-transactions tab (03__WP_Servicing f0074–f0081) gives staff
 three primitives on a live loan, WITHOUT ever altering the as-agreed
 amortization plan (Dave's borrower-protection rule — the plan stays visible and
 untouched; surgery layers on top of it):
@@ -15,7 +15,7 @@ untouched; surgery layers on top of it):
 
 EVERY action requires a MANDATORY comment (Dave) and emits a ``platform_events``
 row with the acting staff id — the event log IS the change history that
-Turnkey's "Transaction change history" modal shows (f0081).
+The legacy LMS's "Transaction change history" modal shows (f0081).
 
 Designed as clean, reusable service functions: the hardship module (WS-J,
 deferments / due-date changes) composes these primitives. Callers own commits
@@ -205,7 +205,7 @@ def add_custom_transaction(
     today: Optional[date] = None,
     allow_backdate: bool = False,
 ) -> PlatformLoanCustomTransaction:
-    """Add a one-off custom scheduled transaction (Turnkey "Add transaction").
+    """Add a one-off custom scheduled transaction (legacy-LMS "Add transaction").
 
     The amortization plan is untouched — this is a NEW instruction layered on
     top (e.g. pull a missed June 26 installment on July 10). Executes later via
@@ -322,7 +322,7 @@ def cancel_custom_transaction(
 
 
 def schedule_changes(db: Session, loan: PlatformLoan, *, limit: int = 200) -> list[dict]:
-    """The loan's schedule-surgery change history, newest first (Turnkey's
+    """The loan's schedule-surgery change history, newest first (the legacy LMS's
     "Transaction change history" modal) — read straight off the event log, the
     single source of audit truth."""
     stmt = text(

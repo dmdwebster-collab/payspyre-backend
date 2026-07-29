@@ -170,7 +170,7 @@ class Settings(BaseSettings):
         "magic_link_issued"
     )
 
-    # Auto-collection engine (WS-G, Turnkey parity P0) — MONEY-PATH MASTER FLAG.
+    # Auto-collection engine (WS-G, legacy-LMS parity, P0) — MONEY-PATH MASTER FLAG.
     # When False (the default), the scheduled auto-collection job
     # (app/jobs/auto_collection.py) exits as a strict no-op: no PAD pulls, no
     # PAD pre-notifications, no NSF fees, zero DB writes. Flip on only once
@@ -201,7 +201,7 @@ class Settings(BaseSettings):
     # supported mode. Wave 7 removes them.
     ACTIVATION_BOOKS_LOAN: bool = True
 
-    # Vendor self-serve disbursements (W2-DISB, Turnkey parity video 10) —
+    # Vendor self-serve disbursements (W2-DISB, legacy-LMS parity video 10) —
     # MONEY-PATH MASTER FLAG. When False (the default), BOTH the monthly
     # auto-payout job (app/jobs/vendor_disbursements.py) AND the on-demand
     # extra-payout endpoint are strict no-ops: no Zumrails push, zero money-out
@@ -272,10 +272,10 @@ class Settings(BaseSettings):
     HISTORY_AGE_OF_MAJORITY_YEARS: int = 18
     HISTORY_GAP_TOLERANCE_DAYS: int = 31
 
-    # --- Multi-offer approvals (WS-D, Turnkey parity video 02) ---------------
+    # --- Multi-offer approvals (WS-D, legacy-LMS parity video 02) ---------------
     # An underwriter may create up to OFFER_MAX_PER_APPLICATION open offers per
     # application; unaccepted offers expire OFFER_EXPIRY_DAYS after creation.
-    # Turnkey's values (3 / 30d) kept per GAP_ANALYSIS open question #4 —
+    # The legacy LMS's values (3 / 30d) kept per GAP_ANALYSIS open question #4 —
     # config-driven so Dave can retune without a code change.
     OFFER_MAX_PER_APPLICATION: int = 3
     OFFER_EXPIRY_DAYS: int = 30

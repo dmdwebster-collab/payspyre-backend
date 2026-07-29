@@ -1,4 +1,4 @@
-"""Blacklist screening (WS-I) — Turnkey Tools → Blacklists parity.
+"""Blacklist screening (WS-I) — legacy-LMS Tools → Blacklists parity.
 
 Staff-maintained lists of suspicious values, checked at application decision
 time. THE RULE (Dave): a match FLAGS the file — an auto-APPROVE is downgraded

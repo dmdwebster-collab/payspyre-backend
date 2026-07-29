@@ -553,7 +553,7 @@ def test_weekly_and_bi_weekly_are_pure_day_steps():
 
 
 def test_actual_360_is_frequency_aware_too():
-    """The Turnkey-legacy day-count generalises: the accrual windows simply get
+    """The legacy-LMS day-count generalises: the accrual windows simply get
     shorter as the periods do, and the tie-out invariants are unchanged."""
     rows = generate_amortization_schedule(
         1_000_000,
@@ -720,7 +720,7 @@ def test_stored_frequency_beats_the_schedule_cadence_inference():
 
 
 def test_legacy_rows_without_a_stored_frequency_still_infer():
-    """Every loan booked before migration 082, and every migrated Turnkey loan,
+    """Every loan booked before migration 082, and every migrated the legacy LMS loan,
     carries no stored cadence and must keep being serviced exactly as before."""
     bi_weekly_dates = [
         date(2026, 7, 31) + timedelta(days=14 * i) for i in range(5)

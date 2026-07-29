@@ -1,4 +1,4 @@
-"""Vendor self-serve disbursements (W2-DISB, Turnkey parity video 10)
+"""Vendor self-serve disbursements (W2-DISB, legacy-LMS parity video 10)
 
 Revision ID: 065_vendor_disbursements
 Revises: 064_borrower_depth

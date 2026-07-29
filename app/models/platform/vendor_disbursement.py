@@ -1,4 +1,4 @@
-"""Vendor disbursement ledger (W2-DISB, Turnkey parity video 10).
+"""Vendor disbursement ledger (W2-DISB, legacy-LMS parity video 10).
 
 One IMMUTABLE-ish row per payout of collected funds from PaySpyre to a vendor
 (clinic). The vendor "wallet" (MTD collected / due / available) is NOT stored —

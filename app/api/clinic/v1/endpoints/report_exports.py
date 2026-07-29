@@ -1,6 +1,6 @@
 """Clinic portal — vendor-scoped XLSX report downloads.
 
-The same seven Turnkey-parity reports as the admin surface
+The same seven legacy-parity reports as the admin surface
 (app/services/report_exports.py), hard-scoped to the caller's own vendor via
 ``ClinicPrincipal.vendor_id`` — a clinic can never pass a vendor_id and can
 never see another vendor's borrowers, payments or schedule.

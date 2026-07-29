@@ -1,4 +1,4 @@
-"""Blacklist admin CRUD (WS-I) — Turnkey Tools → Blacklists parity.
+"""Blacklist admin CRUD (WS-I) — legacy-LMS Tools → Blacklists parity.
 
 Admin-only (the list is sensitive: it names suspected-fraud values). Entries
 are soft-deleted only (``active`` flip) so the history stays auditable; every

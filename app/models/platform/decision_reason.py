@@ -1,6 +1,6 @@
 """Decision-reason directory (migration 048) — admin-editable REJECT / CANCEL reasons.
 
-Turnkey parity (02__WP_Underwriting.md): rejection and cancellation reasons live
+legacy-LMS parity (02__WP_Underwriting.md): rejection and cancellation reasons live
 in a Settings directory that staff maintain (add / edit / soft-deactivate — never
 hard-delete, so a code that was ever used in a decision stays resolvable for
 audit). ``borrower_facing_text`` is the wording that flows into the

@@ -440,7 +440,7 @@ def _loan_frequency(
     no gap, and 14 days is ambiguous with semi-monthly until a third row lands.
 
     Falls back to :func:`_infer_frequency` for LEGACY rows — anything booked
-    before 082, plus loans imported from the Turnkey book, which carry no stored
+    before 082, plus loans imported from the legacy LMS book, which carry no stored
     frequency and have always been serviced off the inferred cadence. An
     unrecognised stored value also falls back rather than raising: servicing a
     live loan must never 500 on a bad enum.

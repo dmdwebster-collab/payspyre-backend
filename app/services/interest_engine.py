@@ -1,6 +1,6 @@
 """Actuals-based daily-simple-interest engine (pure functional core). WS-A / P0.
 
-Turnkey-parity gap #2 (GAP_ANALYSIS): Dave's product is daily simple interest
+legacy-parity gap #2 (GAP_ANALYSIS): Dave's product is daily simple interest
 recomputed from *actual* payment dates — a late payment accrues extra per-diem
 days, an early payment fewer. The amortization schedule remains the as-agreed
 PLAN; this engine + the immutable loan ledger (``platform_loan_transactions``)
@@ -21,7 +21,7 @@ CONVENTIONS (defensible standards, flagged for Dave until his two Excel files
 :class:`InterestEngineConfig` so they can be re-pointed in one place):
 
   * Day count: ACT/365-Fixed — per-diem = outstanding_principal × annual_rate
-    / 365. (Turnkey's schedule generator reconciled to actual/360, but Dave's
+    / 365. (the legacy LMS's schedule generator reconciled to actual/360, but Dave's
     daily-simple-interest narration is per-diem on the outstanding balance;
     ACT/365 is the standard Canadian consumer-lending convention.)
   * Accrual starts on the DISBURSEMENT date (money out the door) and interest
@@ -275,7 +275,7 @@ def allocate_regular_payment(
     balances: BalanceView,
     priority: Optional[Sequence[str]] = None,
 ) -> PaymentAllocation:
-    """Turnkey "Regular" repayment mode, allocated in the CONFIGURED order.
+    """The legacy LMS's "Regular" repayment mode, allocated in the CONFIGURED order.
 
     ``priority`` is the product's
     ``policy_config.allocation_priority.repayment`` list (see
@@ -339,7 +339,7 @@ def allocate_regular_payment(
 def allocate_add_on_payment(
     amount_cents: int, balances: BalanceView
 ) -> PaymentAllocation:
-    """Turnkey "Add-on" repayment mode: pays the ADD-ON bucket ONLY.
+    """The legacy LMS's "Add-on" repayment mode: pays the ADD-ON bucket ONLY.
 
     Dave (03__WP_Servicing f0053+): "add-on payments target the add-on section
     … where any fees that don't incur interest live — NSF fees as an example."
@@ -366,7 +366,7 @@ def allocate_add_on_payment(
 def allocate_special_payment(
     amount_cents: int, balances: BalanceView
 ) -> PaymentAllocation:
-    """Turnkey "Special" repayment mode: 100% to PRINCIPAL, bypassing interest.
+    """The legacy LMS's "Special" repayment mode: 100% to PRINCIPAL, bypassing interest.
 
     Dave: "a special payment is designed to go 100 percent to principal."
     Staff-only + permission-gated at the endpoint layer (this pure function is
@@ -392,7 +392,7 @@ def allocate_special_payment(
 def allocate_payoff_payment(
     amount_cents: int, balances: BalanceView
 ) -> PaymentAllocation:
-    """Turnkey "Payoff" repayment mode: the fixed, NON-EDITABLE closing amount.
+    """The legacy LMS's "Payoff" repayment mode: the fixed, NON-EDITABLE closing amount.
 
     Dave: "payoff is designed to close the account and calculate a fixed amount
     that is not editable" = all principal + accrued interest + fees due +
@@ -416,7 +416,7 @@ def allocate_payoff_payment(
     )
 
 
-# The four Turnkey repayment modes (03__WP_Servicing §"Submit repayment").
+# The four legacy-LMS repayment modes (03__WP_Servicing §"Submit repayment").
 REPAYMENT_MODES = ("regular", "add_on", "special", "payoff")
 
 _ALLOCATORS = {

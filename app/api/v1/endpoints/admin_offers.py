@@ -1,6 +1,6 @@
 """Admin multi-offer approvals (WS-D) — the "Create Loan Offers" flow.
 
-Turnkey video 02 f85-f87: on Approve, the underwriter stacks 1..N offer blocks
+legacy-LMS video 02 f85-f87: on Approve, the underwriter stacks 1..N offer blocks
 ("+ Add Offer") and OKs them; the offers go to the borrower dashboard for
 review & acceptance. Dave: "We can create multiple different offers... someone
 is thinking about putting variable amounts down and they want to review the

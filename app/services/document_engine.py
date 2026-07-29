@@ -1,4 +1,4 @@
-"""Document / merge-field engine (WS-B — Turnkey "System documents" parity).
+"""Document / merge-field engine (WS-B — legacy-LMS "System documents" parity).
 
 Turns a versioned ``PlatformDocumentTemplate`` (HTML with merge-field
 placeholders) plus one loan's facts into a rendered, frozen
@@ -23,7 +23,7 @@ never ships the literal ``{{...}}`` to a borrower.
 
 The CANONICAL MERGE-FIELD DICTIONARY lives here (``MERGE_FIELDS`` /
 ``TABLE_FIELDS``) and is served by ``GET /admin/document-templates/merge-fields``
-(Turnkey's "Merge fields" dialog). Mirrors Turnkey naming (PascalCase; company
+(the legacy LMS's "Merge fields" dialog). Mirrors legacy-LMS naming (PascalCase; company
 fields match Dave's Mergefields doc / notification_render's global context).
 
 Everything render-related is a PURE function over plain attribute objects so it
@@ -79,7 +79,7 @@ class DocumentEngineError(Exception):
 
 
 # ---------------------------------------------------------------------------
-# Canonical merge-field dictionary (Turnkey "Merge fields" dialog parity)
+# Canonical merge-field dictionary (legacy-LMS "Merge fields" dialog parity)
 # ---------------------------------------------------------------------------
 
 #: Scalar fields, grouped exactly as the admin merge-fields browser shows them.

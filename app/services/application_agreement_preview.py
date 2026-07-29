@@ -380,7 +380,7 @@ def _loan_id_value(application: Any, loan: Any = None) -> Optional[str]:
 
     Resolution order, and why each rung exists:
 
-    1. ``loan.legacy_account_number`` — a migrated Turnkey loan is known to the
+    1. ``loan.legacy_account_number`` — a migrated the legacy LMS loan is known to the
        vendor and the borrower by its legacy account number; nothing else.
     2. ``loan.loan_number`` — the booked loan's own number, which booking copied
        from the application (migration 081). Identical to rung 3 by construction.

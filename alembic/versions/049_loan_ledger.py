@@ -1,4 +1,4 @@
-"""Immutable loan ledger — platform_loan_transactions (WS-A, Turnkey parity P0)
+"""Immutable loan ledger — platform_loan_transactions (WS-A, legacy-LMS parity, P0)
 
 Revision ID: 049_loan_ledger
 Revises: 048_underwriting_ops

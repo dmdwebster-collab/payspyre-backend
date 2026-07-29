@@ -15,7 +15,7 @@ borrower actually received (or an offline contact staff had with them):
 * channel ``email`` / ``sms`` — vendor sends, recorded by the notification
   dispatchers at send time with the FULL rendered subject + body (bodies
   carrying credentials, e.g. magic-link codes, are stored as
-  ``<Hidden for privacy purposes>`` — the on-camera Turnkey behavior).
+  ``<Hidden for privacy purposes>`` — the on-camera legacy-LMS behavior).
 * channel ``dashboard`` — in-app notifications recorded by the processor's
   dashboard lane with the rendered card content.
 * channel ``offline`` — staff-logged phone calls / in-person contacts

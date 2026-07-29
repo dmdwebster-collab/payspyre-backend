@@ -1,6 +1,6 @@
-"""Turnkey-parity operational report exports (XLSX).
+"""legacy-parity operational report exports (XLSX).
 
-Replicates the seven PaySpyre-branded reports Dave built inside Turnkey Lender
+Replicates the seven PaySpyre-branded reports Dave built inside the legacy LMS
 with Smart Marker templates (2025-08-18 template export):
 
   * borrower-data        Borrower Data

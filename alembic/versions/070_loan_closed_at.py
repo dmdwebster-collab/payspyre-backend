@@ -33,7 +33,7 @@ ADDS (both nullable — NULL means "not closed"):
     'backfill_updated_at'   backfilled here from ``updated_at`` — the old proxy,
                             kept ONLY where nothing better exists (charged-off
                             and cancelled loans, and paid-off loans with no
-                            ledger rows, e.g. the Turnkey migration import).
+                            ledger rows, e.g. The legacy LMS migration import).
                             Approximate; the flag says so.
 
 BACKFILL RATIONALE

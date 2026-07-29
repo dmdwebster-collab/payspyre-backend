@@ -1,4 +1,4 @@
-"""Originations-admin domain logic (WS-E, Turnkey parity video 01).
+"""Originations-admin domain logic (WS-E, legacy-LMS parity video 01).
 
 Pure, DB-free helpers shared by the admin endpoints:
 

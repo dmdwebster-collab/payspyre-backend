@@ -1,6 +1,6 @@
 """Customer/loan flags — directory CRUD + per-subject assignment (WS-E).
 
-Turnkey parity video 01: named flags staff raise against a customer or a loan
+legacy-LMS parity video 01: named flags staff raise against a customer or a loan
 with a reason. The directory is admin-managed (create / edit / soft-deactivate
 — never hard-delete, matching the decision-reason directory idiom). Raising
 and clearing flags is admin+staff. Definitions with

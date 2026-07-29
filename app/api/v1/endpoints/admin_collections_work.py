@@ -118,7 +118,7 @@ def _patient_names(db: Session, loans: list[PlatformLoan]) -> dict:
 
 
 class AssignBody(BaseModel):
-    # Defaults to the calling user — Turnkey's "Assign to me", minus the
+    # Defaults to the calling user — the legacy LMS's "Assign to me", minus the
     # one-at-a-time pain.
     collector_user_id: Optional[UUID] = None
     reassign: bool = False
@@ -621,7 +621,7 @@ def create_action(
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
-    """Plan an action on a loan (Turnkey "New action" dialog; comment
+    """Plan an action on a loan (legacy-LMS "New action" dialog; comment
     MANDATORY per Dave — "internal messages … reviewed by back-end staff")."""
     loan = _get_loan(db, loan_id)
     if not body.comment.strip():
@@ -816,7 +816,7 @@ def create_promise(
     user=Depends(get_current_user),
 ):
     """Record a promise to pay (amount / date / MANDATORY comment / optional
-    no-late-fee flag — Turnkey dialog parity). One OPEN promise per loan."""
+    no-late-fee flag — legacy-LMS dialog parity). One OPEN promise per loan."""
     loan = _get_loan(db, loan_id)
     if not body.comment.strip():
         raise HTTPException(status_code=422, detail="A comment is mandatory")

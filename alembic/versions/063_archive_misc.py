@@ -11,7 +11,7 @@ the orchestrator re-chains this one line (plus the pin in
 
 Three additive pieces, no changes to any existing table:
 
-1. ``platform_blacklist_entries`` — Turnkey Tools → Blacklists parity: staff
+1. ``platform_blacklist_entries`` — legacy-LMS Tools → Blacklists parity: staff
    lists of suspicious values (name / SIN / phone / email / driver's license /
    account number). Matches at intake FLAG to manual review — never
    auto-decline (Dave's rule). Soft-delete via ``active``.

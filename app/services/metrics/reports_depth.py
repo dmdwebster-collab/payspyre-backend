@@ -1,4 +1,4 @@
-"""Pure helpers for the WS-H reports-depth build (Turnkey parity, video 05).
+"""Pure helpers for the WS-H reports-depth build (legacy-LMS parity, video 05).
 
 Everything in this module is DB-free and clock-free so it can be unit-tested
 in isolation (the ``analytics_reports`` idiom): the endpoints/services do the

@@ -1,4 +1,4 @@
-"""Blacklist entries (WS-I, migration 063) — Turnkey Tools → Blacklists parity.
+"""Blacklist entries (WS-I, migration 063) — legacy-LMS Tools → Blacklists parity.
 
 Staff-maintained lists of SUSPICIOUS values (phone / email / name / SIN /
 driver's license / bank account number). A match at application intake FLAGS
@@ -54,7 +54,7 @@ class PlatformBlacklistEntry(Base):
     # Canonical match key (see blacklists.normalize_value).
     value_normalized = Column(String, nullable=False)
 
-    # MANDATORY: why this value is on the list (Turnkey shows it in the list).
+    # MANDATORY: why this value is on the list (the legacy LMS shows it in the list).
     reason = Column(String, nullable=False)
 
     active = Column(Boolean, nullable=False, default=True, server_default=text("true"))

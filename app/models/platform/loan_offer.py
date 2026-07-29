@@ -1,4 +1,4 @@
-"""Multi-offer approvals (WS-D) — the Turnkey "Create Loan Offers" model.
+"""Multi-offer approvals (WS-D) — the legacy-LMS "Create Loan Offers" model.
 
 An underwriter approves up to N offers per application (settings
 ``OFFER_MAX_PER_APPLICATION``, default 3); the borrower reviews them on the

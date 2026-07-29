@@ -1,6 +1,6 @@
 """The 9-role vendor-side permission matrix (WS-G, video 09 f0067-f0071).
 
-Turnkey's "Create vendor user" screen shows nine permission checkboxes; Dave
+The legacy LMS's "Create vendor user" screen shows nine permission checkboxes; Dave
 runs his whole practice on them. Our model:
 
 * ``platform_clinic_roles``            — the seeded directory (source of truth
