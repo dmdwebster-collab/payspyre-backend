@@ -11,6 +11,20 @@ behind a Visibility Trigger — requiring an invisible field would make whole
 categories of applicant un-submittable (e.g. Passport # for someone using a
 driver's licence).
 
+Its mirror image needs three values, not two (:class:`.Applicability`). A value
+is REJECTED as inapplicable only when the field's own trigger says so with the
+driver actually answered:
+
+* the field's own trigger decides — a block that does not currently apply never
+  makes an "Always Visible" field inapplicable (a previous address typed by
+  someone who has not moved in five years is unnecessary data, not a
+  contradiction), and a field marked Always is never rejected at all;
+* an unanswered driver is "not yet", not "no": someone filling the form out of
+  order keeps their typing, and the *driver* is what gets flagged as missing;
+* the message names the condition, the answer that failed it and the way out —
+  never the bare trigger cell, which states when the field DOES apply and so
+  read as an inverted rule.
+
 Two modes:
 
 * ``partial=True``  — a draft/PATCH. Format, char limit, enum membership and
@@ -31,14 +45,21 @@ from typing import Any, Optional
 
 from app.services.customer_profile_schema import (
     BLOCKS,
+    Applicability,
+    BlockSpec,
     FieldFormat,
     FieldSpec,
     FieldType,
     ProfileValues,
     block_spec,
+    describe_condition,
+    describe_current_value,
+    driver_label,
+    field_applicability,
     instance_key,
     is_block_visible,
     is_field_visible,
+    normalize_values,
     parse_instance_key,
 )
 
@@ -51,7 +72,9 @@ from app.services.customer_profile_schema import (
 class ErrorCode(str):
     UNKNOWN_BLOCK = "unknown_block"
     UNKNOWN_FIELD = "unknown_field"
-    NOT_VISIBLE = "field_not_visible"
+    NOT_APPLICABLE = "field_not_applicable"
+    #: legacy name for the same code — the concept is applicability, not pixels
+    NOT_VISIBLE = NOT_APPLICABLE
     REQUIRED = "required"
     TOO_LONG = "too_long"
     INVALID_OPTION = "invalid_option"
@@ -67,6 +90,11 @@ class ValidationIssue:
     field: Optional[str]
     code: str
     message: str
+    #: human labels, so a UI never has to re-derive them from the registry — and
+    #: so an operator can tell WHICH "Street Address" an issue is about when two
+    #: address blocks are on screen.
+    block_label: Optional[str] = None
+    field_label: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -75,6 +103,8 @@ class ValidationIssue:
             "field": self.field,
             "code": self.code,
             "message": self.message,
+            "block_label": self.block_label,
+            "field_label": self.field_label,
         }
 
 
@@ -209,6 +239,42 @@ def validate_field(spec: FieldSpec, value: Any) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Messages
+# ---------------------------------------------------------------------------
+
+
+def _not_applicable_message(
+    block: BlockSpec,
+    field: FieldSpec,
+    values: ProfileValues,
+    *,
+    index: int,
+    today: Optional[date] = None,
+) -> str:
+    """Why this value cannot be kept, and what to do about it.
+
+    The old message printed the trigger cell verbatim — *"Alternative Phone Name
+    is not applicable (If Alternative Phone Type = Family Member or Friend)"* —
+    which states the condition under which the field DOES apply while claiming
+    the field does NOT. It reads as an inverted rule. This one names the
+    condition, the answer that failed it, and both ways out.
+    """
+    rule = field.visible_when
+    condition = describe_condition(rule, field.block)
+    current = describe_current_value(
+        rule, values, own_block=field.block, own_instance=instance_key(field.block, index)
+    )
+    driver = driver_label(rule, field.block)
+    sentence = (
+        f"{block.label} — {field.label} only applies when {condition}"
+        f" (currently {current})."
+    )
+    if driver:
+        return f"{sentence} Clear {field.label}, or change {driver}."
+    return f"{sentence} Clear {field.label}."
+
+
+# ---------------------------------------------------------------------------
 # Whole-profile validation
 # ---------------------------------------------------------------------------
 
@@ -236,6 +302,10 @@ def validate_profile(
     render and count.
     """
     issues: list[ValidationIssue] = []
+    # Canonicalize instance keys FIRST: "contact#0" and "contact" are the same
+    # instance, and a rule that cannot find its driver field evaluates against
+    # nothing at all.
+    values = normalize_values(values)
 
     # --- pass 1: everything supplied must be a real, writable, valid field ---
     for key, supplied in values.items():
@@ -276,11 +346,21 @@ def validate_profile(
                 continue
             if value in (None, ""):
                 continue
-            if not is_field_visible(field, values, index=index, today=today):
+            # Judged by the FIELD's own trigger only. A block that does not
+            # currently apply (a previous address for someone who has not moved)
+            # does not make its always-applicable fields inapplicable — that
+            # conflation is what produced "Street Address is not applicable
+            # (Always Visable)". Extra history is valid data; it is simply never
+            # required. And a trigger whose driver is still unanswered is
+            # UNDETERMINED, so filling a form out of order is not an error.
+            if (
+                field_applicability(field, values, index=index, today=today)
+                is Applicability.NOT_APPLICABLE
+            ):
                 issues.append(ValidationIssue(
-                    block_name, index, field_key, ErrorCode.NOT_VISIBLE,
-                    f"{field.label} is not applicable "
-                    f"({field.visible_when.trigger_text})",
+                    block_name, index, field_key, ErrorCode.NOT_APPLICABLE,
+                    _not_applicable_message(spec, field, values, index=index, today=today),
+                    block_label=spec.label, field_label=field.label,
                 ))
                 continue
             for message in validate_field(field, value):
@@ -291,8 +371,11 @@ def validate_profile(
                     if "character limit" in message
                     else ErrorCode.INVALID_FORMAT
                 )
-                issues.append(ValidationIssue(block_name, index, field_key, code,
-                                              f"{field.label} {message}"))
+                issues.append(ValidationIssue(
+                    block_name, index, field_key, code,
+                    f"{spec.label} — {field.label} {message}",
+                    block_label=spec.label, field_label=field.label,
+                ))
 
     if partial:
         return issues
@@ -318,7 +401,8 @@ def validate_profile(
                 if supplied.get(field.key) in (None, ""):
                     issues.append(ValidationIssue(
                         block.block.value, index, field.key, ErrorCode.REQUIRED,
-                        f"{field.label} is required",
+                        f"{block.label} — {field.label} is required",
+                        block_label=block.label, field_label=field.label,
                     ))
     return issues
 
@@ -359,6 +443,7 @@ def assert_valid(values: ProfileValues, **kwargs: Any) -> None:
 
 def completeness(values: ProfileValues, *, today: Optional[date] = None) -> dict:
     """How complete is this profile? Used by the Originations 'Borrower details' tab."""
+    values = normalize_values(values)
     required: list[str] = []
     filled: list[str] = []
     for block in BLOCKS:
