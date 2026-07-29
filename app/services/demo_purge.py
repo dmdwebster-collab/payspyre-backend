@@ -66,8 +66,14 @@ _ENABLE_LEDGER_WORM = text(
 )
 
 #: Child-first delete order for the borrower / application / loan domain. Every
-#: entry is a static literal statement; the order satisfies the FK graph without
+#: entry is a static literal DELETE; the order satisfies the FK graph without
 #: relying on ON DELETE CASCADE (several links are NO ACTION).
+#:
+#: SELF-REFERENCING tables (ledger reversals, co-applicant links, superseded
+#: field rows) are deleted whole, never pre-cleared. Nulling the link first is
+#: both unnecessary — Postgres checks the FK at end of statement, when the
+#: referenced rows are gone too — and, for the ledger, illegal: a reversal row
+#: with a NULL reference violates ck_platform_loan_txn_reversal_ref.
 _DOMAIN_DELETES: tuple[tuple[str, object], ...] = (
     # --- servicing + collections children ------------------------------
     ("platform_collection_attempts", text("DELETE FROM platform_collection_attempts")),
@@ -83,8 +89,11 @@ _DOMAIN_DELETES: tuple[tuple[str, object], ...] = (
     ("platform_loan_payments", text("DELETE FROM platform_loan_payments")),
     ("platform_payout_requests", text("DELETE FROM platform_payout_requests")),
     ("platform_hardship_requests", text("DELETE FROM platform_hardship_requests")),
-    # Self-referencing (reversals) — clear the link before deleting the rows.
-    ("platform_loan_transactions", text("UPDATE platform_loan_transactions SET reverses_transaction_id = NULL WHERE reverses_transaction_id IS NOT NULL")),
+    # Self-referencing (a reversal names the row it undoes). NOT pre-cleared:
+    # the ledger's ck_platform_loan_txn_reversal_ref CHECK forbids a reversal
+    # row with a NULL reference, so nulling the link fails outright. A
+    # whole-table DELETE needs no pre-clearing — Postgres evaluates the FK at
+    # end of statement, by which point the referenced rows are gone too.
     ("platform_loan_transactions", text("DELETE FROM platform_loan_transactions")),
     # --- cross-cutting references to loans/applications/patients --------
     ("platform_staff_comments", text("DELETE FROM platform_staff_comments")),
@@ -108,21 +117,17 @@ _DOMAIN_DELETES: tuple[tuple[str, object], ...] = (
     ("platform_verifications", text("DELETE FROM platform_verifications")),
     ("platform_consents", text("DELETE FROM platform_consents")),
     ("platform_events", text("DELETE FROM platform_events")),
-    # Co-applicant links are self-referencing; break them before the delete.
-    ("platform_credit_applications", text("UPDATE platform_credit_applications SET co_applicant_of_application_id = NULL WHERE co_applicant_of_application_id IS NOT NULL")),
+    # Co-applicant links are self-referencing — same reasoning as the ledger.
     ("platform_credit_applications", text("DELETE FROM platform_credit_applications")),
     # --- customer profile + marketplace + patient children --------------
-    ("platform_customer_profile_fields", text("UPDATE platform_customer_profile_fields SET superseded_by_id = NULL WHERE superseded_by_id IS NOT NULL")),
     ("platform_customer_profile_fields", text("DELETE FROM platform_customer_profile_fields")),
     ("platform_customer_profiles", text("DELETE FROM platform_customer_profiles")),
     ("platform_marketplace_vendor_interest", text("DELETE FROM platform_marketplace_vendor_interest")),
     ("platform_marketplace_listings", text("DELETE FROM platform_marketplace_listings")),
     ("platform_customer_blocks", text("DELETE FROM platform_customer_blocks")),
     ("platform_patient_bank_accounts", text("DELETE FROM platform_patient_bank_accounts")),
-    ("platform_patient_id_documents", text("UPDATE platform_patient_id_documents SET superseded_by_id = NULL WHERE superseded_by_id IS NOT NULL")),
     ("platform_patient_id_documents", text("DELETE FROM platform_patient_id_documents")),
     ("platform_patient_second_factor", text("DELETE FROM platform_patient_second_factor")),
-    ("platform_patient_fields", text("UPDATE platform_patient_fields SET superseded_by_id = NULL WHERE superseded_by_id IS NOT NULL")),
     ("platform_patient_fields", text("DELETE FROM platform_patient_fields")),
     ("platform_patients", text("DELETE FROM platform_patients")),
     # --- import bookkeeping (batches reference the purged rows) ---------
@@ -321,13 +326,7 @@ def purge(
     try:
         db.execute(_DISABLE_LEDGER_WORM)
         for name, stmt in _DOMAIN_DELETES:
-            result = db.execute(stmt)
-            # The UPDATE statements that break self-references are preparation,
-            # not deletion — they must not inflate the deleted-rows report.
-            if str(stmt).lstrip().upper().startswith("DELETE"):
-                _record(name, result.rowcount or 0)
-            else:
-                report.tables.setdefault(name, 0)
+            _record(name, db.execute(stmt).rowcount or 0)
         if include_vendors:
             for name, stmt in _VENDOR_DELETES:
                 _record(name, db.execute(stmt).rowcount or 0)

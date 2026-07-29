@@ -66,12 +66,23 @@ def seeded(db_session):
             method="portfolio_import", external_ref="portfolio:DEMO-1",
         )
     )
+    payment = PlatformLoanTransaction(
+        loan_id=loan.id, seq=1, reference="none-x-1", txn_type="payment",
+        amount_cents=10000, principal_cents=10000, interest_cents=0,
+        fees_cents=0, effective_date=date(2025, 1, 1),
+        processing_date=date(2025, 1, 1), created_by="portfolio_import",
+    )
+    db_session.add(payment)
+    db_session.flush()
+    # A REVERSAL, so the ledger under test carries the self-reference an imported
+    # book is full of (every NSF/return links to the payment it undoes).
     db_session.add(
         PlatformLoanTransaction(
-            loan_id=loan.id, seq=1, reference="none-x-1", txn_type="payment",
-            amount_cents=10000, principal_cents=10000, interest_cents=0,
-            fees_cents=0, effective_date=date(2025, 1, 1),
-            processing_date=date(2025, 1, 1), created_by="portfolio_import",
+            loan_id=loan.id, seq=2, reference="none-x-2", txn_type="reversal",
+            amount_cents=10000, principal_cents=-10000, interest_cents=0,
+            fees_cents=0, effective_date=date(2025, 2, 1),
+            processing_date=date(2025, 2, 1), created_by="portfolio_import",
+            reverses_transaction_id=payment.id,
         )
     )
     db_session.commit()
@@ -140,7 +151,7 @@ def test_the_dry_run_counts_and_deletes_nothing(seeded):
     assert report.tables["platform_patients"] == 1
     assert report.tables["platform_loans"] == 1
     assert report.tables["platform_loan_payments"] == 1
-    assert report.tables["platform_loan_transactions"] == 1
+    assert report.tables["platform_loan_transactions"] == 2  # payment + its reversal
     # Only the ONE non-retained login is counted.
     assert report.tables["users"] == 1
     assert report.total_rows >= 5
@@ -189,12 +200,35 @@ def test_it_removes_ledger_rows_despite_the_immutability_trigger(seeded):
     """``platform_loan_transactions`` is WORM — a trigger rejects DELETE. A purge
     is the one legitimate reason to remove those rows, and it must actually
     succeed rather than fail halfway."""
-    assert seeded.query(PlatformLoanTransaction).count() == 1
+    assert seeded.query(PlatformLoanTransaction).count() == 2
     demo_purge.purge(
         seeded, confirmation=demo_purge.CONFIRMATION_TOKEN,
         retain_emails=RETAINED, commit=True,
     )
     assert seeded.query(PlatformLoanTransaction).count() == 0
+
+
+def test_a_reversal_link_is_never_pre_cleared_to_break_the_self_reference(seeded):
+    """Regression: the purge used to NULL ``reverses_transaction_id`` first, which
+    violates ck_platform_loan_txn_reversal_ref — a reversal MUST name the row it
+    undoes. A whole-table DELETE resolves the self-reference on its own, because
+    Postgres checks the FK at end of statement when the referenced rows are gone
+    too. Any imported book is full of these links (one per NSF/return)."""
+    linked = (
+        seeded.query(PlatformLoanTransaction)
+        .filter(PlatformLoanTransaction.txn_type == "reversal")
+        .one()
+    )
+    assert linked.reverses_transaction_id is not None
+
+    report = demo_purge.purge(
+        seeded, confirmation=demo_purge.CONFIRMATION_TOKEN,
+        retain_emails=RETAINED, commit=True,
+    )
+    assert seeded.query(PlatformLoanTransaction).count() == 0
+    # Both rows are counted as deleted — no statement in the plan is a no-op
+    # bookkeeping UPDATE that would understate the report.
+    assert report.tables["platform_loan_transactions"] == 2
 
 
 def test_the_immutability_trigger_is_restored_afterwards(seeded):
