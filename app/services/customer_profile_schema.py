@@ -148,6 +148,29 @@ DATE_DISPLAY_FORMAT = "MM-DD-YYYY"
 # ---------------------------------------------------------------------------
 
 
+class Applicability(str, Enum):
+    """Three-valued answer to "does this field apply to this profile?".
+
+    Two values are not enough. ``NOT_APPLICABLE`` ("Income Type is Self Employed,
+    so Employer name does not apply") and ``UNDETERMINED`` ("Income Type has not
+    been answered yet, so we cannot say") look identical to a boolean evaluator
+    but must be treated very differently:
+
+    * a value supplied for a ``NOT_APPLICABLE`` field is a contradiction and is
+      rejected;
+    * a value supplied for an ``UNDETERMINED`` field is someone filling a form
+      out of order — it is kept, and the unanswered driver is what gets flagged;
+    * only an ``APPLICABLE`` field can be *required*.
+
+    Collapsing the last two into "not visible" is what made the validator tell an
+    operator that a field they had just filled in "is not applicable".
+    """
+
+    APPLICABLE = "applicable"
+    NOT_APPLICABLE = "not_applicable"
+    UNDETERMINED = "undetermined"
+
+
 class RuleKind(str, Enum):
     ALWAYS = "always"
     EQUALS = "equals"
@@ -175,8 +198,10 @@ class VisibilityRule:
     block: Optional[ProfileBlock] = None
     value: Any = None
     rules: tuple["VisibilityRule", ...] = ()
-    #: Dave's wording, verbatim, so the UI can show his language
-    trigger_text: str = "Always Visable"
+    #: Dave's wording, so the UI can show his language. His sheet spells the
+    #: always-visible cell "Always Visable"; the typo is not carried into copy a
+    #: user reads.
+    trigger_text: str = "Always Visible"
 
     def to_dict(self) -> dict:
         out: dict[str, Any] = {"kind": self.kind.value, "trigger_text": self.trigger_text}
@@ -291,6 +316,9 @@ class FieldSpec:
             "options": [o.to_dict() for o in self.options],
             "options_ref": self.options_ref,
             "visible_when": self.visible_when.to_dict(),
+            # The same rule as a phrase a UI can drop straight into help text:
+            # "Only applies when {applicable_when}."
+            "applicable_when": describe_condition(self.visible_when, self.block),
             "filled_by": self.filled_by.value,
             "masking": self.masking.to_dict() if self.masking else None,
             "display_from": self.display_from,
@@ -339,6 +367,7 @@ class BlockSpec:
             "label": self.label,
             "order": self.order,
             "visible_when": self.visible_when.to_dict(),
+            "applicable_when": describe_condition(self.visible_when, self.block),
             "repeatable": self.repeatable,
             "filled_by": self.filled_by.value,
             "external_table": self.external_table,
@@ -476,7 +505,13 @@ def _address_fields(block: ProfileBlock, *, with_payments: bool, with_resided_to
                   mandatory=True, char_limit=100),
         FieldSpec(key="apartment_unit", block=block, label="Apartment / Unit",
                   field_type=FieldType.TEXTBOX, format=FieldFormat.ALPHANUMERIC,
-                  mandatory=True, char_limit=10),
+                  mandatory=False, char_limit=10,
+                  sheet_discrepancy=(
+                      "Sheet marks this Mandatory=Yes. OPTIONAL by owner "
+                      "instruction (2026-07-28): most Canadian street addresses "
+                      "have no unit number, and requiring one made a detached "
+                      "house un-enterable."
+                  )),
         FieldSpec(key="city", block=block, label="City",
                   field_type=FieldType.TEXTBOX, format=FieldFormat.ALPHA,
                   mandatory=True, char_limit=100),
@@ -1026,6 +1061,94 @@ def _years_since(value: Any, *, today: Optional[date] = None) -> Optional[float]
     return (reference - value).days / 365.2425
 
 
+def normalize_values(values: ProfileValues) -> dict[str, dict[str, Any]]:
+    """Canonicalize instance keys so a rule can find the field it references.
+
+    ``instance_key`` renders index 0 as the bare block name, so a client that
+    sends the equivalent-but-explicit ``"personal#0"`` used to be invisible to
+    every cross-field rule: the rule looked up ``"personal"``, found nothing, and
+    every condition silently evaluated against ``None``. Round-tripping each key
+    through ``parse_instance_key``/``instance_key`` makes the two spellings the
+    same key. ``"personal#1"`` is left alone — the not-repeatable check must
+    still see it.
+    """
+    out: dict[str, dict[str, Any]] = {}
+    for key, supplied in values.items():
+        out.setdefault(instance_key(*parse_instance_key(key)), {}).update(supplied or {})
+    return out
+
+
+def evaluate_rule_state(
+    rule: VisibilityRule,
+    values: ProfileValues,
+    *,
+    own_instance: str,
+    today: Optional[date] = None,
+) -> Applicability:
+    """Evaluate one applicability trigger, distinguishing "no" from "not yet".
+
+    A condition whose driver field is unanswered is ``UNDETERMINED``, never
+    ``NOT_APPLICABLE`` — see :class:`Applicability`.
+    """
+    if rule.kind is RuleKind.ALWAYS:
+        return Applicability.APPLICABLE
+    if rule.kind is RuleKind.BLOCK_PRESENT:
+        instance = values.get(own_instance) or {}
+        return (
+            Applicability.APPLICABLE
+            if any(v not in (None, "") for v in instance.values())
+            else Applicability.NOT_APPLICABLE
+        )
+    if rule.kind in (RuleKind.ANY_OF, RuleKind.ALL_OF):
+        states = [
+            evaluate_rule_state(r, values, own_instance=own_instance, today=today)
+            for r in rule.rules
+        ]
+        if rule.kind is RuleKind.ANY_OF:
+            if Applicability.APPLICABLE in states:
+                return Applicability.APPLICABLE
+        elif all(s is Applicability.APPLICABLE for s in states):
+            return Applicability.APPLICABLE
+        return (
+            Applicability.UNDETERMINED
+            if Applicability.UNDETERMINED in states
+            else Applicability.NOT_APPLICABLE
+        )
+
+    source = instance_key(rule.block) if rule.block is not None else own_instance
+    current = (values.get(source) or {}).get(rule.field)
+    if current in (None, ""):
+        # The driver has not been answered. We cannot say the field does not
+        # apply — only that we do not know yet.
+        return Applicability.UNDETERMINED
+
+    driver = _driver_spec(rule, rule.block or parse_instance_key(own_instance)[0])
+    if driver is not None and driver.options and all(o.value != current for o in driver.options):
+        # The driver carries something that is not one of its options (a label
+        # instead of the code, say). That is an error ON THE DRIVER, reported as
+        # such; it must not cascade into "this field does not apply" for every
+        # field that depends on it.
+        return Applicability.UNDETERMINED
+
+    if rule.kind is RuleKind.EQUALS:
+        met = current == rule.value
+    elif rule.kind is RuleKind.NOT_EQUALS:
+        met = current != rule.value
+    elif rule.kind is RuleKind.IN:
+        met = current in tuple(rule.value or ())
+    elif rule.kind is RuleKind.NOT_IN:
+        met = current not in tuple(rule.value or ())
+    elif rule.kind is RuleKind.TENURE_LT_YEARS:
+        years = _years_since(current, today=today)
+        if years is None:
+            # An unparseable date is an answer we cannot read, not a "no".
+            return Applicability.UNDETERMINED
+        met = years < float(rule.value)
+    else:
+        return Applicability.UNDETERMINED
+    return Applicability.APPLICABLE if met else Applicability.NOT_APPLICABLE
+
+
 def evaluate_rule(
     rule: VisibilityRule,
     values: ProfileValues,
@@ -1033,37 +1156,54 @@ def evaluate_rule(
     own_instance: str,
     today: Optional[date] = None,
 ) -> bool:
-    """Evaluate one visibility trigger against a profile's values."""
-    if rule.kind is RuleKind.ALWAYS:
-        return True
-    if rule.kind is RuleKind.BLOCK_PRESENT:
-        instance = values.get(own_instance) or {}
-        return any(v not in (None, "") for v in instance.values())
-    if rule.kind is RuleKind.ANY_OF:
-        return any(
-            evaluate_rule(r, values, own_instance=own_instance, today=today) for r in rule.rules
-        )
-    if rule.kind is RuleKind.ALL_OF:
-        return all(
-            evaluate_rule(r, values, own_instance=own_instance, today=today) for r in rule.rules
-        )
+    """Does this trigger FIRE? (i.e. render the field / require it).
 
-    source = instance_key(rule.block) if rule.block is not None else own_instance
-    current = (values.get(source) or {}).get(rule.field)
+    Visibility is the two-valued view of :func:`evaluate_rule_state`: only a
+    definitely-applicable field is shown and can be required. Use
+    :func:`evaluate_rule_state` when the difference between "does not apply" and
+    "not answered yet" matters — rejecting a supplied value, for instance.
+    """
+    return (
+        evaluate_rule_state(rule, values, own_instance=own_instance, today=today)
+        is Applicability.APPLICABLE
+    )
 
-    if rule.kind is RuleKind.EQUALS:
-        return current == rule.value
-    if rule.kind is RuleKind.NOT_EQUALS:
-        # An unanswered driver does not make a dependent field visible.
-        return current is not None and current != "" and current != rule.value
-    if rule.kind is RuleKind.IN:
-        return current in tuple(rule.value or ())
-    if rule.kind is RuleKind.NOT_IN:
-        return current is not None and current != "" and current not in tuple(rule.value or ())
-    if rule.kind is RuleKind.TENURE_LT_YEARS:
-        years = _years_since(current, today=today)
-        return years is not None and years < float(rule.value)
-    return False
+
+def block_applicability(
+    block: ProfileBlock,
+    values: ProfileValues,
+    *,
+    index: int = 0,
+    today: Optional[date] = None,
+) -> Applicability:
+    """Does this whole block apply? (Previous Address 1, Additional Income …)"""
+    spec = BLOCK_REGISTRY.get(block)
+    if spec is None:
+        return Applicability.NOT_APPLICABLE
+    return evaluate_rule_state(
+        spec.visible_when, values, own_instance=instance_key(block, index), today=today
+    )
+
+
+def field_applicability(
+    spec: FieldSpec,
+    values: ProfileValues,
+    *,
+    index: int = 0,
+    today: Optional[date] = None,
+) -> Applicability:
+    """Does this field apply, judged by ITS OWN trigger and nothing else.
+
+    Deliberately independent of the block gate. A field whose trigger is
+    "Always Visible" is ``APPLICABLE`` unconditionally — it can never be reported
+    inapplicable, whatever is happening around it. Whether the block applies is a
+    separate question with its own answer (:func:`block_applicability`) and its
+    own wording; conflating the two is what produced "Street Address is not
+    applicable (Always Visable)".
+    """
+    return evaluate_rule_state(
+        spec.visible_when, values, own_instance=instance_key(spec.block, index), today=today
+    )
 
 
 def is_block_visible(
@@ -1073,12 +1213,7 @@ def is_block_visible(
     index: int = 0,
     today: Optional[date] = None,
 ) -> bool:
-    spec = BLOCK_REGISTRY.get(block)
-    if spec is None:
-        return False
-    return evaluate_rule(
-        spec.visible_when, values, own_instance=instance_key(block, index), today=today
-    )
+    return block_applicability(block, values, index=index, today=today) is Applicability.APPLICABLE
 
 
 def is_field_visible(
@@ -1090,14 +1225,96 @@ def is_field_visible(
 ) -> bool:
     """A field is visible only when its BLOCK is visible AND its own trigger fires.
 
-    This is the rule the validator leans on: an invisible field is never
-    required, so "mandatory" is always "mandatory *when visible*".
+    This is the rule the validator leans on for REQUIREDNESS: an invisible field
+    is never required, so "mandatory" is always "mandatory *when visible*". It is
+    NOT the rule for rejecting a supplied value — see :func:`field_applicability`.
     """
     if not is_block_visible(spec.block, values, index=index, today=today):
         return False
-    return evaluate_rule(
-        spec.visible_when, values, own_instance=instance_key(spec.block, index), today=today
+    return (
+        field_applicability(spec, values, index=index, today=today) is Applicability.APPLICABLE
     )
+
+
+# ---------------------------------------------------------------------------
+# Explaining a trigger to a human
+# ---------------------------------------------------------------------------
+
+
+def _option_label(spec: Optional[FieldSpec], value: Any) -> str:
+    """Dave's wording for a stored code ("family_member" -> "Family Member")."""
+    if spec is not None:
+        for option in spec.options:
+            if option.value == value:
+                return option.label
+    return str(value)
+
+
+def _driver_spec(rule: VisibilityRule, own_block: ProfileBlock | str) -> Optional[FieldSpec]:
+    """The FieldSpec of the field a trigger keys off, when it has one."""
+    if rule.field is None:
+        return None
+    return field_spec(rule.block or own_block, rule.field)
+
+
+def driver_label(rule: VisibilityRule, own_block: ProfileBlock) -> Optional[str]:
+    """Dave's label for the field a trigger keys off ("Alternative Phone Type")."""
+    if rule.field is None:
+        return None
+    driver = _driver_spec(rule, own_block)
+    return driver.label if driver else rule.field
+
+
+def describe_condition(rule: VisibilityRule, own_block: ProfileBlock) -> str:
+    """The condition under which the field DOES apply, in Dave's own words.
+
+    ``"Alternative Phone Type is Family Member or Friend"`` — a phrase that reads
+    correctly after "only applies when …", which is the thing the old message got
+    backwards.
+    """
+    driver = _driver_spec(rule, own_block)
+    label = driver.label if driver else (rule.field or "")
+    if rule.kind is RuleKind.ALWAYS:
+        return "always"
+    if rule.kind is RuleKind.BLOCK_PRESENT:
+        return rule.trigger_text
+    if rule.kind in (RuleKind.ANY_OF, RuleKind.ALL_OF):
+        joiner = " or " if rule.kind is RuleKind.ANY_OF else " and "
+        return joiner.join(describe_condition(r, own_block) for r in rule.rules)
+    if rule.kind is RuleKind.EQUALS:
+        return f"{label} is {_option_label(driver, rule.value)}"
+    if rule.kind is RuleKind.NOT_EQUALS:
+        return f"{label} is not {_option_label(driver, rule.value)}"
+    if rule.kind in (RuleKind.IN, RuleKind.NOT_IN):
+        labels = [_option_label(driver, v) for v in (rule.value or ())]
+        joined = " or ".join(labels) if len(labels) < 3 else (
+            ", ".join(labels[:-1]) + " or " + labels[-1]
+        )
+        verb = "is" if rule.kind is RuleKind.IN else "is none of"
+        return f"{label} {verb} {joined}"
+    if rule.kind is RuleKind.TENURE_LT_YEARS:
+        return f"{label} is less than {rule.value} years ago"
+    return rule.trigger_text
+
+
+def describe_current_value(
+    rule: VisibilityRule,
+    values: ProfileValues,
+    *,
+    own_block: ProfileBlock,
+    own_instance: str,
+) -> str:
+    """What the driver field says right now — "Work", "2015-01-01", "not set"."""
+    if rule.field is None:
+        return "not set"
+    source = instance_key(rule.block) if rule.block is not None else own_instance
+    current = (values.get(source) or {}).get(rule.field)
+    if current in (None, ""):
+        return "not set"
+    driver = _driver_spec(rule, own_block)
+    if driver is not None and driver.options and all(o.value != current for o in driver.options):
+        return f"{current!r}, which is not one of its options"
+    return _option_label(driver, current)
 
 
 def visible_fields(
