@@ -82,8 +82,8 @@ from app.schemas.pricing_config import (
 )
 from app.schemas.product_policy_config import ProductPolicyConfig
 from app.services import loan_quote
-from app.services.loan_servicing import _add_months  # noqa: PLC2701 — shared month-step rule
 from app.services.product_policy import policy_for_product
+from app.services.servicing_status import step_due_date
 
 __all__ = [
     "ConstraintViolation",
@@ -146,25 +146,17 @@ class ConstraintViolation(Exception):
 # Date arithmetic per payment frequency
 # ---------------------------------------------------------------------------
 
-#: Days between installments for the calendar-independent frequencies.
-_PERIOD_DAYS = {PaymentFrequency.WEEKLY: 7, PaymentFrequency.BI_WEEKLY: 14}
-
-
 def advance(base: date, frequency: PaymentFrequency | str, periods: int) -> date:
     """``base`` advanced by ``periods`` payment periods at ``frequency``.
 
-    Monthly steps calendar months (reusing ``loan_servicing._add_months``, so a
-    preliminary schedule and the booked one land on the same dates, including
-    the Jan-31 -> Feb-28 clamp). Semi-monthly steps a half month: whole months
-    for the pairs, +15 days for the odd one. Weekly/bi-weekly step fixed days.
+    ONE stepping implementation, shared with the booking engine and the servicing
+    model: this delegates to :func:`servicing_status.step_due_date`, the CEO's
+    own rule (Weekly +7d, Bi-Weekly +14d, Monthly EDATE with the Jan-31 ->
+    Feb-28 day clamp, Semi-Monthly EDATE(n//2) then +15d on the odd steps).
+    A preliminary schedule and the booked one therefore land on the same dates
+    by construction rather than by two implementations agreeing.
     """
-    freq = PaymentFrequency(frequency)
-    if freq is PaymentFrequency.MONTHLY:
-        return _add_months(base, periods)
-    if freq is PaymentFrequency.SEMI_MONTHLY:
-        stepped = _add_months(base, periods // 2)
-        return stepped + timedelta(days=15) if periods % 2 else stepped
-    return base + timedelta(days=_PERIOD_DAYS[freq] * periods)
+    return step_due_date(base, periods, frequency)
 
 
 def schedule_dates(

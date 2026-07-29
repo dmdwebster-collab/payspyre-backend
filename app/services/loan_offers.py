@@ -451,7 +451,12 @@ def accept_offer(
 
     # Merge the accepted terms into the decision record so the UNCHANGED booking
     # path (loan_servicing._resolve_pricing reads decision.amount_cents /
-    # apr_bps / term_months) books exactly these terms — no booking-code fork.
+    # apr_bps / term_months, _resolve_booking_frequency reads
+    # decision.payment_frequency) books exactly these terms — no booking-code
+    # fork. The frequency rides the same channel as the amount/rate/term because
+    # it is a term of the accepted deal in exactly the same way: it is what the
+    # agreement's Repayment Period renders, and now what the schedule is built
+    # on.
     decision = dict(application.decision or {})
     decision.update(
         {
@@ -459,6 +464,10 @@ def accept_offer(
             "amount_cents": target.amount_cents,
             "apr_bps": target.annual_rate_bps,
             "term_months": target.term_months,
+            # getattr default keeps hand-built test doubles and any pre-052 offer
+            # row working; booking then falls through to the application's own
+            # preferred_payment_frequency, which is where the offer got it.
+            "payment_frequency": getattr(target, "payment_frequency", None),
             "accepted_offer_id": str(target.id),
         }
     )

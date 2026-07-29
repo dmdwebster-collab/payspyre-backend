@@ -70,6 +70,25 @@ cure/rollover semantics are AMBIGUOUS pending Dave — flagged in the PR):
      payment replay. The check is a plain string comparison on the status
      value, so this module works whether or not WS-F has merged.
 
+  8. ⚠️ THE LADDER'S DAY THRESHOLDS ARE CALIBRATED TO A MONTHLY CADENCE, and
+     this module was deliberately NOT changed when booking became
+     frequency-aware (migration 082). The MECHANISM is frequency-agnostic — DPD
+     is measured in days from a due date, so it is computed correctly for a
+     weekly or bi-weekly loan. What is monthly-shaped is the POLICY: 30 / 60 /
+     90 days maps to "1 / 2 / 3 missed payments" only on a monthly schedule. A
+     weekly borrower who misses a payment is 7 days down and must miss ~5 in a
+     row to reach ``pot_30``; a bi-weekly borrower ~3. So non-monthly loans age
+     into the collections ladder MORE SLOWLY in missed-payment terms than
+     monthly ones, and reach ``bureau_reportable`` (pot_60) later.
+
+     That is a genuine business decision — whether the ladder counts DAYS
+     (regulatory/bureau convention, which is what is implemented) or MISSED
+     PAYMENTS (Dave's video narration counts months; see note 4 above, which
+     flags the same tension for monthly loans) — and it is NOT something to
+     settle in code. Every boundary is already DB-overridable via
+     ``get_policy``, so a per-frequency policy can be introduced without a
+     deploy if Dave wants one. FLAGGED FOR DAVE.
+
 MONEY: integer cents everywhere. Snapshot outstanding principal comes from the
 actuals ledger's balance view (``loan_ledger.loan_balances`` at the month-end
 date) so re-running a month's snapshot is deterministic.

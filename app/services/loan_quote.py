@@ -87,9 +87,20 @@ def num_payments(term_months: int, frequency: str) -> int:
 
 
 def _regular_installment(amount_cents: int, period_rate: float, n: int) -> int:
-    """The regular instalment: zero-rate splits evenly, else the annuity payment."""
+    """The regular instalment: zero-rate splits evenly, else the annuity payment.
+
+    ZERO-RATE CONVENTION: ``amount // n`` (floor), with the remainder absorbed by
+    the FINAL payment — the same convention
+    ``loan_servicing.generate_amortization_schedule`` has always booked at. It
+    used to ceil here, which meant an interest-free loan whose principal did not
+    divide evenly was QUOTED a schedule one cent per row away from the one that
+    would actually be booked (front-loaded rather than back-loaded). The booking
+    engine is the money truth, so the quote was moved onto it, not the reverse;
+    booked 0% schedules are unchanged. Still fully amortizing: the larger final
+    payment clears the remainder.
+    """
     if period_rate == 0:
-        return -(-amount_cents // n)  # ceil so the schedule fully amortizes
+        return amount_cents // n
     raw = amount_cents * period_rate / (1 - (1 + period_rate) ** -n)
     return round(raw)
 

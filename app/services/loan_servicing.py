@@ -22,7 +22,7 @@ principal + total interest.
 """
 import logging
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 from uuid import UUID
 
@@ -38,7 +38,14 @@ from app.models.platform.loan import (
     PlatformLoanStatement,
     PlatformLoanTransaction,
 )
-from app.schemas.pricing_config import parse_pricing_config, quote_fees_cents
+from app.schemas.pricing_config import (
+    PAYMENTS_PER_YEAR,
+    PaymentFrequency,
+    coerce_frequency,
+    parse_pricing_config,
+    payments_in_term,
+    quote_fees_cents,
+)
 from app.schemas.product_policy_config import (
     ProductPolicyConfigError,
     parse_product_policy_config,
@@ -51,6 +58,7 @@ from app.services.loan_quote import (
     compute_apr_bps,
     exceeds_criminal_rate,
 )
+from app.services.servicing_status import step_due_date
 
 logger = logging.getLogger(__name__)
 
@@ -108,11 +116,51 @@ class ScheduleRow:
     total_cents: int
 
 
+def resolve_frequency(value) -> PaymentFrequency:
+    """Coerce a stored/chosen frequency string to the canonical enum.
+
+    Accepts the enum itself, the canonical values (``monthly`` / ``bi_weekly`` /
+    ``semi_monthly`` / ``weekly``) and the spelling variants the origination
+    paths tolerate ("Bi-Weekly", "biweekly", …) via
+    :func:`pricing_config.coerce_frequency`. ``None``/blank -> Monthly, which is
+    what every pre-frequency row actually is.
+    """
+    if value is None:
+        return PaymentFrequency.MONTHLY
+    if isinstance(value, PaymentFrequency):
+        return value
+    text = str(value).strip()
+    if not text:
+        return PaymentFrequency.MONTHLY
+    coerced = coerce_frequency(text)
+    if coerced is None:
+        raise ValueError(f"unsupported payment frequency {value!r}")
+    return coerced
+
+
+def _period_before(first_due_date: date, frequency: PaymentFrequency) -> date:
+    """The accrual start one PERIOD before ``first_due_date``.
+
+    The exact inverse of :func:`servicing_status.step_due_date`'s single step, so
+    the first accrual window of an actual/360 schedule is one real period long at
+    every frequency (Weekly -7d, Bi-Weekly -14d, Semi-Monthly -15d, Monthly
+    EDATE(-1)). Only used as the actual/360 default when no explicit
+    ``accrual_start_date`` is supplied.
+    """
+    if frequency is PaymentFrequency.WEEKLY:
+        return first_due_date - timedelta(days=7)
+    if frequency is PaymentFrequency.BI_WEEKLY:
+        return first_due_date - timedelta(days=14)
+    if frequency is PaymentFrequency.SEMI_MONTHLY:
+        return first_due_date - timedelta(days=15)
+    return _add_months(first_due_date, -1)
+
+
 def _actual_360_schedule(
     principal_cents: int,
     annual_rate_bps: int,
-    term_months: int,
-    first_due_date: date,
+    installments: int,
+    due_dates: list[date],
     accrual_start_date: date,
 ) -> list[ScheduleRow]:
     """Equal-payment schedule with actual/360 interest accrual (Turnkey-legacy).
@@ -120,38 +168,42 @@ def _actual_360_schedule(
     Interest each period = balance * annual_rate * actual_days / 360, where ``days``
     is the real calendar gap to the due date (and accrual_start -> first due for the
     first installment). The regular payment is solved (integer cents, by bisection) so
-    the loan fully amortizes within ``term_months``; the final installment absorbs the
-    rounding remainder, preserving the SAME exact tie-out invariants as 30/360.
+    the loan fully amortizes within ``installments`` periods; the final installment
+    absorbs the rounding remainder, preserving the SAME exact tie-out invariants as
+    30/360.
+
+    ``due_dates`` is the caller's already-frequency-stepped date list, so this
+    convention is identical at every payment frequency — the day counts simply
+    get shorter as the periods do.
     """
     annual = annual_rate_bps / 10_000.0
-    due_dates = [_add_months(first_due_date, n) for n in range(term_months)]
     period_starts = [accrual_start_date] + due_dates[:-1]
-    days = [max(0, (due_dates[i] - period_starts[i]).days) for i in range(term_months)]
+    days = [max(0, (due_dates[i] - period_starts[i]).days) for i in range(installments)]
 
     def interest_at(balance: int, i: int) -> int:
         return int(round(balance * annual * days[i] / 360.0))
 
     if annual == 0.0:
         # Interest-free: even principal split, remainder to the final row.
-        base = principal_cents // term_months
+        base = principal_cents // installments
         rows: list[ScheduleRow] = []
         running = 0
-        for n in range(1, term_months + 1):
-            prin = base if n < term_months else principal_cents - running
+        for n in range(1, installments + 1):
+            prin = base if n < installments else principal_cents - running
             running += prin
             rows.append(ScheduleRow(n, due_dates[n - 1], prin, 0, prin))
         return rows
 
     def balance_after_term(payment: int) -> int:
         bal = principal_cents
-        for i in range(term_months):
+        for i in range(installments):
             prin = payment - interest_at(bal, i)
             prin = 0 if prin < 0 else (bal if prin > bal else prin)
             bal -= prin
         return bal
 
     # Bisection for the smallest integer-cent payment that amortizes within term.
-    lo = principal_cents // term_months  # floor: the zero-interest payment
+    lo = principal_cents // installments  # floor: the zero-interest payment
     hi = lo + interest_at(principal_cents, 0) + 1
     while balance_after_term(hi) > 0:
         hi *= 2
@@ -165,9 +217,9 @@ def _actual_360_schedule(
 
     rows = []
     balance = principal_cents
-    for n in range(1, term_months + 1):
+    for n in range(1, installments + 1):
         interest = interest_at(balance, n - 1)
-        if n < term_months:
+        if n < installments:
             principal_part = payment_cents - interest
             principal_part = 0 if principal_part < 0 else (
                 balance if principal_part > balance else principal_part
@@ -194,6 +246,7 @@ def generate_amortization_schedule(
     term_months: int,
     first_due_date: date,
     *,
+    frequency: PaymentFrequency | str = PaymentFrequency.MONTHLY,
     day_count: str = "30/360",
     accrual_start_date: Optional[date] = None,
 ) -> list[ScheduleRow]:
@@ -201,35 +254,65 @@ def generate_amortization_schedule(
 
     PURE function — no DB, no side effects, deterministic.
 
+    PAYMENT FREQUENCY
+    -----------------
+    ``term_months`` is always the CONTRACT unit (that is how the product, the
+    offer and the agreement express a term); ``frequency`` decides how many
+    installments that term contains and how far apart they fall. It defaults to
+    Monthly, so every pre-existing caller is bit-for-bit unchanged.
+
+      * INSTALLMENT COUNT — :func:`pricing_config.payments_in_term`, the same
+        canonical helper the ``/quote`` engine uses, so a preliminary schedule
+        and the booked one can never disagree on the row count:
+        Monthly ``= term``, Semi-Monthly ``= 2 x term``, Weekly/Bi-Weekly
+        ``= round(term x payments_per_year / 12)`` (48 months bi-weekly = 104
+        payments, weekly = 208) — weeks do not divide months evenly, so the
+        year fraction is the only honest conversion.
+      * PERIOD RATE — ``annual_rate_bps / 10_000 / payments_per_year``
+        (12 / 24 / 26 / 52). For Monthly this is the identical float expression
+        the engine has always used.
+      * DUE-DATE STEPPING — :func:`servicing_status.step_due_date`, the CEO's
+        own stepping rule, imported rather than re-implemented: Weekly ``+7d``,
+        Bi-Weekly ``+14d``, Monthly ``EDATE(+n)`` (day clamped to the target
+        month's last valid day, so Jan 31 -> Feb 28), Semi-Monthly
+        ``EDATE(+n//2)`` then ``+15d`` on the odd steps.
+
     ``day_count`` selects how per-period interest accrues:
-      * ``"30/360"`` (default): every period is a flat month, interest = balance *
-        annual_rate / 12. This is PaySpyre's native convention.
+      * ``"30/360"`` (default): every period is a flat period, interest =
+        balance * annual_rate / payments_per_year. This is PaySpyre's native
+        convention.
       * ``"actual/360"``: interest = balance * annual_rate * ACTUAL_DAYS / 360, where
         the day count is the real calendar gap between consecutive due dates (and, for
         the first installment, between ``accrual_start_date`` and ``first_due_date``).
         This matches Turnkey Lender's legacy book (reconciled to the cent against real
         loans), so migrated/legacy-consistent loans can be originated identically.
-        ``accrual_start_date`` defaults to one month before ``first_due_date``.
+        ``accrual_start_date`` defaults to one PERIOD before ``first_due_date``.
 
     Method (30/360):
-      * Monthly rate r = annual_rate_bps / 10_000 / 12.
-      * For r == 0 (interest-free): payment = principal / term, all interest 0.
+      * Period rate r = annual_rate_bps / 10_000 / payments_per_year.
+      * For r == 0 (interest-free): payment = principal // n, all interest 0.
       * Otherwise the standard annuity payment:
-            P = principal * r / (1 - (1 + r)^-term)
+            P = principal * r / (1 - (1 + r)^-n)
         is computed in float, then quantized to whole cents.
       * Each period: interest = round(balance * r); principal = payment - interest;
         balance -= principal.
-      * EXACT TIE-OUT: floating-point + rounding leaves a few cents of drift. The
-        FINAL installment absorbs all remaining principal (principal_cents =
-        outstanding balance) and its interest is computed on that balance, so:
+      * ROUNDING / FINAL-PAYMENT CONVENTION (unchanged, and identical at every
+        frequency): the regular installment is the annuity payment rounded to
+        whole cents, so floating-point + rounding leaves a few cents of drift
+        over the term. The FINAL installment absorbs ALL remaining principal
+        (principal_cents = outstanding balance) and its interest is computed on
+        that balance, so:
             sum(principal_cents) == principal_cents (input), and
             sum(total_cents)     == principal + sum(interest_cents) exactly.
-        No fractional cents ever escape.
+        No fractional cents ever escape, and the borrower's last payment — never
+        an intermediate one — carries the remainder. A shorter period means more
+        rows over which to drift, so a weekly loan's final payment can differ
+        from its regular one by more cents than a monthly loan's; the invariants
+        above hold identically either way.
 
-    Both conventions guarantee the same exact tie-out invariants.
+    Both day-count conventions guarantee the same exact tie-out invariants.
 
-    Returns rows ordered by installment_number (1-based). Due dates step monthly
-    from ``first_due_date``.
+    Returns rows ordered by installment_number (1-based).
     """
     if principal_cents <= 0:
         raise ValueError("principal_cents must be positive")
@@ -240,24 +323,30 @@ def generate_amortization_schedule(
     if day_count not in ("30/360", "actual/360"):
         raise ValueError("day_count must be '30/360' or 'actual/360'")
 
+    freq = resolve_frequency(frequency)
+    # Installment count and due dates: the ONE canonical conversion + the CEO's
+    # own stepping rule. Never re-derived locally.
+    installments = payments_in_term(term_months, freq)
+    due_dates = [step_due_date(first_due_date, i, freq) for i in range(installments)]
+
     if day_count == "actual/360":
         return _actual_360_schedule(
             principal_cents,
             annual_rate_bps,
-            term_months,
-            first_due_date,
-            accrual_start_date or _add_months(first_due_date, -1),
+            installments,
+            due_dates,
+            accrual_start_date or _period_before(first_due_date, freq),
         )
 
-    monthly_rate = (annual_rate_bps / 10_000.0) / 12.0
+    period_rate = (annual_rate_bps / 10_000.0) / PAYMENTS_PER_YEAR[freq]
 
-    if monthly_rate == 0.0:
+    if period_rate == 0.0:
         # Interest-free: split principal evenly, remainder to the final row.
-        base = principal_cents // term_months
+        base = principal_cents // installments
         rows: list[ScheduleRow] = []
         running = 0
-        for n in range(1, term_months + 1):
-            if n < term_months:
+        for n in range(1, installments + 1):
+            if n < installments:
                 prin = base
             else:
                 prin = principal_cents - running  # absorb remainder
@@ -265,7 +354,7 @@ def generate_amortization_schedule(
             rows.append(
                 ScheduleRow(
                     installment_number=n,
-                    due_date=_add_months(first_due_date, n - 1),
+                    due_date=due_dates[n - 1],
                     principal_cents=prin,
                     interest_cents=0,
                     total_cents=prin,
@@ -274,15 +363,15 @@ def generate_amortization_schedule(
         return rows
 
     # Standard annuity payment, quantized to whole cents.
-    factor = (1.0 + monthly_rate) ** (-term_months)
-    payment = principal_cents * monthly_rate / (1.0 - factor)
+    factor = (1.0 + period_rate) ** (-installments)
+    payment = principal_cents * period_rate / (1.0 - factor)
     payment_cents = int(round(payment))
 
     rows = []
     balance = principal_cents
-    for n in range(1, term_months + 1):
-        if n < term_months:
-            interest = int(round(balance * monthly_rate))
+    for n in range(1, installments + 1):
+        if n < installments:
+            interest = int(round(balance * period_rate))
             principal_part = payment_cents - interest
             # Guard: never amortize more principal than remains.
             if principal_part > balance:
@@ -291,7 +380,7 @@ def generate_amortization_schedule(
             total = principal_part + interest
         else:
             # Final installment absorbs all remaining principal exactly.
-            interest = int(round(balance * monthly_rate))
+            interest = int(round(balance * period_rate))
             principal_part = balance
             balance = 0
             total = principal_part + interest
@@ -299,7 +388,7 @@ def generate_amortization_schedule(
         rows.append(
             ScheduleRow(
                 installment_number=n,
-                due_date=_add_months(first_due_date, n - 1),
+                due_date=due_dates[n - 1],
                 principal_cents=principal_part,
                 interest_cents=interest,
                 total_cents=total,
@@ -409,6 +498,32 @@ def _resolve_pricing(application: PlatformCreditApplication) -> tuple[int, int, 
     return int(principal_cents), int(annual_rate_bps), int(term_months)
 
 
+def _resolve_booking_frequency(application: PlatformCreditApplication) -> PaymentFrequency:
+    """The payment frequency the loan is actually booked at.
+
+    Precedence, mirroring ``_resolve_pricing``'s "the accepted deal wins" rule:
+
+      1. ``decision.payment_frequency`` — written by ``loan_offers.accept_offer``
+         from the ACCEPTED offer, i.e. the frequency printed on the agreement the
+         borrower signed. Same no-fork mechanism the accepted amount/rate/term
+         already travel through.
+      2. ``application.preferred_payment_frequency`` — the origination input the
+         offer's own frequency was derived from; covers a file booked without an
+         offer (direct approve-time booking) and any file accepted before the
+         decision carried the field.
+      3. Monthly — every pre-frequency row, which is what those loans are.
+
+    An unparseable stored value is NOT silently downgraded to monthly: it raises,
+    because booking a different product than the one the borrower signed for is
+    exactly the failure this workstream exists to remove.
+    """
+    decision = getattr(application, "decision", None) or {}
+    chosen = decision.get("payment_frequency") or getattr(
+        application, "preferred_payment_frequency", None
+    )
+    return resolve_frequency(chosen)
+
+
 def create_loan_from_application(
     db: Session,
     application: PlatformCreditApplication,
@@ -438,6 +553,11 @@ def create_loan_from_application(
         )
 
     principal_cents, annual_rate_bps, term_months = _resolve_pricing(application)
+    # THE booked payment frequency. Resolved BEFORE the compliance guards so the
+    # APR / cost-of-borrowing they enforce is the one the borrower is actually
+    # signed up for — a per-payment fee costs more, and discloses a higher APR,
+    # bi-weekly than monthly.
+    frequency = _resolve_booking_frequency(application)
 
     currency = "CAD"
     product = getattr(application, "credit_product", None)
@@ -455,8 +575,10 @@ def create_loan_from_application(
         )
         # Selection-aware cost-of-borrowing fees for the booked terms (typed fee
         # schedule; contingent on_event fees excluded per SOR/2001-104).
-        fees_cents = quote_fees_cents(cfg, principal_cents, term_months, "monthly")
-    apr_bps = compute_apr_bps(principal_cents, annual_rate_bps, term_months, "monthly", fees_cents)
+        fees_cents = quote_fees_cents(cfg, principal_cents, term_months, frequency)
+    apr_bps = compute_apr_bps(
+        principal_cents, annual_rate_bps, term_months, frequency.value, fees_cents
+    )
     if exceeds_criminal_rate(apr_bps):
         raise ValueError(
             f"Refusing to book loan from application {application.id}: APR "
@@ -465,29 +587,9 @@ def create_loan_from_application(
         )
 
     if first_due_date is None:
-        first_due_date = _add_months(date.today(), 1)
-
-    # KNOWN RESIDUAL GAP (2026-07-28), made LOUD rather than left silent.
-    #
-    # Payment Frequency is now captured, validated and carried onto the offer and
-    # the agreement — but the servicing engine below is monthly-only:
-    # ``generate_amortization_schedule`` takes no frequency and steps in months,
-    # and the APR/fee guards above are computed on "monthly". So a bi-weekly deal
-    # is BOOKED MONTHLY. Making it honour the frequency means reworking the
-    # amortization + delinquency engines (a money-path project with its own
-    # reconciliation), not a line here. Until then this logs every occurrence so
-    # the divergence is discoverable in production instead of invisible; the
-    # agreement preview already warns a reviewer about the same mismatch.
-    chosen_frequency = (
-        getattr(application, "preferred_payment_frequency", None) or "monthly"
-    )
-    if chosen_frequency != "monthly":
-        logger.warning(
-            "booking_frequency_downgraded_to_monthly application_id=%s "
-            "chosen_frequency=%s booked_frequency=monthly",
-            application.id,
-            chosen_frequency,
-        )
+        # One PERIOD from today, at the loan's own frequency (was: always one
+        # month, which handed a weekly loan a monthly first due date).
+        first_due_date = step_due_date(date.today(), 1, frequency)
 
     loan = PlatformLoan(
         application_id=application.id,
@@ -500,6 +602,11 @@ def create_loan_from_application(
         principal_cents=principal_cents,
         annual_rate_bps=annual_rate_bps,
         term_months=term_months,
+        # PERSISTED (migration 082): the contract's repayment cadence. Servicing
+        # reads this rather than re-inferring the cadence from the schedule's own
+        # gaps, so a loan whose plan was surgically edited still reports the
+        # frequency it was written at.
+        payment_frequency=frequency.value,
         status="pending_disbursement",
         principal_balance_cents=principal_cents,
         currency=currency,
@@ -508,7 +615,11 @@ def create_loan_from_application(
     db.flush()  # assign loan.id without committing the whole unit of work
 
     for row in generate_amortization_schedule(
-        principal_cents, annual_rate_bps, term_months, first_due_date
+        principal_cents,
+        annual_rate_bps,
+        term_months,
+        first_due_date,
+        frequency=frequency,
     ):
         db.add(
             PlatformLoanScheduleItem(
@@ -885,6 +996,7 @@ def get_loan_status(db: Session, loan_id: UUID) -> Optional[dict]:
         "principal_balance_cents": loan.principal_balance_cents,
         "annual_rate_bps": loan.annual_rate_bps,
         "term_months": loan.term_months,
+        "payment_frequency": getattr(loan, "payment_frequency", None) or "monthly",
         "disbursed_at": loan.disbursed_at.isoformat() if loan.disbursed_at else None,
         "schedule": {
             "installments": len(schedule),
