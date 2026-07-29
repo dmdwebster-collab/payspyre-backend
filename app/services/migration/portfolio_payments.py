@@ -1,29 +1,32 @@
-"""Turnkey Lender -> PaySpyre payment-history importer (mapping + ledger-only persist).
+"""Legacy payment-ledger -> PaySpyre payment-history importer (mapping + persist).
 
-This is the ETL that loads HISTORICAL loan payments out of a Turnkey payment-ledger
-export so the AI training dataset has real performance signal (on-time vs. late, paid
-amounts, cadence). It mirrors ``turnkey.py`` (pure Excel->dataclass mapping, all
-column-name + unit ASSUMPTIONS centralized in one place) and ``turnkey_persist.py``
-(idempotent DB writes keyed on a stable external reference).
+This is the ETL that loads HISTORICAL loan payments out of a source system's
+payment-ledger export so the analytics/training dataset has real performance
+signal (on-time vs. late, paid amounts, cadence). It mirrors
+``portfolio_accounts.py`` (pure export->dataclass mapping, all column-name + unit
+ASSUMPTIONS centralized in one place) and ``portfolio_persist.py`` (idempotent DB
+writes keyed on a stable external reference).
 
 ==============================================================================
 CRITICAL CORRECTNESS RULE — HISTORICAL PAYMENTS ARE LEDGER ROWS ONLY
 ==============================================================================
 Do NOT route these through ``loan_servicing.record_payment``. ``record_payment``
 applies cash to the amortization schedule AND reduces ``principal_balance_cents`` —
-but migrated loans already have their CURRENT outstanding balance set by the loan
-import (``turnkey_persist.persist_loans``). Re-applying the historical payments on top
-of that snapshot would DOUBLE-COUNT and corrupt every migrated balance.
+but imported loans already have their CURRENT outstanding balance set by the loan
+import (``portfolio_persist.persist_loans``). Re-applying the historical payments on
+top of that snapshot would DOUBLE-COUNT and corrupt every imported balance.
 
 So this importer inserts raw ``PlatformLoanPayment`` rows ONLY. It never touches the
 schedule, the balance, or any loan field. The payments exist purely as an analytics /
-training-data ledger of what the borrower actually paid in the legacy system.
+training-data ledger of what the borrower actually paid in the source system.
 ==============================================================================
 
-KNOWN MIGRATION ASSUMPTIONS (flagged here, not solved): the real Turnkey payment-ledger
-export format isn't available in this repo, so every column name and amount unit is
-declared in the ``Col`` / ``AMOUNT_IS_DOLLARS`` block at the top. When the real file
-lands, correct THOSE constants — the rest of the module needs no changes.
+COLUMN ASSUMPTIONS: this module reads a FLAT payment export addressed by account
+number, with every column name and amount unit declared in the ``Col`` /
+``AMOUNT_IS_DOLLARS`` block below — correct THOSE constants for a differently
+shaped file and nothing else changes. A source whose history carries per-row
+fee/interest/principal allocations belongs on the richer path
+(``portfolio_workbook`` + ``portfolio_import``), which preserves those splits.
 """
 from __future__ import annotations
 
@@ -34,35 +37,38 @@ from typing import Any, Iterable, Optional
 from sqlalchemy.orm import Session
 
 from app.models.platform.loan import PlatformLoan, PlatformLoanPayment
+from app.services.migration import constants
 
 
 # =============================================================================
-# TURNKEY PAYMENT-LEDGER ASSUMPTIONS — correct these against the real export.
+# PAYMENT-LEDGER ASSUMPTIONS — correct these against the real export.
 # =============================================================================
 # The export is assumed to be a sheet of rows where each row is a single posted
-# payment, addressed by the legacy Turnkey account number. Columns are referenced
+# payment, addressed by the source system's account number. Columns are referenced
 # by NAME (the parser accepts dict-like rows keyed by header) so that a header
-# rename is a one-line fix here. ``parse_payments`` also accepts plain mapping rows.
+# rename is a one-line fix here. ``map_payments`` also accepts plain mapping rows.
 class Col:
-    ACCT = "Acct#"            # legacy Turnkey account number (-> PlatformLoan.legacy_account_number)
+    ACCT = "Acct#"            # source account number (-> PlatformLoan.legacy_account_number)
     DATE = "Payment Date"     # posting / value date of the payment
     AMOUNT = "Amount"         # payment amount (see AMOUNT_IS_DOLLARS below)
     METHOD = "Method"         # payment method/channel, e.g. "PAD", "EFT", "Card"
-    TXN_ID = "Transaction Id"  # stable Turnkey payment/transaction id (-> external_ref)
+    TXN_ID = "Transaction Id"  # stable source payment/transaction id (-> external_ref)
 
 
-# Turnkey exports money as DOLLARS (e.g. 123.45). PaySpyre stores integer cents, so we
-# multiply by 100 on the way in. If a future export is already in cents, flip this.
+# The export states money as DOLLARS (e.g. 123.45). PaySpyre stores integer cents, so
+# we multiply by 100 on the way in. If a future export is already in cents, flip this.
 AMOUNT_IS_DOLLARS = True
 
 # The PaySpyre payment ``method`` recorded for an imported historical payment. If the
 # source row carries its own method we keep it (prefixed) so the provenance is obvious;
 # otherwise we fall back to this constant.
-DEFAULT_METHOD = "turnkey_migration"
+DEFAULT_METHOD = constants.IMPORT_METHOD
 
-# external_ref is namespaced so a historical Turnkey id can never collide with a live
-# rail reference (e.g. a Zumrails transaction id) on the same loan.
-EXTERNAL_REF_PREFIX = "turnkey:"
+# external_ref is namespaced so a historical source id can never collide with a live
+# rail reference (e.g. a Zumrails transaction id) on the same loan. The legacy
+# spelling stays READABLE (constants.SUPPLIED_REF_PREFIXES) so a book imported
+# before the rename still dedupes.
+EXTERNAL_REF_PREFIX = constants.REF_PREFIX_SUPPLIED
 
 # Accepted date string formats (in addition to native date / datetime cells).
 _DATE_FORMATS = ("%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y", "%Y-%m-%d %H:%M:%S")
@@ -158,7 +164,7 @@ def map_payment(row: Any) -> tuple[Optional[MappedPayment], Optional[str]]:
     if not txn_s:
         # Without a stable id we cannot dedupe on re-import; refuse rather than risk
         # inserting duplicate ledger rows on a retry.
-        return None, f"acct {acct_s}: missing Turnkey transaction id — skipped"
+        return None, f"acct {acct_s}: missing source transaction id — skipped"
 
     raw_method = _get(row, Col.METHOD)
     method = (
@@ -217,15 +223,15 @@ def persist_payments(
     payment rows for analytics / training.
 
     Idempotent: each payment is keyed on its stable ``external_ref`` (the namespaced
-    Turnkey transaction id). The DB carries a UNIQUE index on
+    source transaction id). The DB carries a UNIQUE index on
     ``(loan_id, external_ref) WHERE external_ref IS NOT NULL`` (migration 033); we also
     pre-SELECT existing (loan_id, external_ref) pairs so a re-import skips dupes cleanly
-    instead of relying on IntegrityError. A payment whose account number does not match a
-    migrated loan is reported as ``unmatched_account`` (not inserted, not crashed).
+    instead of relying on IntegrityError. A payment whose account number does not match an
+    imported loan is reported as ``unmatched_account`` (not inserted, not crashed).
     """
     result = PaymentPersistResult(invalid=invalid_count)
 
-    # acct -> loan_id for every migrated loan (resolve once).
+    # acct -> loan_id for every imported loan (resolve once).
     loan_by_acct = {
         acct: loan_id
         for (acct, loan_id) in db.query(
@@ -252,7 +258,13 @@ def persist_payments(
             result.unmatched_accts.append(mp.legacy_account_number)
             continue
         key = (loan_id, mp.external_ref)
-        if key in seen:
+        # A book imported before the ref namespace was renamed carries the legacy
+        # prefix; check every spelling so a re-import stays idempotent across it.
+        txn_id = mp.external_ref.split(":", 1)[-1]
+        if any(
+            (loan_id, variant) in seen
+            for variant in constants.supplied_ref_variants(txn_id)
+        ) or key in seen:
             result.skipped_duplicate += 1
             continue
         db.add(

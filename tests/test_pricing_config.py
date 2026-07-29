@@ -22,7 +22,7 @@ from app.schemas.pricing_config import (
 from app.services import loan_quote
 
 
-def _turnkey_demo_config(**overrides) -> dict:
+def _legacy_demo_config(**overrides) -> dict:
     """The product Dave demoed in 07__WP_Settings_Part_1: 19.99% (9.99–23.99),
     admin $1/payment, NSF $45 on event, origination $25, late fee present but
     disabled (Canada policy)."""
@@ -53,13 +53,13 @@ def _turnkey_demo_config(**overrides) -> dict:
 
 
 class TestSchemaValidation:
-    def test_turnkey_demo_config_parses(self):
-        cfg = PricingConfig.model_validate(_turnkey_demo_config())
+    def test_legacy_demo_config_parses(self):
+        cfg = PricingConfig.model_validate(_legacy_demo_config())
         assert cfg.interest.annual_rate_bps == 1999
         assert cfg.payment_frequencies == [PaymentFrequency.MONTHLY, PaymentFrequency.BI_WEEKLY]
         assert len(cfg.fees) == 4
 
-    def test_all_14_turnkey_fee_types_exist(self):
+    def test_all_14_legacy_fee_types_exist(self):
         assert {f.value for f in FeeType} == {
             "administration", "disbursement", "down_payment", "late",
             "late_unpaid_due", "nsf", "origination", "past_due_interest",
@@ -83,7 +83,7 @@ class TestSchemaValidation:
         with pytest.raises(ValidationError, match="min_rate_bps"):
             InterestConfig(annual_rate_bps=2500, min_rate_bps=999, max_rate_bps=2399)
 
-    def test_interest_defaults_are_turnkey_demo_values(self):
+    def test_interest_defaults_are_legacy_demo_values(self):
         i = InterestConfig()
         assert (i.annual_rate_bps, i.min_rate_bps, i.max_rate_bps) == (1999, 999, 2399)
         assert i.rate_edit_roles == ["admin"]
@@ -94,7 +94,7 @@ class TestSchemaValidation:
                       charge_timing="on_event")
 
     def test_duplicate_fee_definition_refused(self):
-        cfg = _turnkey_demo_config()
+        cfg = _legacy_demo_config()
         cfg["fees"].append(cfg["fees"][0])
         with pytest.raises(PricingConfigError, match="Duplicate fee"):
             parse_pricing_config(cfg)
@@ -115,7 +115,7 @@ class TestSchemaValidation:
 
     def test_json_round_trip_survives_jsonb(self):
         import json
-        cfg = PricingConfig.model_validate(_turnkey_demo_config())
+        cfg = PricingConfig.model_validate(_legacy_demo_config())
         dumped = json.loads(json.dumps(cfg.model_dump(mode="json", exclude_none=True)))
         again = parse_pricing_config(dumped)
         assert again == cfg
@@ -123,7 +123,7 @@ class TestSchemaValidation:
 
 class TestFeeMath:
     def test_per_payment_fee_scales_with_payment_count(self):
-        cfg = parse_pricing_config(_turnkey_demo_config())
+        cfg = parse_pricing_config(_legacy_demo_config())
         # 12 months: monthly = 12 payments, bi-weekly = 26 payments
         monthly = quote_fees_cents(cfg, 1_000_000, 12, "monthly")
         biweekly = quote_fees_cents(cfg, 1_000_000, 12, "bi_weekly")
@@ -132,15 +132,15 @@ class TestFeeMath:
 
     def test_on_event_fees_excluded_from_cost_of_borrowing(self):
         # NSF $45 is contingent — it must never inflate the disclosed APR.
-        cfg = parse_pricing_config(_turnkey_demo_config())
-        no_nsf = _turnkey_demo_config()
+        cfg = parse_pricing_config(_legacy_demo_config())
+        no_nsf = _legacy_demo_config()
         no_nsf["fees"] = [f for f in no_nsf["fees"] if f["fee_type"] != "nsf"]
         assert quote_fees_cents(cfg, 500_000, 24, "monthly") == quote_fees_cents(
             parse_pricing_config(no_nsf), 500_000, 24, "monthly"
         )
 
     def test_disabled_fee_excluded(self):
-        cfg = _turnkey_demo_config()
+        cfg = _legacy_demo_config()
         for f in cfg["fees"]:
             f["enabled"] = False
         # validator allows disabling anything; totals drop to zero
@@ -169,7 +169,7 @@ class TestFeeMath:
                 assert payments_in_term(term, freq) == loan_quote.num_payments(term, freq.value)
 
     def test_origination_lump_is_fixed_at_origination_only(self):
-        cfg = parse_pricing_config(_turnkey_demo_config())
+        cfg = parse_pricing_config(_legacy_demo_config())
         assert origination_lump_fees_cents(cfg) == 2500  # not admin/pmt, not NSF
 
 
@@ -243,7 +243,7 @@ class TestProductTermsBackCompat:
         assert params["term_min"] == 3 and params["term_max"] == 84
 
     def test_typed_config_terms(self):
-        params = loan_quote.product_terms(_turnkey_demo_config())
+        params = loan_quote.product_terms(_legacy_demo_config())
         assert params["term_min"] == 12 and params["term_max"] == 48
         assert params["annual_rate_bps"] == 1999
         assert [f["value"] for f in params["frequencies"]] == ["monthly", "bi_weekly"]

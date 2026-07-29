@@ -5,6 +5,7 @@ from app.models.platform.customer_profile import (
     PlatformCustomerProfile,
     PlatformCustomerProfileField,
 )
+from app.models.platform.provider import PlatformProvider
 from app.models.platform.credit_application import PlatformCreditApplication
 from app.models.platform.secondary_income import PlatformApplicationSecondaryIncome
 from app.models.platform.application_history import (
@@ -176,4 +177,5 @@ __all__ = [
     "PlatformPayoutRequest",
     "PlatformProvinceComplianceRule",
     "PlatformApplicationProcessConfig",
+    "PlatformProvider",
 ]

@@ -83,7 +83,15 @@ class PlatformCreditApplication(Base):
     # PricingConfig band) and the treatment-aligned dates from the intake form.
     requested_term_months = Column(Integer, nullable=True)
     requested_annual_rate_bps = Column(Integer, nullable=True)
-    provider_name = Column(String, nullable=True)  # free text — no providers table yet
+    # The practitioner / location the deal is written under. ``provider_id``
+    # (migration 083) is the real link — providers belong to the vendor. The free
+    # text ``provider_name`` is RETAINED and written alongside it: it holds the
+    # historical values from before the table existed, which nothing can
+    # reconstruct, and existing readers still use it.
+    provider_id = Column(
+        UUID(as_uuid=True), ForeignKey("platform_providers.id"), nullable=True
+    )
+    provider_name = Column(String, nullable=True)
     loan_start_date = Column(Date, nullable=True)
     first_due_date = Column(Date, nullable=True)  # "custom first due date"
     # The vendor's single underwriting action (Dave: "one button — request

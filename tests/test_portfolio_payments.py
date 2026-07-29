@@ -1,4 +1,4 @@
-"""Importing Turnkey payment history into the PaySpyre ledger.
+"""Importing legacy payment history into the PaySpyre ledger.
 
 Covers the pure mapping layer (amount-unit/date/validation handling, warnings instead of
 crashes) and the LEDGER-ONLY persist step (correct rows created; balance + schedule of
@@ -15,9 +15,10 @@ from app.models.platform.loan import (
     PlatformLoanScheduleItem,
 )
 from app.services.loan_servicing import generate_amortization_schedule
-from app.services.migration.turnkey import MappedLoan
-from app.services.migration.turnkey_persist import persist_loans
-from app.services.migration.turnkey_payments import (
+from app.services.migration import constants
+from app.services.migration.portfolio_accounts import MappedLoan
+from app.services.migration.portfolio_persist import persist_loans
+from app.services.migration.portfolio_payments import (
     EXTERNAL_REF_PREFIX,
     MappedPayment,
     map_payment,
@@ -38,7 +39,7 @@ def _row(acct="900100", amount="123.45", dt="2024-03-15", method="PAD", txn="TK-
 
 
 def _seed_migrated_loan(db, acct="900100"):
-    """Seed one migrated loan (source='turnkey_migration', application_id NULL, legacy
+    """Seed one imported loan (source=constants.PORTFOLIO_SOURCE, application_id NULL, legacy
     account set, with a forward schedule) so we can attach payments to it."""
     sched = generate_amortization_schedule(
         250_000, 599, 12, date(2026, 7, 1), day_count="actual/360"
@@ -69,7 +70,7 @@ def test_map_payment_dollars_to_cents_and_utc_date():
     assert mp.amount_cents == 12_345
     assert mp.received_at == datetime(2024, 3, 15, tzinfo=timezone.utc)
     assert mp.external_ref == f"{EXTERNAL_REF_PREFIX}TK-9"
-    assert mp.method == "turnkey_migration:PAD"
+    assert mp.method == f"{constants.IMPORT_METHOD}:PAD"
 
 
 def test_map_payment_amount_with_currency_symbols():
@@ -127,7 +128,7 @@ def test_persist_creates_ledger_rows_with_correct_fields(db_session):
     assert payments[0].received_at == datetime(2024, 2, 1, tzinfo=timezone.utc)
     assert payments[0].external_ref == f"{EXTERNAL_REF_PREFIX}TK-1"
     assert payments[1].external_ref == f"{EXTERNAL_REF_PREFIX}TK-2"
-    assert all(p.method == "turnkey_migration:PAD" for p in payments)
+    assert all(p.method == f"{constants.IMPORT_METHOD}:PAD" for p in payments)
 
 
 def test_persist_does_not_touch_balance_or_schedule(db_session):

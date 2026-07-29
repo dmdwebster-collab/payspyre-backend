@@ -1,10 +1,14 @@
-"""Turnkey -> PaySpyre cutover CSV import (WS-D): parse, validate, apply.
+"""Portfolio cutover CSV import (WS-D): parse, validate, apply.
 
-Implements the template-driven, preview-then-confirm import Dave specced from
-Turnkey's Tools -> Import workplace (docs/turnkey_parity/09__WP_Tools.md) for
-migrating the live book (~580 customers / ~560 loans) INTO PaySpyre.
+The template-driven, preview-then-confirm import for migrating an existing loan
+book INTO PaySpyre. Source-agnostic by construction: the templates describe
+PaySpyre's own canonical columns, so any servicing system's export maps onto them
+by re-heading a CSV. (For a spreadsheet export whose shape you would rather
+DECLARE than re-head — including per-transaction fee/interest/principal
+allocations — use ``portfolio_profile`` + ``portfolio_workbook`` +
+``portfolio_import``.)
 
-Layering (mirrors the existing ``turnkey.py`` / ``turnkey_persist.py`` split):
+Layering (mirrors the ``portfolio_accounts.py`` / ``portfolio_persist.py`` split):
 
 * PARSE + VALIDATE — pure, DB-free. ``validate_csv`` takes the CSV text plus an
   ``ImportContext`` of lookup sets (the DB shell builds it) and returns a
@@ -14,21 +18,21 @@ Layering (mirrors the existing ``turnkey.py`` / ``turnkey_persist.py`` split):
 * APPLY — ``apply_rows`` writes the normalized rows idempotently, per-row
   savepoints so one bad row never aborts the batch:
     - customers: find-or-create keyed on legacy customer id, then email.
-    - loans:     the migration-035 turnkey path (source='turnkey_migration',
-                 legacy_account_number unique key, application_id NULL,
-                 agreement signed / disbursement completed) — the same shape
-                 ``turnkey_persist.persist_loans`` writes — plus the new
-                 ``patient_id`` borrower link (migration 047).
+    - loans:     the migration-035 import path (``source`` =
+                 ``constants.PORTFOLIO_SOURCE``, legacy_account_number unique
+                 key, application_id NULL, agreement signed / disbursement
+                 completed) — the same shape ``portfolio_persist.persist_loans``
+                 writes — plus the ``patient_id`` borrower link (migration 047).
     - payments:  LEDGER-ONLY PlatformLoanPayment inserts, deduped on a stable
-                 external_ref. NEVER routed through record_payment — migrated
+                 external_ref. NEVER routed through record_payment — imported
                  balances are already current snapshots; re-applying history
-                 would double-count (see turnkey_payments.py's correctness
+                 would double-count (see portfolio_payments.py's correctness
                  rule).
-    - disbursements: mark the funding leg of migrated loans completed-historical
+    - disbursements: mark the funding leg of imported loans completed-historical
                  (disbursed_at / disbursement_ref backfill; no money moves).
 
-FILE FORMAT: CSV only (stdlib ``csv``). .xlsx support is pending dependency
-approval (openpyxl is NOT a project dependency and must not be assumed).
+FILE FORMAT: CSV (stdlib ``csv``). Spreadsheet workbooks go through
+``portfolio_workbook``.
 
 MONEY: dollars in the file, integer cents in the DB. Parsing is strict — an
 ambiguous amount (>2 decimals, malformed thousands groups, parentheses,
@@ -42,7 +46,7 @@ existing migration tooling) and may appear in reports.
 SIN is deliberately NOT an importable column: full SINs live only encrypted on
 ``platform_patients.sin_encrypted`` and must never transit a CSV round-trip.
 If the legacy book's SINs need migrating, that is a separate, encrypted-path
-exercise (flagged for Dave).
+exercise.
 """
 from __future__ import annotations
 
@@ -66,25 +70,28 @@ from app.models.platform.patient import PlatformPatient
 from app.models.platform.patient_field import PlatformPatientField
 from app.services.loan_quote import CRIMINAL_RATE_CAP_BPS
 from app.services.loan_servicing import generate_amortization_schedule
-from app.services.migration.turnkey import STATUS_MAP
+from app.services.migration import constants
+from app.services.migration.portfolio_accounts import STATUS_MAP
 
 
 ENTITY_TYPES = ("customers", "loans", "payments", "disbursements")
 
-# platform_patient_fields keys written by this importer (source-tagged).
-LEGACY_CUSTOMER_FIELD_KEY = "turnkey_legacy_customer_id"
-IMPORT_ADDRESS_FIELD_KEY = "turnkey_import_address"
-IMPORT_FIELD_SOURCE = "turnkey_import"
+# platform_patient_fields keys written by this importer (source-tagged). The
+# legacy spellings stay readable — see app/services/migration/constants.py.
+LEGACY_CUSTOMER_FIELD_KEY = constants.LEGACY_CUSTOMER_FIELD_KEY
+IMPORT_ADDRESS_FIELD_KEY = constants.IMPORT_ADDRESS_FIELD_KEY
+IMPORT_FIELD_SOURCE = constants.IMPORT_FIELD_SOURCE
 
-# external_ref namespaces. "turnkey:" matches turnkey_payments.EXTERNAL_REF_PREFIX
-# (a file-supplied stable transaction id); "import:" marks a ref DERIVED from
-# (acct, date, amount) when the file carries no transaction id.
-REF_PREFIX_SUPPLIED = "turnkey:"
-REF_PREFIX_DERIVED = "import:"
+# external_ref namespaces. The supplied prefix matches
+# portfolio_payments.EXTERNAL_REF_PREFIX (a file-supplied stable transaction id);
+# "import:" marks a ref DERIVED from (acct, date, amount) when the file carries no
+# transaction id.
+REF_PREFIX_SUPPLIED = constants.REF_PREFIX_SUPPLIED
+REF_PREFIX_DERIVED = constants.REF_PREFIX_DERIVED
 
-# Loan statuses accepted by the loans template (PaySpyre canonical). Turnkey
+# Loan statuses accepted by the loans template (PaySpyre canonical). Source
 # "STATUS/SUBSTATUS" pairs (e.g. "OPEN/ACTIVE") are also accepted and mapped via
-# turnkey.STATUS_MAP. 'pending_disbursement' is deliberately NOT importable — a
+# portfolio_accounts.STATUS_MAP. 'pending_disbursement' is deliberately NOT importable — a
 # migrated loan was already funded in the legacy system.
 IMPORTABLE_LOAN_STATUSES = ("active", "delinquent", "paid_off", "charged_off", "cancelled")
 
@@ -107,7 +114,7 @@ class ColumnSpec:
 
 ENTITY_COLUMNS: dict[str, list[ColumnSpec]] = {
     "customers": [
-        ColumnSpec("legacy_customer_id", True, "Turnkey customer ID (unique per customer)", "581"),
+        ColumnSpec("legacy_customer_id", True, "Source-system customer ID (unique per customer)", "581"),
         ColumnSpec("first_name", True, "Legal first name", "Royce", pii=True),
         ColumnSpec("last_name", True, "Legal last name", "Heidenreich", pii=True),
         ColumnSpec("email", True, "Email (find-or-create key when the legacy id is new)", "royce@example.com", pii=True),
@@ -121,31 +128,31 @@ ENTITY_COLUMNS: dict[str, list[ColumnSpec]] = {
         # NOTE: no SIN column, by design — see the module docstring.
     ],
     "loans": [
-        ColumnSpec("legacy_account_number", True, "Turnkey loan account number (unique per loan)", "BC4906-0001"),
-        ColumnSpec("customer_legacy_id", True, "Turnkey customer ID this loan belongs to (import customers first)", "581"),
+        ColumnSpec("legacy_account_number", True, "Source-system loan account number (unique per loan)", "BC4906-0001"),
+        ColumnSpec("customer_legacy_id", True, "Source-system customer ID this loan belongs to (import customers first)", "581"),
         ColumnSpec("principal", True, "Original amount financed, dollars", "2500.00"),
         ColumnSpec("annual_rate_percent", True, "Annual interest rate, percent (max 2 decimals)", "5.99"),
         ColumnSpec("start_date", True, "Origination / disbursement date, YYYY-MM-DD", "2024-01-10"),
         ColumnSpec("term_months", True, "Term in months", "24"),
         ColumnSpec("payment_frequency", False, "Payment frequency (only 'monthly' supported in v1; default monthly)", "monthly"),
-        ColumnSpec("status", True, "active | delinquent | paid_off | charged_off | cancelled, or a Turnkey STATUS/SUBSTATUS pair like OPEN/ACTIVE", "active"),
+        ColumnSpec("status", True, "active | delinquent | paid_off | charged_off | cancelled, or a source STATUS/SUBSTATUS pair like OPEN/ACTIVE", "active"),
         ColumnSpec("principal_balance", False, "CURRENT outstanding principal, dollars (required for active/delinquent; closed loans carry 0)", "1250.00"),
         ColumnSpec("next_due_date", False, "Next scheduled due date, YYYY-MM-DD (with final_payment_date, enables the forward schedule for active loans)", "2026-08-01"),
         ColumnSpec("final_payment_date", False, "Final scheduled payment date, YYYY-MM-DD", "2027-01-01"),
         ColumnSpec("vendor", False, "Vendor name/ID (recorded for audit; vendor linking is a follow-up)", "BC4906"),
     ],
     "payments": [
-        ColumnSpec("legacy_account_number", True, "Turnkey loan account number the payment was posted to", "BC4906-0001"),
+        ColumnSpec("legacy_account_number", True, "Source-system loan account number the payment was posted to", "BC4906-0001"),
         ColumnSpec("payment_date", True, "Posting date, YYYY-MM-DD", "2025-06-01"),
         ColumnSpec("amount", True, "Payment amount, dollars", "123.45"),
         ColumnSpec("type", False, "Payment method/channel, e.g. PAD, EFT, Card", "PAD"),
-        ColumnSpec("reference", False, "Stable Turnkey transaction id (STRONGLY recommended — required to import two identical payments on the same day)", "TXN-88123"),
+        ColumnSpec("reference", False, "Stable source transaction id (STRONGLY recommended — required to import two identical payments on the same day)", "TXN-88123"),
     ],
     "disbursements": [
-        ColumnSpec("legacy_account_number", True, "Turnkey loan account number that was funded", "BC4906-0001"),
+        ColumnSpec("legacy_account_number", True, "Source-system loan account number that was funded", "BC4906-0001"),
         ColumnSpec("disbursement_date", True, "Funding date, YYYY-MM-DD", "2024-01-10"),
         ColumnSpec("amount", True, "Disbursed amount, dollars (warned if it differs from the loan principal)", "2500.00"),
-        ColumnSpec("reference", False, "Stable Turnkey disbursement/transaction id", "DSB-4411"),
+        ColumnSpec("reference", False, "Stable source disbursement/transaction id", "DSB-4411"),
     ],
 }
 
@@ -239,8 +246,8 @@ def derive_payment_external_ref(
 ) -> str:
     """The idempotency key for an imported payment.
 
-    * File supplies a stable transaction id -> ``turnkey:<id>`` (same namespace
-      as turnkey_payments, so the two import paths dedupe against each other).
+    * File supplies a stable transaction id -> ``portfolio:<id>`` (same namespace
+      as portfolio_payments, so the two import paths dedupe against each other).
     * No id -> a DERIVED key from (account, date, amount):
       ``import:<acct>:<YYYY-MM-DD>:<cents>``. Two identical (acct, date,
       amount) rows without a reference are therefore ambiguous and rejected at
@@ -446,15 +453,15 @@ def _parse_loan_status(raw: str) -> str:
     s = raw.strip()
     if s.lower() in IMPORTABLE_LOAN_STATUSES:
         return s.lower()
-    if "/" in s:  # Turnkey "STATUS/SUBSTATUS" pair, e.g. OPEN/ACTIVE
+    if "/" in s:  # source "STATUS/SUBSTATUS" pair, e.g. OPEN/ACTIVE
         tk_status, _, tk_sub = (p.strip().upper() for p in s.partition("/"))
         mapped = STATUS_MAP.get((tk_status, tk_sub))
         if mapped and mapped[1]:
             return mapped[0]
-        raise ValueError("unmapped Turnkey status pair (not importable)")
+        raise ValueError("unmapped source status pair (not importable)")
     raise ValueError(
         f"unknown status — expected one of {', '.join(IMPORTABLE_LOAN_STATUSES)} "
-        f"or a Turnkey STATUS/SUBSTATUS pair"
+        f"or a source STATUS/SUBSTATUS pair"
     )
 
 
@@ -601,7 +608,14 @@ def _validate_payments(rows: list[dict], ctx: ImportContext, result: ValidationR
                 )
             else:
                 seen_refs.add(external_ref)
-                if (acct, external_ref) in ctx.existing_payment_refs:
+                # A payment imported BEFORE the ref namespace was renamed carries
+                # the legacy prefix. Check every spelling of the same supplied id,
+                # or a re-import would silently duplicate the borrower's history.
+                candidates = {external_ref}
+                supplied = (row.get("reference") or "").strip()
+                if supplied:
+                    candidates.update(constants.supplied_ref_variants(supplied))
+                if any((acct, c) in ctx.existing_payment_refs for c in candidates):
                     result.warnings.append(
                         RowIssue(i, "reference", "already imported — row will be skipped (idempotent)")
                     )
@@ -845,10 +859,10 @@ def _apply_customers(db: Session, rows: list[dict], res: ApplyResult) -> None:
 
 
 def _apply_loans(db: Session, rows: list[dict], res: ApplyResult) -> None:
-    """The migration-035 path: source='turnkey_migration', legacy account as the
+    """The migration-035 path: source=constants.PORTFOLIO_SOURCE, legacy account as the
     idempotency key, no PaySpyre application, agreement signed / disbursement
     completed (already funded in the legacy system) — the same shape
-    ``turnkey_persist.persist_loans`` writes — plus the patient link."""
+    ``portfolio_persist.persist_loans`` writes — plus the patient link."""
     existing = {
         acct
         for (acct,) in db.query(PlatformLoan.legacy_account_number)
@@ -874,7 +888,7 @@ def _apply_loans(db: Session, rows: list[dict], res: ApplyResult) -> None:
                 loan = PlatformLoan(
                     application_id=None,
                     patient_id=patient_id,
-                    source="turnkey_migration",
+                    source=constants.PORTFOLIO_SOURCE,
                     legacy_account_number=acct,
                     principal_cents=row["principal_cents"],
                     annual_rate_bps=row["annual_rate_bps"],
@@ -887,8 +901,8 @@ def _apply_loans(db: Session, rows: list[dict], res: ApplyResult) -> None:
                     currency="CAD",
                 )
                 # Forward schedule (snapshot-and-service-forward): re-amortize the
-                # CURRENT balance over the remaining term on Turnkey's actual/360
-                # convention — same approach as turnkey._forward_schedule.
+                # CURRENT balance over the remaining term on the source book's
+                # actual/360 convention — same as portfolio_accounts._forward_schedule.
                 if (
                     row["status"] in ("active", "delinquent")
                     and row["principal_balance_cents"] > 0
@@ -931,7 +945,7 @@ def _apply_loans(db: Session, rows: list[dict], res: ApplyResult) -> None:
 
 
 def _apply_payments(db: Session, rows: list[dict], res: ApplyResult) -> None:
-    """LEDGER-ONLY inserts (turnkey_payments' correctness rule): never routed
+    """LEDGER-ONLY inserts (portfolio_payments' correctness rule): never routed
     through record_payment — migrated balances are already current snapshots and
     re-applying history would double-count. Deduped on (loan, external_ref),
     backed by migration 033's partial unique index."""
@@ -960,13 +974,18 @@ def _apply_payments(db: Session, rows: list[dict], res: ApplyResult) -> None:
                     _fail(res, row_no, "unknown loan account at apply time")
                     continue
                 key = (loan_id, row["external_ref"])
-                if key in seen:
+                # Both namespaces, so a payment imported before the ref rename is
+                # recognised rather than inserted a second time.
+                ref_id = row["external_ref"].split(":", 1)[-1]
+                if key in seen or any(
+                    (loan_id, v) in seen for v in constants.supplied_ref_variants(ref_id)
+                ):
                     res.skipped_existing += 1
                     continue
                 d = date.fromisoformat(row["payment_date"])
-                method = "turnkey_migration"
+                method = constants.IMPORT_METHOD
                 if row.get("method"):
-                    method = f"turnkey_migration:{row['method']}"
+                    method = f"{constants.IMPORT_METHOD}:{row['method']}"
                 db.add(
                     PlatformLoanPayment(
                         loan_id=loan_id,
@@ -983,7 +1002,7 @@ def _apply_payments(db: Session, rows: list[dict], res: ApplyResult) -> None:
 
 
 def _apply_disbursements(db: Session, rows: list[dict], res: ApplyResult) -> None:
-    """Mark the funding leg of migrated loans completed-HISTORICAL: backfill
+    """Mark the funding leg of imported loans completed-HISTORICAL: backfill
     disbursed_at / disbursement_ref. No money moves; loan import already sets
     disbursement_status='completed', so fully-populated loans are skipped."""
     amount_mismatches = 0
@@ -999,8 +1018,8 @@ def _apply_disbursements(db: Session, rows: list[dict], res: ApplyResult) -> Non
                 if loan is None:
                     _fail(res, row_no, "unknown loan account at apply time")
                     continue
-                if loan.source != "turnkey_migration":
-                    _fail(res, row_no, "loan is not a migrated loan — refusing to touch a native disbursement")
+                if loan.source not in constants.IMPORTED_LOAN_SOURCES:
+                    _fail(res, row_no, "loan is not an imported loan — refusing to touch a native disbursement")
                     continue
                 if row["amount_cents"] != loan.principal_cents:
                     amount_mismatches += 1

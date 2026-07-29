@@ -32,14 +32,17 @@ class PlatformLoan(Base):
     __tablename__ = "platform_loans"
     # One loan per application (enforced in the DB by migration 032). Makes
     # book_loan's idempotency race-safe — duplicate booking → IntegrityError.
-    # (application_id is NULL only for migrated loans, source='turnkey_migration';
+    # (application_id is NULL only for IMPORTED loans — see the CHECK below;
     # Postgres treats NULLs as distinct so the unique constraint still allows many.)
     __table_args__ = (
         UniqueConstraint("application_id", name="uq_platform_loans_application"),
-        # A normally-originated loan MUST have an application; only a migrated loan
-        # may have a NULL application_id (migration 035).
+        # A normally-originated loan MUST have an application; only an IMPORTED
+        # loan may have a NULL application_id (migration 035, widened by 083 to
+        # accept the source-neutral 'portfolio_import' alongside the retained
+        # legacy value).
         CheckConstraint(
-            "source = 'turnkey_migration' OR application_id IS NOT NULL",
+            "source IN ('turnkey_migration', 'portfolio_import') "
+            "OR application_id IS NOT NULL",
             name="ck_platform_loans_application_or_migration",
         ),
         # Idempotent re-import: a legacy account maps to at most one loan.
@@ -70,19 +73,31 @@ class PlatformLoan(Base):
         nullable=True,
     )
 
-    # Provenance: 'application' (default — originated through the PaySpyre flow) or
-    # 'turnkey_migration' (imported from the legacy Turnkey book).
+    # Provenance: 'application' (default — originated through the PaySpyre flow),
+    # 'portfolio_import' (imported from ANY legacy servicing system, migration 083)
+    # or 'turnkey_migration' (the pre-rename spelling, retained on live rows — see
+    # ``app/services/migration/constants.py``). Never compare this to a literal;
+    # use ``constants.IMPORTED_LOAN_SOURCES``.
     source = Column(String, nullable=False, server_default="application")
-    # The legacy Turnkey account number, for tracing + idempotent re-import. NULL for
-    # natively-originated loans; uniquely indexed when present (migration 035).
+    # The source system's account number, for tracing + idempotent re-import. NULL
+    # for natively-originated loans; uniquely indexed when present (migration 035).
     legacy_account_number = Column(String, nullable=True)
+
+    # The vendor whose book this loan came from (migration 083). A natively
+    # originated loan reaches its vendor through the application; an IMPORTED
+    # loan has no application, so the link is direct. NULL when unknown.
+    vendor_id = Column(UUID(as_uuid=True), ForeignKey("vendors.id"), nullable=True)
+    # The practitioner / location the deal was written under (migration 083).
+    provider_id = Column(
+        UUID(as_uuid=True), ForeignKey("platform_providers.id"), nullable=True
+    )
 
     # THE LOAN ID the borrower sees (Dave, 2026-07-28: "the Application Number
     # becomes the Loan ID"). Copied verbatim from
     # ``platform_credit_applications.application_number`` when the loan is booked
     # (migration 081), so the agreement signed BEFORE this row existed names the
-    # same identifier as the live loan. NULL for migrated Turnkey loans, which
-    # have no application and stay identified by ``legacy_account_number``.
+    # same identifier as the live loan. NULL for IMPORTED loans, which have no
+    # application and stay identified by ``legacy_account_number``.
     loan_number = Column(String, nullable=True)
 
     principal_cents = Column(BigInteger, nullable=False)
@@ -218,7 +233,7 @@ class PlatformLoan(Base):
     insolvency_marked_by = Column(String, nullable=True)
 
     # ---- Auto-collection (WS-G, migration 051) ----------------------------
-    # Per-loan "Disable Auto-Charges" switch (Turnkey Servicing parity).
+    # Per-loan "Disable Auto-Charges" switch (legacy-servicing parity).
     # NULL = inherit the platform default (enabled — but the engine itself is
     # inert until the AUTO_COLLECTION_ENABLED feature flag is on).
     # Explicit False = staff or dead-account auto-disable; reason is mandatory.
@@ -572,7 +587,8 @@ class PlatformCollectionAttempt(Base):
 
 class PlatformLoanCustomTransaction(Base):
     """A staff-added CUSTOM scheduled transaction (WS-F schedule surgery,
-    migration 050) — Turnkey's "Add transaction" on the Scheduled-transactions
+    migration 050) — the legacy system's "Add transaction" on the
+    Scheduled-transactions
     tab (03__WP_Servicing f0077, Dave: "a very, very important section").
 
     A custom transaction is a one-off FUTURE payment instruction (date, amount,

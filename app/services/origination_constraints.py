@@ -82,6 +82,7 @@ from app.schemas.pricing_config import (
 )
 from app.schemas.product_policy_config import ProductPolicyConfig
 from app.services import loan_quote
+from app.services import providers as providers_service
 from app.services.product_policy import policy_for_product
 from app.services.servicing_status import step_due_date
 
@@ -307,6 +308,10 @@ class ProviderOption(BaseModel):
 
     name: str
     application_count: int
+    #: The ``platform_providers`` row this option comes from (migration 083).
+    #: ``None`` for an option that exists only in application history — i.e. a
+    #: provider name typed before the roster existed and never added to it.
+    provider_id: Optional[UUID] = None
 
 
 class ProductOption(BaseModel):
@@ -576,6 +581,10 @@ def product_pick_list(
     providers: list[ProviderOption] = []
     if vendor_id is not None:
         vendor = db.query(Vendor).filter(Vendor.id == vendor_id).first()
+        # THE ROSTER IS THE SOURCE OF TRUTH (migration 083). Application history
+        # only supplies usage counts, and contributes an OPTION solely for a name
+        # that predates the roster — otherwise a past typo would be a permanent
+        # dropdown entry and a retired practitioner could never be removed.
         rows = (
             db.query(PlatformCreditApplication.provider_name)
             .filter(PlatformCreditApplication.vendor_id == vendor_id)
@@ -585,10 +594,20 @@ def product_pick_list(
         for (name,) in rows:
             if name:
                 counts[name] = counts.get(name, 0) + 1
-        providers = [
-            ProviderOption(name=n, application_count=c)
-            for n, c in sorted(counts.items(), key=lambda kv: kv[0])
-        ]
+
+        roster = providers_service.roster(db, vendor_id, active_only=True)
+        options: dict[str, ProviderOption] = {}
+        for p in roster:
+            options[providers_service.match_key(p.name) or p.name] = ProviderOption(
+                name=p.name,
+                application_count=counts.get(p.name, 0),
+                provider_id=p.id,
+            )
+        for name, count in counts.items():
+            key = providers_service.match_key(name) or name
+            if key not in options:
+                options[key] = ProviderOption(name=name, application_count=count)
+        providers = sorted(options.values(), key=lambda o: o.name)
 
     products = [
         p

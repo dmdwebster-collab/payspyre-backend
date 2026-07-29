@@ -1,4 +1,4 @@
-"""Run the Turnkey -> PaySpyre loan import end-to-end.
+"""Run the portfolio LOAN import end-to-end.
 
 DRY RUN by default (no writes). With --execute it persists the mapped loans into the
 target database via the idempotent persist step. Re-running is safe (dedups on the
@@ -9,9 +9,9 @@ script refuses a target URL that looks like staging unless --force is given.
 
 Examples:
   # preview only
-  python scripts/migration/turnkey_import.py export.xlsx
+  python scripts/migration/portfolio_loans_import.py export.xlsx
   # actually import into a clean target DB
-  python scripts/migration/turnkey_import.py export.xlsx --execute \\
+  python scripts/migration/portfolio_loans_import.py export.xlsx --execute \\
       --database-url postgresql+psycopg2://user:pw@host:5432/payspyre
 """
 import argparse
@@ -21,15 +21,15 @@ import openpyxl
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.services.migration.turnkey import build_report
-from app.services.migration.turnkey_persist import persist_loans
+from app.services.migration.portfolio_accounts import build_report
+from app.services.migration.portfolio_persist import persist_loans
 
 ACCOUNTS_FIRST_DATA_ROW = 4
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Turnkey -> PaySpyre loan import")
-    ap.add_argument("excel", help="path to the Turnkey export .xlsx")
+    ap = argparse.ArgumentParser(description="Portfolio loan import")
+    ap.add_argument("excel", help="path to the source export .xlsx")
     ap.add_argument("--execute", action="store_true", help="actually write (default: dry run)")
     ap.add_argument("--database-url", help="target DB (required with --execute)")
     ap.add_argument("--force", action="store_true", help="override the staging-URL safety guard")

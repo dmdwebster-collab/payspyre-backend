@@ -1,7 +1,7 @@
 """Cutover CSV import (WS-D) — idempotency-key derivation + report shape. Pure/DB-free."""
 from datetime import date
 
-from app.services.migration import turnkey_payments
+from app.services.migration import constants, portfolio_payments
 from app.services.migration.csv_import import (
     ImportContext,
     derive_disbursement_ref,
@@ -24,17 +24,20 @@ def test_payment_ref_distinct_when_any_component_differs():
     assert derive_payment_external_ref("A1", date(2025, 6, 1), 101) != base
 
 
-def test_supplied_reference_uses_turnkey_namespace_matching_existing_importer():
-    # Must share the namespace of the existing Turnkey payment importer so the
-    # two paths dedupe against EACH OTHER on re-import.
+def test_supplied_reference_shares_the_namespace_of_the_payment_importer():
+    # Must share the namespace of the payment-history importer so the two paths
+    # dedupe against EACH OTHER on re-import.
     ref = derive_payment_external_ref("A1", date(2025, 6, 1), 100, reference=" TXN-9 ")
-    assert ref == "turnkey:TXN-9"
-    assert ref.startswith(turnkey_payments.EXTERNAL_REF_PREFIX)
+    assert ref == "portfolio:TXN-9"
+    assert ref.startswith(portfolio_payments.EXTERNAL_REF_PREFIX)
+    # The pre-rename spelling stays a RECOGNISED variant, so a book imported
+    # before the rename is still deduped rather than duplicated.
+    assert constants.supplied_ref_variants("TXN-9") == ("portfolio:TXN-9", "turnkey:TXN-9")
 
 
 def test_disbursement_ref_namespaces():
     assert derive_disbursement_ref("A1", date(2024, 1, 10)) == "import:disb:A1:2024-01-10"
-    assert derive_disbursement_ref("A1", date(2024, 1, 10), "DSB-4") == "turnkey:DSB-4"
+    assert derive_disbursement_ref("A1", date(2024, 1, 10), "DSB-4") == "portfolio:DSB-4"
 
 
 def test_derived_and_supplied_refs_cannot_collide():

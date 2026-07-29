@@ -131,7 +131,7 @@ def test_seed_wording_matches_decision_notice_builtin_wording():
             assert text == builtin, code
 
 
-def test_cancel_seeds_cover_turnkey_directory():
+def test_cancel_seeds_cover_the_legacy_directory():
     seeded = {c for c, _, _ in CANCEL_REASON_SEEDS}
     assert {
         "customer_request", "duplicate_application", "vendor_request",

@@ -1,4 +1,4 @@
-"""Persisting migrated Turnkey loans into PaySpyre (DB-write step + schema rules)."""
+"""Persisting imported portfolio loans into PaySpyre (DB-write step + schema rules)."""
 from datetime import date
 
 import pytest
@@ -6,8 +6,9 @@ from sqlalchemy.exc import IntegrityError
 
 from app.models.platform.loan import PlatformLoan
 from app.services.loan_servicing import generate_amortization_schedule
-from app.services.migration.turnkey import MappedLoan
-from app.services.migration.turnkey_persist import persist_loans
+from app.services.migration import constants
+from app.services.migration.portfolio_accounts import MappedLoan
+from app.services.migration.portfolio_persist import persist_loans
 
 
 def _active(acct: str = "900001") -> MappedLoan:
@@ -32,7 +33,7 @@ def test_persist_active_loan_with_forward_schedule(db_session):
 
     loan = db_session.query(PlatformLoan).filter_by(legacy_account_number="900001").one()
     assert loan.application_id is None
-    assert loan.source == "turnkey_migration"
+    assert loan.source == constants.PORTFOLIO_SOURCE
     assert loan.status == "active"
     assert loan.principal_cents == 500_000
     assert loan.principal_balance_cents == 250_000
