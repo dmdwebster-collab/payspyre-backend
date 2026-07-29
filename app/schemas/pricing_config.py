@@ -247,8 +247,25 @@ class PricingConfig(BaseModel):
     payment_frequencies: list[PaymentFrequency] = Field(
         default_factory=lambda: [PaymentFrequency.MONTHLY], min_length=1
     )
+    default_payment_frequency: Optional[PaymentFrequency] = Field(
+        default=None,
+        description=(
+            "Which enabled frequency the origination form pre-selects. None = the "
+            "FIRST entry of `payment_frequencies`, which is exactly what every "
+            "existing reader already treats as the default, so leaving it unset "
+            "preserves today's behaviour."
+        ),
+    )
     amount_min_cents: Optional[int] = Field(default=None, gt=0)
     amount_max_cents: Optional[int] = Field(default=None, gt=0)
+    default_amount_cents: Optional[int] = Field(
+        default=None,
+        gt=0,
+        description=(
+            "Amount the origination form pre-fills. None = the effective minimum "
+            "amount (the pre-existing behaviour of every amount selector)."
+        ),
+    )
     term_min_months: Optional[int] = Field(default=None, gt=0)
     term_max_months: Optional[int] = Field(default=None, gt=0)
     term_options: Optional[list[int]] = Field(
@@ -321,26 +338,34 @@ class PricingConfig(BaseModel):
 # Fee math for quoting / APR (cost of borrowing "C" under SOR/2001-104 s.3)
 # ---------------------------------------------------------------------------
 
-def quote_fees_cents(
+def fee_rows_cents(
     cfg: PricingConfig,
     amount_cents: int,
-    term_months: int,
     frequency: PaymentFrequency | str,
-) -> int:
-    """Total non-contingent fees over the term for one selection, in cents.
+    num_payments: int,
+) -> list[int]:
+    """Non-contingent fees allocated ACROSS the installments, in cents.
 
-    This is the fee component of the cost of borrowing (C) for the Canadian
+    Returns one entry per scheduled installment (length ``num_payments``); the
+    sum is the fee component of the cost of borrowing (C) for the Canadian
     regulatory APR. ``on_event`` fees (NSF etc.) are contingent default charges
     and are EXCLUDED from the cost of borrowing; disabled fees are excluded.
 
-      * fixed_cents + at_origination  -> amount once
-      * fixed_cents + per_payment     -> amount x number of scheduled payments
-      * rate_bps    + at_origination  -> round(principal x bps / 10_000) once
-      * rate_bps    + per_payment     -> that value on every scheduled payment
+      * fixed_cents + at_origination  -> amount on the FIRST installment
+      * fixed_cents + per_payment     -> amount on every installment
+      * rate_bps    + at_origination  -> round(principal x bps / 10_000), first
+      * rate_bps    + per_payment     -> that value on every installment
+
+    This is the single fee implementation: :func:`quote_fees_cents` (the term
+    total, used by the APR math) is defined as the sum of these rows, so the
+    amortization schedule's Fees column and the disclosed cost of borrowing can
+    never disagree by a cent.
     """
     freq = PaymentFrequency(frequency)
-    n = payments_in_term(term_months, freq)
-    total = 0
+    n = max(0, int(num_payments))
+    rows = [0] * n
+    if n == 0:
+        return rows
     for fee in cfg.fees:
         if not fee.enabled or fee.charge_timing is ChargeTiming.ON_EVENT:
             continue
@@ -349,8 +374,26 @@ def quote_fees_cents(
             value = round(amount_cents * amt / 10_000)
         else:
             value = amt
-        total += value * (n if fee.charge_timing is ChargeTiming.PER_PAYMENT else 1)
-    return int(total)
+        if fee.charge_timing is ChargeTiming.PER_PAYMENT:
+            for i in range(n):
+                rows[i] += int(value)
+        else:
+            rows[0] += int(value)
+    return rows
+
+
+def quote_fees_cents(
+    cfg: PricingConfig,
+    amount_cents: int,
+    term_months: int,
+    frequency: PaymentFrequency | str,
+) -> int:
+    """Total non-contingent fees over the term for one selection, in cents.
+
+    Thin sum over :func:`fee_rows_cents` — see there for the per-timing rules.
+    """
+    freq = PaymentFrequency(frequency)
+    return int(sum(fee_rows_cents(cfg, amount_cents, freq, payments_in_term(term_months, freq))))
 
 
 def origination_lump_fees_cents(cfg: PricingConfig) -> int:
