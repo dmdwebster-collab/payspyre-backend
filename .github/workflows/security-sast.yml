@@ -102,7 +102,7 @@ jobs:
       - name: Upload SARIF results (artifact)
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: semgrep-sarif
           path: |
