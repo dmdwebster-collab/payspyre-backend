@@ -681,12 +681,15 @@ POLICY_SECTION_STATUS: dict[str, dict] = {
         ),
     },
     "schedule_building": {
-        "status": "pending_consumer",
+        "status": "consumed",
         "note": (
-            "loan_type / calculation_basis are validated against the engine "
-            "(only the implemented values are accepted), but late_grace_days, "
-            "loan_phases and enable_customizable_equal_payments have no reader: "
-            "the delinquency/DPD path still hard-codes a zero grace period."
+            "loan_type / calculation_basis are validated against the engine AND "
+            "reported as the schedule basis by "
+            "origination_constraints.resolve_constraints (the New Application "
+            "form's guardrail call). late_grace_days is surfaced there too but "
+            "still has no BEHAVIOURAL reader — the delinquency/DPD path "
+            "hard-codes a zero grace period; loan_phases and "
+            "enable_customizable_equal_payments remain unread."
         ),
     },
     "allocation_priority": {
@@ -697,7 +700,19 @@ POLICY_SECTION_STATUS: dict[str, dict] = {
         ),
     },
     "grace_period": {"status": "pending_consumer", "note": "No schedule-builder reader."},
-    "due_dates": {"status": "pending_consumer", "note": "No schedule-builder reader."},
+    "due_dates": {
+        "status": "consumed",
+        "note": (
+            "app.services.origination_constraints reads default_start_shift_days "
+            "(the New Application form's default AND earliest Start Date), "
+            "first_due_min_days / first_due_max_days (the allowed custom "
+            "first-payment window, measured from the start date), and the "
+            "use_change_start_date / use_change_first_due_date switches. ENFORCED "
+            "server-side on /admin/origination/quote and on both application-create "
+            "paths, so an out-of-window date is refused with a field-level error. "
+            "enable_date_rolling still has no reader (needs the Business Calendar)."
+        ),
+    },
     "due_date_seasons": {
         "status": "pending_consumer",
         "note": "Explicitly deferred by Dave; disabled by default.",
@@ -713,11 +728,14 @@ POLICY_SECTION_STATUS: dict[str, dict] = {
     "disbursement": {"status": "pending_consumer", "note": "No disbursement-path reader."},
     "approval": {"status": "pending_consumer", "note": "No two-level approval step exists."},
     "repayment_modes": {
-        "status": "pending_consumer",
+        "status": "consumed",
         "note": (
-            "The four allocator modes exist in the engine, but availability / "
-            "is_default / loan_closure / future_installments_recalc are not read "
-            "— mode permissioning is enforced at the endpoint layer instead."
+            "modes[].key / name / availability / is_default plus loan_closure and "
+            "future_installments_recalc are read by "
+            "origination_constraints.resolve_constraints to drive the New "
+            "Application form's repayment-mode selector. The four allocator modes "
+            "themselves live in the engine and mode PERMISSIONING is still "
+            "enforced at the endpoint layer, not from availability."
         ),
     },
     "application_form_variant": {
