@@ -40,8 +40,9 @@ three alongside the HTML:
     A real value from the application graph.
 ``missing``  → rendered as ``[NOT AVAILABLE: <Field>]``
     The agreement needs it and the application cannot supply it yet (e.g.
-    ``LoanId``, which does not exist until the loan is booked at activation).
-    Loud, visible, un-missable in the rendered output.
+    ``ContractDate`` on a file nobody has signed). Loud, visible, un-missable
+    in the rendered output. ``LoanId`` used to be the headline example; since
+    2026-07-28 it always resolves — see :func:`_loan_id_value`.
 ``not_applicable`` → rendered as ``N/A`` / ``Not charged``
     The field legitimately does not apply to this file (no co-borrower on a
     solo application; a fee the product does not charge). Reported so the
@@ -188,14 +189,17 @@ AGREEMENT_MERGE_FIELDS: dict[str, dict[str, str]] = {
     },
     "Identity": {
         "LoanId": (
-            "Account number. NO PRE-LOAN SOURCE — assigned when the loan is "
-            "booked at activation; resolves only once a loan exists."
+            "Account number = the APPLICATION NUMBER "
+            "(application.application_number), which the booked loan inherits as "
+            "loan.loan_number — so it prints before activation and still matches "
+            "the live loan. Migrated loans use legacy_account_number."
         ),
         "StartDate": "Date of agreement (accepted offer start_date, else application.loan_start_date).",
         "InterestStartDate": "Interest accrual start (application.loan_start_date, else StartDate).",
         "ContractDate": (
-            "Signature date. NO PREVIEW SOURCE — stamped when the borrower "
-            "signs (application.agreement_signed_at)."
+            "Signature date (application.agreement_signed_at) — populated as "
+            "soon as the borrower signs, which under the activation rework is "
+            "BEFORE the loan exists. Empty only while the file is unsigned."
         ),
     },
     "Terms": {
@@ -249,9 +253,16 @@ AGREEMENT_SCHEDULE_COLUMNS = (
 
 #: Fields that are genuinely unavailable before the loan exists. Kept explicit
 #: so the endpoint can explain WHY rather than just flagging a hole.
+#:
+#: ``LoanId`` is NO LONGER one of them (2026-07-28): the application number is
+#: minted with the application, so the Loan ID always resolves. ``ContractDate``
+#: stays, but its reason is now accurate — it is empty because the file is
+#: UNSIGNED, not because no loan exists; signing populates it pre-activation.
 _NO_PRELOAN_SOURCE_REASONS = {
-    "LoanId": "Assigned when the loan is booked at activation — no loan exists yet.",
-    "ContractDate": "Stamped when the borrower signs — the preview is unsigned.",
+    "ContractDate": (
+        "Stamped when the borrower signs — this file is not signed yet. "
+        "(Signing populates it before activation; a loan is not required.)"
+    ),
 }
 
 
@@ -357,6 +368,40 @@ _FREQUENCY_LABELS = {
 
 def _join_nonempty(parts: Iterable[Any], sep: str = " ") -> str:
     return sep.join(p for p in (_s(x).strip() for x in parts) if p)
+
+
+def _loan_id_value(application: Any, loan: Any = None) -> Optional[str]:
+    """The Loan ID to print, WITH or WITHOUT a loan row.
+
+    Dave, 2026-07-28: *"the Application Number becomes the Loan ID. This allows
+    the Loan ID to be populated on the loan agreement before activation."* Under
+    the activation rework no loan exists until activation, so before this the
+    agreement the borrower SIGNED rendered ``[NOT AVAILABLE: LoanId]``.
+
+    Resolution order, and why each rung exists:
+
+    1. ``loan.legacy_account_number`` — a migrated Turnkey loan is known to the
+       vendor and the borrower by its legacy account number; nothing else.
+    2. ``loan.loan_number`` — the booked loan's own number, which booking copied
+       from the application (migration 081). Identical to rung 3 by construction.
+    3. ``application.application_number`` — the pre-activation case, and the
+       whole point: the number is minted with the application, so it is printable
+       from the moment the file exists.
+    4. ``loan.id`` — only for a loan row predating migration 081.
+
+    Because rungs 2 and 3 are the same string, the signed agreement and the loan
+    that is later activated from it always name the same identifier.
+    """
+    for candidate in (
+        getattr(loan, "legacy_account_number", None),
+        getattr(loan, "loan_number", None),
+        getattr(application, "application_number", None),
+        getattr(loan, "id", None),
+    ):
+        text = _s(candidate).strip()
+        if text:
+            return text
+    return None
 
 
 def _address_line(street, unit, city, province, postal) -> str:
@@ -858,7 +903,7 @@ def build_agreement_context(
         )
 
     # --- identity / dates --------------------------------------------------
-    c.put("LoanId", getattr(loan, "id", None))
+    c.put("LoanId", _loan_id_value(application, loan))
     c.put("StartDate", _date_str(terms.start_date))
     c.put(
         "InterestStartDate",

@@ -286,6 +286,16 @@ def create_offers(
         raise OfferError(f"invalid offer terms: {all_problems}")
 
     expires_at = now + timedelta(days=expiry_days)
+    # Carry the APPLICATION's chosen payment frequency onto the offer instead of
+    # hard-coding "monthly". The frequency is a mandatory origination input (it
+    # drives the quote and the schedule the borrower was shown), and the offer is
+    # what the loan agreement renders its Repayment Period from — so hard-coding
+    # here silently contradicted the terms the borrower actually chose. Falls
+    # back to monthly when the application carries no preference (every pre-
+    # existing row), so behaviour for those is unchanged.
+    offer_frequency = (
+        getattr(application, "preferred_payment_frequency", None) or ""
+    ).strip() or "monthly"
     offers: list[PlatformLoanOffer] = []
     for spec in specs:
         offer = PlatformLoanOffer(
@@ -294,7 +304,7 @@ def create_offers(
             amount_cents=spec.amount_cents,
             term_months=spec.term_months,
             annual_rate_bps=spec.annual_rate_bps,
-            payment_frequency="monthly",
+            payment_frequency=offer_frequency,
             start_date=spec.start_date,
             first_due_date=spec.first_due_date,
             status="offered",

@@ -2,7 +2,7 @@ from datetime import datetime
 from uuid import UUID, uuid4
 from typing import Optional, Any
 
-from sqlalchemy import Column, DateTime, Date, String, Integer, BigInteger, Boolean, func, Text, ForeignKey
+from sqlalchemy import Column, DateTime, Date, String, Integer, BigInteger, Boolean, func, Text, ForeignKey, text
 from sqlalchemy.dialects.postgresql import UUID, JSONB, ENUM
 from sqlalchemy.orm import relationship
 
@@ -13,6 +13,19 @@ class PlatformCreditApplication(Base):
     __tablename__ = "platform_credit_applications"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    #: The human-facing APPLICATION NUMBER ("100001", ...) — and, per Dave's
+    #: 2026-07-28 instruction, the LOAN ID: it is copied onto
+    #: ``platform_loans.loan_number`` at activation so the agreement signed
+    #: BEFORE the loan exists names the same identifier as the live loan.
+    #: Minted by a column DEFAULT off ``platform_application_number_seq``
+    #: (migration 081), so no create path can omit it and none has to know about
+    #: it. Server-generated: SQLAlchemy refetches it on first access after flush.
+    application_number = Column(
+        String,
+        nullable=False,
+        unique=True,
+        server_default=text("nextval('platform_application_number_seq')::text"),
+    )
     patient_id = Column(UUID(as_uuid=True), ForeignKey("platform_patients.id"), nullable=False)
     credit_product_id = Column(UUID(as_uuid=True), ForeignKey("platform_credit_products.id"), nullable=False)
     credit_product_version = Column(Integer, nullable=False)

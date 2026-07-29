@@ -49,7 +49,7 @@ from app.db.base import get_db
 from app.models.platform.credit_application import PlatformCreditApplication
 from app.models.platform.credit_product import PlatformCreditProduct
 from app.models.platform.customer_profile import PlatformCustomerProfile
-from app.schemas.pricing_config import PricingConfigError
+from app.schemas.pricing_config import PricingConfigError, coerce_frequency
 from app.services import customer_profile as profiles
 from app.services import customer_profile_schema as schema
 from app.services import origination_constraints
@@ -70,6 +70,19 @@ def _actor_id(user) -> str:
 
 def _is_admin(user) -> bool:
     return "admin" in {ur.role.name for ur in getattr(user, "roles", [])}
+
+
+def _normalised_frequency(value: Optional[str]) -> Optional[str]:
+    """Canonical enum spelling for a payment frequency, or ``None``.
+
+    Only ever reached AFTER ``enforce_on_create`` has accepted the value against
+    the product's allowed set, so an unrecognisable string cannot get this far;
+    the ``or value`` tail is belt-and-braces rather than a real branch.
+    """
+    if value is None:
+        return None
+    freq = coerce_frequency(value)
+    return freq.value if freq is not None else value
 
 
 def _validation_detail(error: ProfileValidationError) -> dict:
@@ -126,10 +139,12 @@ class ApplicationFromProfileRequest(BaseModel):
 
     The finance-terms half of the dialog is the SAME set the main origination
     path (``POST /clinic/v1/applications``) accepts, and is validated the same
-    way: a custom first due date must fall after the start date. ``start_date``
-    lands on ``platform_credit_applications.loan_start_date`` and
-    ``first_due_date`` on ``first_due_date`` — the columns the booking path
-    reads — so nothing downstream learns a new field name.
+    way, by the ONE shared validator in
+    ``origination_constraints.enforce_on_create``. ``start_date`` lands on
+    ``platform_credit_applications.loan_start_date``, ``first_due_date`` on
+    ``first_due_date`` and ``payment_frequency`` on
+    ``preferred_payment_frequency`` — the columns the booking path reads — so
+    nothing downstream learns a new field name.
     """
 
     credit_product_id: UUID
@@ -141,26 +156,34 @@ class ApplicationFromProfileRequest(BaseModel):
     promo_code: Optional[str] = None
     require_complete_profile: bool = False
 
-    #: Dave's finance-terms dialog: "start date" + the custom-first-payment-date
-    #: checkbox. The checkbox is carried explicitly rather than inferred from
-    #: ``first_due_date is not None`` so a checked box with an empty date is a
-    #: 422 instead of silently falling back to the default schedule.
+    #: Payment Frequency — MANDATORY on the Originations form per the owner's
+    #: spec (2026-07-28): it drives the quote and the schedule the borrower is
+    #: shown, so it must be recorded on the application rather than discarded.
+    #: Left Optional here so existing API callers that never sent it keep
+    #: working; when absent the product's default frequency applies downstream.
+    #: Validated against the product's ``pricing_config.payment_frequencies`` by
+    #: the shared validator, and stored NORMALISED ("bi-weekly" -> "bi_weekly").
+    payment_frequency: Optional[str] = None
+
+    #: Dave's finance-terms dialog: "start date" + the first payment date.
     start_date: Optional[date] = None
+    #: DEPRECATED (2026-07-28) — the "Use Custom First Payment Date" checkbox was
+    #: REMOVED from the Originations form: First Payment Date is now always
+    #: visible and mandatory, bounded by the product's first-payment min/max
+    #: offsets. ``first_due_date`` therefore stands on its own and this flag is
+    #: no longer required to supply one. Still ACCEPTED (and ignored) so older
+    #: callers that send it are not broken; it will be removed once none do.
     use_custom_first_due_date: bool = False
     first_due_date: Optional[date] = None
 
     @model_validator(mode="after")
     def _validate_terms(self) -> "ApplicationFromProfileRequest":
-        if self.use_custom_first_due_date:
-            if self.first_due_date is None:
-                raise ValueError(
-                    "use_custom_first_due_date is set but first_due_date is missing."
-                )
-        elif self.first_due_date is not None:
-            raise ValueError(
-                "first_due_date supplied without use_custom_first_due_date; "
-                "check the custom-first-payment-date box or omit the date."
-            )
+        # NOTE: ``use_custom_first_due_date`` is deliberately NOT consulted. It
+        # used to gate ``first_due_date`` (a date without the flag was a 422);
+        # with the checkbox gone from the form that gate only forced every
+        # caller to send a meaningless ``true``. The real bound — the product's
+        # first-payment window — is enforced by ``enforce_on_create`` below.
+        #
         # Same invariant as the main origination path (vendor_origination.py).
         if (
             self.first_due_date is not None
@@ -555,6 +578,7 @@ def create_application_from_profile(
                 amount_cents=payload.requested_amount_cents,
                 term_months=payload.requested_term_months,
                 annual_rate_bps=payload.requested_annual_rate_bps,
+                frequency=payload.payment_frequency,
                 start_date=payload.start_date,
                 first_payment_date=payload.first_due_date,
             ),
@@ -587,6 +611,11 @@ def create_application_from_profile(
         provider_name=payload.provider_name,
         requested_term_months=payload.requested_term_months,
         requested_annual_rate_bps=payload.requested_annual_rate_bps,
+        # Payment Frequency, PERSISTED (it used to be dropped on the floor: the
+        # user picked it, it drove the quote and the schedule they were shown,
+        # and then nothing recorded it). Stored normalised so every reader sees
+        # the canonical enum value, never the "bi-weekly" spelling.
+        preferred_payment_frequency=_normalised_frequency(payload.payment_frequency),
         loan_start_date=payload.start_date,
         first_due_date=payload.first_due_date,
         status="started",
@@ -605,6 +634,7 @@ def create_application_from_profile(
         "profile_version": application.profile_version,
         "status": application.status,
         "requested_amount_cents": application.requested_amount_cents,
+        "payment_frequency": application.preferred_payment_frequency,
         "start_date": application.loan_start_date,
         "first_due_date": application.first_due_date,
         "completeness": (application.profile_snapshot or {}).get("completeness"),

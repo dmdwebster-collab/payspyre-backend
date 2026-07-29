@@ -467,8 +467,36 @@ def create_loan_from_application(
     if first_due_date is None:
         first_due_date = _add_months(date.today(), 1)
 
+    # KNOWN RESIDUAL GAP (2026-07-28), made LOUD rather than left silent.
+    #
+    # Payment Frequency is now captured, validated and carried onto the offer and
+    # the agreement — but the servicing engine below is monthly-only:
+    # ``generate_amortization_schedule`` takes no frequency and steps in months,
+    # and the APR/fee guards above are computed on "monthly". So a bi-weekly deal
+    # is BOOKED MONTHLY. Making it honour the frequency means reworking the
+    # amortization + delinquency engines (a money-path project with its own
+    # reconciliation), not a line here. Until then this logs every occurrence so
+    # the divergence is discoverable in production instead of invisible; the
+    # agreement preview already warns a reviewer about the same mismatch.
+    chosen_frequency = (
+        getattr(application, "preferred_payment_frequency", None) or "monthly"
+    )
+    if chosen_frequency != "monthly":
+        logger.warning(
+            "booking_frequency_downgraded_to_monthly application_id=%s "
+            "chosen_frequency=%s booked_frequency=monthly",
+            application.id,
+            chosen_frequency,
+        )
+
     loan = PlatformLoan(
         application_id=application.id,
+        # The Application Number IS the Loan ID (Dave, 2026-07-28). Copied here,
+        # at the single booking chokepoint, so the loan carries the identifier
+        # that was already printed on the agreement the borrower signed before
+        # this row existed. ``getattr`` default keeps hand-built test doubles and
+        # any pre-migration-081 row from breaking booking.
+        loan_number=getattr(application, "application_number", None),
         principal_cents=principal_cents,
         annual_rate_bps=annual_rate_bps,
         term_months=term_months,
