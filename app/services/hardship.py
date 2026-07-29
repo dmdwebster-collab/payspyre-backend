@@ -43,11 +43,9 @@ Money is integer cents. No PII in event payloads beyond the staff actor id.
 """
 from __future__ import annotations
 
-import calendar
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
-from uuid import UUID
 
 from sqlalchemy.orm import Session
 
@@ -113,15 +111,6 @@ class HardshipError(ValueError):
 # ---------------------------------------------------------------------------
 # Small pure helpers
 # ---------------------------------------------------------------------------
-
-
-def _add_months(d: date, months: int) -> date:
-    """Calendar-safe month addition (day clamped to the target month's end)."""
-    month_index = d.month - 1 + months
-    year = d.year + month_index // 12
-    month = month_index % 12 + 1
-    day = min(d.day, calendar.monthrange(year, month)[1])
-    return date(year, month, day)
 
 
 def _require_text(value: Optional[str], label: str) -> str:
@@ -237,12 +226,23 @@ def _validate_and_preview_deferment(
         )
 
     # The deferred amounts append as custom transactions AFTER the contract's
-    # last scheduled installment, one per deferred item, one interval apart.
+    # last scheduled installment, one per deferred item, one interval apart —
+    # where "one interval" is the LOAN'S OWN payment interval (migration 082),
+    # not always a month. Appending monthly onto a bi-weekly contract stretched
+    # a 3-installment deferment three months past maturity instead of six weeks,
+    # and over-estimated the extra interest by the same margin.
+    # ``_loan_frequency`` prefers the loan's stored cadence and falls back to the
+    # schedule's own gaps for legacy rows; for a monthly loan
+    # ``step_due_date(..., MONTHLY)`` is EDATE, i.e. identical to the
+    # ``_add_months`` this replaced.
+    from app.services.servicing_status import _loan_frequency, step_due_date
+
     contract_end = max(i.due_date for i in loan.schedule)
+    frequency = _loan_frequency(loan, [i.due_date for i in loan.schedule])
     changes = []
     estimated_extra_interest = 0
     for n, item in enumerate(items, start=1):
-        new_date = _add_months(contract_end, n)
+        new_date = step_due_date(contract_end, n, frequency)
         amount = _outstanding_cents(item)
         delta_days = max(0, (new_date - item.due_date).days)
         # Estimate: the item's principal portion stays outstanding for the

@@ -89,6 +89,20 @@ class PlatformLoan(Base):
     annual_rate_bps = Column(Integer, nullable=False)
     term_months = Column(Integer, nullable=False)
 
+    # THE CONTRACT'S REPAYMENT CADENCE (migration 082). ``term_months`` stays the
+    # contract unit; this says how many installments that term contains and how
+    # far apart they fall — 'monthly' | 'semi_monthly' | 'bi_weekly' | 'weekly',
+    # the canonical ``pricing_config.PaymentFrequency`` values.
+    #
+    # Populated at booking from the accepted offer's frequency (via the decision
+    # record) or the application's ``preferred_payment_frequency``. Existing rows
+    # backfill to 'monthly' because that is what they ACTUALLY are: before this
+    # migration the booking engine could only produce a monthly schedule, so a
+    # bi-weekly deal was booked monthly. They are not retro-relabelled.
+    payment_frequency = Column(
+        String, nullable=False, server_default="monthly", default="monthly"
+    )
+
     status = Column(
         ENUM(
             "pending_disbursement",

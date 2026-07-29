@@ -492,9 +492,9 @@ def resolve_terms(
     from app.services.loan_servicing import (
         _DEFAULT_ANNUAL_RATE_BPS,
         _DEFAULT_TERM_MONTHS,
-        _add_months,
         generate_amortization_schedule,
     )
+    from app.services.servicing_status import step_due_date
 
     today = today or date.today()
     warnings: list[str] = []
@@ -572,8 +572,9 @@ def resolve_terms(
     )
     if first_due_date is None:
         # Mirrors ``create_loan_from_application``'s default so the preview
-        # matches what booking would actually produce.
-        first_due_date = _add_months(today, 1)
+        # matches what booking would actually produce — one PERIOD from today at
+        # the deal's own frequency, not always one month.
+        first_due_date = step_due_date(today, 1, frequency_enum)
         warnings.append(
             "No first due date is set on the application or accepted offer — the "
             f"preview used the booking default of one month from today "
@@ -621,16 +622,18 @@ def resolve_terms(
     n_payments = payments_in_term(term_months, frequency_enum)
     total_fees_cents = per_payment_fee_cents * n_payments + origination_fee_cents
 
-    if frequency_enum is not PaymentFrequency.MONTHLY:
-        warnings.append(
-            f"The accepted payment frequency is {frequency}, but loan booking "
-            "generates a MONTHLY schedule — the preview's schedule is monthly and "
-            "will not match a non-monthly deal."
-        )
-
     # --- schedule + totals -------------------------------------------------
+    # Built at the deal's OWN frequency. Until migration 082 the booking engine
+    # could only step in months, so this preview carried a warning that a
+    # non-monthly deal's schedule would not match what got booked. Booking is now
+    # frequency-aware, the same engine builds both, and the warning is gone
+    # because the mismatch is.
     rows = generate_amortization_schedule(
-        principal_cents, annual_rate_bps, term_months, first_due_date
+        principal_cents,
+        annual_rate_bps,
+        term_months,
+        first_due_date,
+        frequency=frequency_enum,
     )
     schedule = build_schedule_rows(
         rows,

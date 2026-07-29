@@ -90,11 +90,20 @@ def _get_application(db: Session, application_id: UUID) -> PlatformCreditApplica
 
 
 def _installment_preview(offer: PlatformLoanOffer) -> Optional[int]:
-    """First-installment estimate for display (equal-payment schedule)."""
+    """First-installment estimate for display (equal-payment schedule).
+
+    Built at the OFFER's own payment frequency, so the borrower is shown the
+    instalment they will actually be debited — a bi-weekly offer previewed on a
+    monthly schedule quoted roughly double the real payment.
+    """
     try:
         first_due = offer.first_due_date or date.today()
         rows = generate_amortization_schedule(
-            offer.amount_cents, offer.annual_rate_bps, offer.term_months, first_due
+            offer.amount_cents,
+            offer.annual_rate_bps,
+            offer.term_months,
+            first_due,
+            frequency=offer.payment_frequency or "monthly",
         )
         return rows[0].total_cents if rows else None
     except Exception:  # noqa: BLE001 — preview only, never blocks the listing

@@ -628,6 +628,12 @@ class NotificationProcessor:
         amount_cents = chosen.amount_cents if chosen else decision.get("amount_cents")
         term_months = chosen.term_months if chosen else decision.get("term_months")
         rate_bps = chosen.annual_rate_bps if chosen else decision.get("apr_bps")
+        frequency = (
+            chosen.payment_frequency
+            if chosen
+            else decision.get("payment_frequency")
+            or getattr(application, "preferred_payment_frequency", None)
+        ) or "monthly"
         if not (amount_cents and term_months):
             # Nothing to quote — an approval with no terms anywhere. Skip rather
             # than send a half-empty email.
@@ -643,6 +649,9 @@ class NotificationProcessor:
                 int(rate_bps or 0),
                 int(term_months),
                 (chosen.first_due_date if chosen else None) or date.today(),
+                # The deal's real cadence — the "monthly_payment" template var is
+                # the borrower's regular INSTALMENT, whatever its period.
+                frequency=frequency,
             )
             monthly = rows[0].total_cents if rows else None
         except Exception:  # noqa: BLE001 — display-only preview, never blocks a send

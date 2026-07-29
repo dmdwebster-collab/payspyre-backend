@@ -633,9 +633,27 @@ class TestWarnings:
         )
         assert any("first due date" in w.lower() for w in result.warnings)
 
-    def test_non_monthly_frequency_is_warned_about(self):
+    def test_non_monthly_frequency_is_no_longer_warned_about(self):
+        """The preview used to warn that a non-monthly deal's schedule would NOT
+        match the booked one, because booking could only step in months.
+
+        Booking is frequency-aware as of migration 082 and both schedules come
+        out of the same engine, so the warning is gone — and, more to the point,
+        the schedule it warned about is now actually bi-weekly: 12 months at
+        bi-weekly is 26 rows 14 days apart, not 12 monthly ones.
+        """
         result = _preview(accepted_offer=_offer(payment_frequency="bi_weekly"))
-        assert any("monthly" in w.lower() for w in result.warnings)
+        assert not any(
+            "monthly" in w.lower() and "will not match" in w.lower()
+            for w in result.warnings
+        )
+        rows = result.terms.schedule
+        assert len(rows) == 26, "12 months bi-weekly == 26 installments"
+        assert result.terms.payment_frequency == "bi_weekly"
+        due = [r["due_date"] for r in rows]
+        assert all(
+            (due[i + 1] - due[i]).days == 14 for i in range(len(due) - 1)
+        ), "bi-weekly rows step 14 days"
 
     def test_criminal_rate_is_warned_about(self):
         result = _preview(accepted_offer=_offer(annual_rate_bps=3500))

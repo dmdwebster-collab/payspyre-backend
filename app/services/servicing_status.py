@@ -51,7 +51,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Optional, Sequence
 
-from app.schemas.pricing_config import PaymentFrequency
+from app.schemas.pricing_config import PaymentFrequency, coerce_frequency
 
 # ---------------------------------------------------------------------------
 # move_pct <-> basis points
@@ -429,8 +429,32 @@ def compute_servicing_status(
 # ---------------------------------------------------------------------------
 
 
+def _loan_frequency(
+    loan, schedule_due_dates: Sequence[date]
+) -> PaymentFrequency:
+    """The loan's contractual frequency: STORED first, inferred only as fallback.
+
+    ``platform_loans.payment_frequency`` (migration 082) is the contract term and
+    therefore the authority. The cadence inference below is evidence, not a
+    contract: schedule surgery can re-date installments, a one-row schedule has
+    no gap, and 14 days is ambiguous with semi-monthly until a third row lands.
+
+    Falls back to :func:`_infer_frequency` for LEGACY rows — anything booked
+    before 082, plus loans imported from the Turnkey book, which carry no stored
+    frequency and have always been serviced off the inferred cadence. An
+    unrecognised stored value also falls back rather than raising: servicing a
+    live loan must never 500 on a bad enum.
+    """
+    stored = getattr(loan, "payment_frequency", None)
+    if stored:
+        coerced = coerce_frequency(str(stored).strip())
+        if coerced is not None:
+            return coerced
+    return _infer_frequency(schedule_due_dates)
+
+
 def _infer_frequency(schedule_due_dates: Sequence[date]) -> PaymentFrequency:
-    """Best-effort frequency from the schedule's own cadence.
+    """Best-effort frequency from the schedule's own cadence (LEGACY fallback).
 
     account_due_as_of and next_scheduled index the schedule directly, so the
     frequency only matters for projecting BEYOND maturity (an account paid far
@@ -550,7 +574,7 @@ def build_servicing_status(db, loan, as_of: date) -> Optional[ServicingStatus]:
     first_due = schedule[0].due_date
     schedule_due_dates = [s.due_date for s in schedule]
     maturity = max(schedule_due_dates)
-    frequency = _infer_frequency(schedule_due_dates)
+    frequency = _loan_frequency(loan, schedule_due_dates)
     move_bps = resolve_move_bps(db, loan)
 
     # Cash events from the immutable ledger + their running balances (the money
