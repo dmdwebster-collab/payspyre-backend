@@ -3,9 +3,8 @@
 DELIBERATELY DB-free (fan-out protocol: the suite shares a remote DB and must
 not be run wholesale by agents):
 
-  * tier gating, alpha-range matching, promise evaluation, the header
-    identity and the queue sort key are PURE — tested directly,
-    boundary-by-boundary;
+  * alpha-range matching, promise evaluation, the header identity and the
+    queue sort key are PURE — tested directly, boundary-by-boundary;
   * ``assign_loan`` / ``unassign_loan`` / ``refresh_promise_statuses`` /
     ``apply_maintenance_fee`` are exercised with in-memory fakes (simple
     objects + a fake Session), same idiom as tests/test_delinquency_buckets.py.
@@ -32,7 +31,6 @@ from app.services.collections_worksurface import (
     ASSIGN_METHOD_MANUAL,
     COLLECTOR_ASSIGNED_EVENT,
     COLLECTOR_UNASSIGNED_EVENT,
-    JUNIOR_ALLOWED_BUCKETS,
     MAINTENANCE_FEE_EVENT,
     PTP_BROKEN,
     PTP_KEPT,
@@ -49,44 +47,10 @@ from app.services.collections_worksurface import (
     loan_has_past_due_unpaid,
     normalize_alpha,
     refresh_promise_statuses,
-    tier_allows_bucket,
     unassign_loan,
 )
 
 TODAY = date(2026, 7, 20)
-
-
-# ---------------------------------------------------------------------------
-# Tier gating (Dave's junior/senior split)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "bucket,junior_ok",
-    [
-        ("current", True),
-        ("current_month_late", True),
-        ("pot_30", True),
-        ("pot_60", False),
-        ("pot_90", False),
-        ("default", False),
-        ("insolvency", False),
-        ("written_off", False),
-    ],
-)
-def test_tier_gate_junior(bucket, junior_ok):
-    assert tier_allows_bucket("junior", bucket) is junior_ok
-    # Seniors work everything.
-    assert tier_allows_bucket("senior", bucket) is True
-
-
-def test_tier_gate_unknown_tier_raises():
-    with pytest.raises(CollectionsError):
-        tier_allows_bucket("intern", "pot_30")
-
-
-def test_junior_allowed_buckets_is_the_shallow_ladder():
-    assert JUNIOR_ALLOWED_BUCKETS == ("current", "current_month_late", "pot_30")
 
 
 # ---------------------------------------------------------------------------
@@ -366,51 +330,62 @@ def test_assign_loan_happy_path_records_row_and_event():
         db,
         loan,
         collector,
-        "senior",
         method=ASSIGN_METHOD_MANUAL,
         actor_id="staff-1",
         today=TODAY,
     )
     assert assignment.collector_user_id == collector
-    assert assignment.tier == "senior"
     assert assignment.active is True
     added_types = [type(x) for x in db.added]
     assert PlatformCollectorAssignment in added_types
     events = [x for x in db.added if isinstance(x, PlatformEvent)]
     assert [e.event_type for e in events] == [COLLECTOR_ASSIGNED_EVENT]
     assert events[0].payload["bucket"] == "pot_30"
+    # No seniority classification is recorded anywhere.
+    assert not hasattr(assignment, "tier")
+    assert "tier" not in events[0].payload
     assert db.flushes == 1
 
 
-def test_assign_loan_junior_blocked_on_deep_bucket():
+@pytest.mark.parametrize(
+    "dpd,bucket",
+    [
+        (10, "current_month_late"),
+        (35, "pot_30"),
+        (75, "pot_60"),
+        (100, "pot_90"),
+        (200, "default"),
+    ],
+)
+def test_assign_loan_accepts_every_bucket(dpd, bucket):
+    """No seniority gate: any collector may be assigned any file, however
+    deep. Seniority is the manager's choice of assignee, not a system rule."""
     db = _FakeSession()
-    loan = _delinquent_loan(dpd=75, current_bucket="pot_60")
-    with pytest.raises(CollectionsError, match="junior"):
-        assign_loan(
-            db,
-            loan,
-            uuid4(),
-            "junior",
-            method=ASSIGN_METHOD_MANUAL,
-            actor_id="staff-1",
-            today=TODAY,
-        )
-    assert db.added == []  # nothing written
-
-
-def test_assign_loan_junior_allowed_on_shallow_bucket():
-    db = _FakeSession()
-    loan = _delinquent_loan(dpd=10, current_bucket="current_month_late")
+    loan = _delinquent_loan(dpd=dpd, current_bucket=bucket)
     assignment = assign_loan(
         db,
         loan,
         uuid4(),
-        "junior",
         method=ASSIGN_METHOD_BULK_ALPHA,
         actor_id="staff-1",
         today=TODAY,
     )
     assert assignment.method == ASSIGN_METHOD_BULK_ALPHA
+    assert assignment.active is True
+
+
+def test_assign_loan_rejects_unknown_method():
+    db = _FakeSession()
+    with pytest.raises(CollectionsError, match="assignment method"):
+        assign_loan(
+            db,
+            _delinquent_loan(),
+            uuid4(),
+            method="telepathy",
+            actor_id="staff-1",
+            today=TODAY,
+        )
+    assert db.added == []
 
 
 def test_assign_loan_blocks_double_assignment_unless_reassign():
@@ -419,7 +394,6 @@ def test_assign_loan_blocks_double_assignment_unless_reassign():
         id=uuid4(),
         loan_id=loan.id,
         collector_user_id=uuid4(),
-        tier="senior",
         method="manual",
         active=True,
         assigned_by="staff-0",
@@ -427,13 +401,13 @@ def test_assign_loan_blocks_double_assignment_unless_reassign():
     db = _FakeSession({PlatformCollectorAssignment: [existing]})
     with pytest.raises(CollectionsError, match="active collector assignment"):
         assign_loan(
-            db, loan, uuid4(), "senior",
+            db, loan, uuid4(),
             method=ASSIGN_METHOD_MANUAL, actor_id="staff-1", today=TODAY,
         )
     # With reassign, the old row is deactivated (history kept) and replaced.
     new_collector = uuid4()
     assignment = assign_loan(
-        db, loan, new_collector, "senior",
+        db, loan, new_collector,
         method=ASSIGN_METHOD_MANUAL, actor_id="staff-1",
         reassign=True, today=TODAY,
     )
@@ -450,7 +424,6 @@ def test_unassign_loan_deactivates_and_audits():
         id=uuid4(),
         loan_id=loan.id,
         collector_user_id=uuid4(),
-        tier="junior",
         method="manual",
         active=True,
         assigned_by="staff-0",

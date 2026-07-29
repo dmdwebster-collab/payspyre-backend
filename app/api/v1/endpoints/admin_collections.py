@@ -229,7 +229,6 @@ class CollectionsQueueRow(BaseModel):
     insolvency_status: Optional[str] = None
     # WS-C collector assignment surfacing (Turnkey's "A" avatar column).
     assigned_collector_user_id: Optional[UUID] = None
-    assignment_tier: Optional[str] = None
 
 
 @router.get("/queue", response_model=list[CollectionsQueueRow])
@@ -327,7 +326,6 @@ def queue(
                 assigned_collector_user_id=(
                     assignment.collector_user_id if assignment else None
                 ),
-                assignment_tier=str(assignment.tier) if assignment else None,
             )
         )
     rows.sort(key=lambda r: r.days_past_due, reverse=True)
