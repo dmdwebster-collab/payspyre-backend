@@ -29,7 +29,7 @@ jobs:
     name: cross-model adversarial review
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Full history so origin/main...HEAD resolves the true PR diff.
           fetch-depth: 0
