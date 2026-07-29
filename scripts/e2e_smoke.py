@@ -3,7 +3,7 @@
 Drives the WHOLE platform against a running deployment (default: staging) using
 the public HTTP API + the dev helpers (mounted when ENVIRONMENT != production):
   1. patient approve journey -> approved + correctly-priced marketplace listing
-  2. patient decline journey -> declined
+  2. patient decline journey -> rejected
   3. marketplace cross-flow: vendor lead discovery (PII-free) -> express interest
      -> patient select -> lead charge -> billing -> book appointment
   4. clinic console: staff login, products, dashboard, financing-link, applications
@@ -72,7 +72,7 @@ check("listing priced above floor (verification_depth maintained)", listing["bas
 
 print("\n=== SCENARIO 2: Patient DECLINE journey ===")
 S2, H2, app2, state2 = run_patient_to_decision(420)
-check("low-score journey reaches a terminal decision", state2["status"] in ("declined","approved","under_review"), state2["status"])
+check("low-score journey reaches a terminal decision", state2["status"] in ("rejected","declined","approved","under_review"), state2["status"])
 print(f"      (low-score decision was: {state2['status']})")
 
 print("\n=== SCENARIO 3: Marketplace cross-flow (patient listing <-> vendor) + PII protection ===")
