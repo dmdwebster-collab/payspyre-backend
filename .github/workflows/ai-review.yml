@@ -34,7 +34,7 @@ jobs:
           # Full history so origin/main...HEAD resolves the true PR diff.
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
 
